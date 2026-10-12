@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Labels</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div>
+          <p class="eyebrow">LabelWriter 550</p>
+          <h1>Labels</h1>
+          <p class="sub">The roll sets the size. Print goes to the LabelWriter 550. It does not ask which printer.</p>
+        </div>
+        <div class="actions">
+          <label class="copies">Copies <input id="copies" type="number" min="1" max="20" value="1" /></label>
+          <button class="print" id="print" type="button">Print</button>
+        </div>
+      </header>
+      <p class="status" id="status"><span class="pill warn">Looking for the roll</span></p>
+      <div class="work">
+        <aside class="panel">
+          <h2>Add</h2>
+          <div class="tools">
+            <button class="tool" type="button" data-add="text">Text</button>
+            <button class="tool" type="button" data-add="barcode">Barcode</button>
+            <button class="tool" type="button" data-add="qr">QR</button>
+            <button class="tool" type="button" data-add="box">Box</button>
+          </div>
+          <h2 class="gap">Start from</h2>
+          <div class="templates" id="templates"></div>
+          <h2 class="gap">Saved</h2>
+          <div class="saved" id="saved"></div>
+        </aside>
+        <section class="stage-wrap">
+          <div class="stage" id="stage" data-tour="label-stage">
+            <div class="label" id="label"></div>
+          </div>
+          <div class="panel thumb">
+            <div>
+              <h2>As it prints</h2>
+              <p class="note" id="orient"></p>
+            </div>
+            <img id="proof" alt="How this label will hit the roll" />
+          </div>
+        </section>
+        <aside class="panel" id="props">
+          <h2>Label</h2>
+          <label class="field"><span>Name</span><input id="name" /></label>
+          <label class="field"><span>Size</span><select id="size"></select></label>
+          <p class="note" id="size-note"></p>
+          <label class="check"><input id="turn" type="checkbox" /> Turn it so the long side reads across</label>
+          <div id="block-props"></div>
+          <p class="msg" id="error"></p>
+          <button class="ghost" id="remove" type="button" hidden>Remove this</button>
+        </aside>
+      </div>
+      <div class="print-bar">
+        <button class="print" id="print-mobile" type="button">Print</button>
+      </div>
+    </div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
