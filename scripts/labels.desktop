@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Labels
+GenericName=LabelWriter 550
+Comment=LabelWriter 550 bench. Update: ~/label-connect/scripts/update-labels.sh
+Exec=/home/logan/label-connect/scripts/start-labels.sh
+Icon=labels
+Terminal=false
+Categories=Office;
+StartupWMClass=Labels
+Keywords=label;dymo;labelwriter;550;print;blackforest;
+StartupNotify=true
