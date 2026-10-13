@@ -88,7 +88,7 @@
 
   function parseVersion(v) {
     return String(v || "0")
-      .split(/[.+-/])
+      .split(/[.+-]/)
       .map((part) => Number.parseInt(part, 10) || 0);
   }
 
