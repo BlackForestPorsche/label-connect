@@ -1,2 +1,0 @@
-A_should_be_correct: /^[A-Za-z]\.?\s+/
-B_test_line: /^[A-Za-z]\.?$/
