@@ -1,5 +1,5 @@
 {
-  "version": "0.1.8",
-  "message": "Shared login: Desk imports shop site bf_shop_gate via POST /api/widget/session/from-gate (same Firefox profile). Tools :8788 and PIN are backups. On the desk: bash scripts/update-desk-extension.sh.",
-  "url": "https://github.com/BlackForestPorsche/label-connect"
+  "version": "0.1.9",
+  "message": "Shared login: import shop site bf_shop_gate via from-gate (same Firefox profile); Person dropdown + gecko update_url kept. Degrades to Tools/PIN if from-gate 406. On the desk: bash scripts/update-desk-extension.sh or wait for signed XPI auto-update.",
+  "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }

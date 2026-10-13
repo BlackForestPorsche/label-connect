@@ -1,16 +1,13 @@
 /* global chrome, browser */
 /**
- * Shop site unlock → Desk: if unlock JSON includes widgetToken (shop beta),
- * store it for lot names. Also nudges background to try from-gate when the
- * page looks signed-in. Never creates/switches Firefox profiles.
+ * Shop site → Desk: capture unlock JSON widgetToken when present; nudge
+ * background to try from-gate when the shop page loads (same Firefox profile).
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
 
   function extractUnlock(raw) {
-    if (typeof raw !== "string" || raw.indexOf("widgetToken") === -1) {
-      return null;
-    }
+    if (typeof raw !== "string" || raw.indexOf("widgetToken") === -1) return null;
     let data;
     try {
       data = JSON.parse(raw);
@@ -26,7 +23,6 @@
         token: String(obj.widgetToken),
         expiresAt: String(obj.widgetExpiresAt),
         person: obj.person ? String(obj.person) : "",
-        role: obj.role ? String(obj.role) : "",
         source: "shop-site",
       };
     }
@@ -72,11 +68,7 @@
     return response;
   };
 
-  const xhrOpen = XMLHttpRequest.prototype.open;
   const xhrSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function openPatched(method, url, ...rest) {
-    return xhrOpen.call(this, method, url, ...rest);
-  };
   XMLHttpRequest.prototype.send = function sendPatched(...args) {
     this.addEventListener("load", function onLoad() {
       try {
@@ -89,8 +81,6 @@
     return xhrSend.apply(this, args);
   };
 
-  // Already signed in (cookie present, no unlock JSON this load): ask background
-  // to mint Desk Bearer via from-gate. Harmless if the route is not live yet.
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", trySiteImportQuiet, { once: true });
   } else {
