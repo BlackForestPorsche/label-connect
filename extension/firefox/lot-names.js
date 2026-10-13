@@ -12,7 +12,11 @@
   const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
   const PERSON_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
   const PIN_RE = /^\d{4,12}$/;
-  /** Desk unlock roster (plasmoid fallback). */
+  /**
+   * Desk unlock roster (same people as shop / Plasma widget PIN unlock).
+   * Shop has no public GET /api/widget/people yet — keep in sync with plasmoid
+   * recipient fallback: logan, stephen, steve, carla, john.
+   */
   const DESK_PEOPLE = Object.freeze(["logan", "stephen", "steve", "carla", "john"]);
 
   function lastNameFromLotLabel(label) {
@@ -90,7 +94,8 @@
     if (!runtime?.storage?.local) return;
     try {
       await runtime.storage.local.set(obj);
-    } catch {}
+    } catch {
+    }
   }
 
   async function setPinBadge(needsPin) {
@@ -112,7 +117,8 @@
           await runtime.action.setTitle?.({ title: "Black Forest Desk" });
         }
       }
-    } catch {}
+    } catch {
+    }
   }
 
   async function shopBaseUrl() {
@@ -260,7 +266,8 @@
       try {
         const response = await runtime.runtime.sendMessage({ type: "lot-last-names" });
         if (response && Array.isArray(response.names)) return response.names;
-      } catch {}
+      } catch {
+      }
     }
     const cached = await storageGet(["lotLastNames", "lotLastNamesAt"]);
     const names = Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [];
