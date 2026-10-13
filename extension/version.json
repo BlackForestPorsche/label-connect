@@ -1,5 +1,5 @@
 {
-  "version": "0.1.7",
-  "message": "Desk unlock: Person dropdown (no free-text) + lowercase session + clear desk-PIN errors. On the desk: bash scripts/update-desk-extension.sh.",
+  "version": "0.1.8",
+  "message": "Shared login: Desk imports shop site bf_shop_gate via POST /api/widget/session/from-gate (same Firefox profile). Tools :8788 and PIN are backups. On the desk: bash scripts/update-desk-extension.sh.",
   "url": "https://github.com/BlackForestPorsche/label-connect"
 }
