@@ -104,10 +104,19 @@ If last name or model cannot be read after Create succeeds, the extension toasts
 
 ## SSF — On the Lot dropdown
 
-1. Open the extension popup → person + PIN (same people as shop unlock).
+1. Open the extension popup → shop **person** (lowercase, e.g. `logan`) + **desk PIN** (same as shop unlock / Plasma widget).
 2. Go to `https://www.ssfautoparts.com/checkout`.
 3. Next to Order reference, pick a last name — it fills `PO # / RO #`.
 4. Empty lot → quiet empty state. Book appointments are never queried.
+
+### If you see “Unauthorized”
+
+The shop widget API returns the code `unauthorized` for a bad/missing PIN session. Desk **0.1.4+** maps that to “enter desk PIN” copy. Fix:
+
+1. Click the **Black Forest Desk** toolbar icon (badge may show `PIN`).
+2. Person = lowercase shop unlock name; **Desk PIN** = same PIN as the site / plasmoid.
+3. **Unlock with desk PIN**, then on SSF checkout click **Refresh**.
+4. Create RO print does **not** use the desk PIN — only local Labels at `http://127.0.0.1:8080`.
 
 ## Smoke test (no AllData)
 
