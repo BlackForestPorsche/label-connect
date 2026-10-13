@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs",
-    "sync-extension": "cp extension/shared/*.js extension/chromium/ && cp extension/shared/*.js extension/firefox/"
+    "sync-extension": "mkdir -p extension/chromium extension/firefox && cp extension/shared/*.js extension/shared/*.html extension/chromium/ && cp extension/shared/*.js extension/shared/*.html extension/firefox/"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
