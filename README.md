@@ -2,8 +2,6 @@
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
-**0.1.7** - Black Forest Desk: Person **dropdown** (no free-text Logan/logan mistakes) + lowercase session + clear desk-PIN errors.
-
 **0.1.6** - Black Forest Desk: map shop `unauthorized` to clear **desk PIN** unlock copy; lowercase person like the Plasma widget; host permissions include `127.0.0.1:8080`; SSF empty state points at the popup PIN. Keeps Firefox `strict_min_version` 140.0 + `data_collection_permissions`.
 
 **0.1.5** - Firefox `strict_min_version` 140.0 (required for `data_collection_permissions`).
