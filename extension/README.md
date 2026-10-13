@@ -9,56 +9,69 @@ One MV3 package for desk browsers (**Firefox**, **Chrome**, **Edge**) on **Windo
 
 Lives in this repo under `extension/` so desk installs stay one git pull with Labels.
 
+## Auto-update (shop path)
+
+AMO / Chrome Web Store signing is **not** required for the desk.
+
+| Piece | Behavior |
+| --- | --- |
+| Source of truth | `~/label-connect` git tree (same as Labels) |
+| Refresh script | `bash scripts/update-desk-extension.sh` |
+| Tied to Labels update | `scripts/update-labels.sh` also runs the desk extension refresh |
+| In-extension checker | Background fetches `extension/version.json` from GitHub `main`; badge `↑` + popup “Check for extension update” when newer |
+| Firefox | Packs XPI → profile `extensions/` + `user.js` sideload prefs + optional `~/.mozilla/firefox/policies/policies.json` |
+| Chrome / Edge | Keep **Load unpacked** pointed at `extension/chromium/` (git pull refreshes files; click Reload on the extensions page after a big bump) |
+
+Desk does **not** need to browse GitHub releases. Pull Labels / run the update script.
+
 ## Requirements
 
 1. Labels running locally (`http://127.0.0.1:8080` by default, or set `labelsBaseUrl` in extension storage).
-2. For SSF lot names: shop widget person + PIN (extension popup) → Bearer to `GET /api/widget/views/lot`.
+2. For SSF lot names: shop widget person + PIN (extension popup) → Bearer to `GET /api/widget/views/lot` (never `book-today`).
 3. Browser: Firefox, Chrome, or Edge.
 4. Desk OS: Manjaro/Linux (CUPS `LabelWriter550`) or Windows (PrintTo to LabelWriter/DYMO / `LABELS_PRINTER`).
 
-## Install — Chrome / Edge (Chromium MV3)
-
-Package folder: `extension/chromium/`
-
-1. After pull: `npm run sync-extension` (copies shared scripts into both packages).
-2. Open `chrome://extensions` (Chrome) or `edge://extensions` (Edge).
-3. Enable **Developer mode**.
-4. **Load unpacked** → select `label-connect/extension/chromium`.
-
-## Install — Firefox (MV3)
-
-Package folder: `extension/firefox/`
-
-### Temporary (quick test)
-
-1. `npm run sync-extension`
-2. Open `about:debugging#/runtime/this-firefox`.
-3. **Load Temporary Add-on…** → pick `extension/firefox/manifest.json`.
-
-### Permanent (desk)
-
-Use temporary load after each Labels update, or sign/self-distribute later. Gecko id: `black-forest-desk@blackforestautomotive.com`.
-
-## Manjaro desk checklist
+## Install — Manjaro Firefox (shell, no GUI tour)
 
 ```bash
 cd ~/label-connect
 git pull
 npm install
-npm run sync-extension
-bash scripts/update-labels.sh   # if you use the helper
-# ensure Labels server is up (boot service or scripts/start-labels.sh)
+bash scripts/install-desk-extension-firefox.sh
+# restart Firefox once so the profile picks up the XPI
 ```
 
-Then load `extension/chromium` in Chrome/Edge **or** `extension/firefox` via `about:debugging`.
+Later updates:
 
-Do **not** automate the AllData or SSF GUI from the Manjaro agent — humans click in the browser.
+```bash
+bash scripts/update-labels.sh
+# or:
+bash scripts/update-desk-extension.sh
+```
+
+Gecko id: `black-forest-desk@blackforestautomotive.com`.
+
+**Note:** Release Firefox may still ignore unsigned sideloads. The install script sets profile prefs used by Developer Edition / Nightly / unbranded builds, drops the XPI into the default profile, and writes policies. If the add-on does not appear after restart, use **Load Temporary Add-on** once from `extension/firefox/manifest.json` (about:debugging) until AMO self-distribution exists — Create RO print still works the same.
+
+## Install — Chrome / Edge (Chromium MV3)
+
+Package folder: `extension/chromium/`
+
+1. `npm run sync-extension`
+2. `chrome://extensions` / `edge://extensions` → Developer mode → **Load unpacked** → `label-connect/extension/chromium`
+3. Leave that path forever; after `git pull` / `update-desk-extension.sh`, click **Reload** on the card when the version badge shows `↑`
+
+## Install — Firefox temporary (quick test)
+
+1. `npm run sync-extension`
+2. `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → `extension/firefox/manifest.json`
 
 ## Windows desk checklist
 
 1. Install / update Labels (`git pull` + `npm install` + `npm start`, port 8080).
 2. Confirm a Windows printer named like **LabelWriter** / **DYMO** (or set `LABELS_PRINTER`).
-3. `npm run sync-extension`, then load unpacked Chromium or Firefox add-on as above.
+3. `npm run sync-extension`, then load unpacked Chromium (Edge/Chrome) or Firefox temporary/sideload as above.
+4. Optional: run Git Bash `bash scripts/update-desk-extension.sh` after pulls.
 
 ## AllData — what gets scraped
 
