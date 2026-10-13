@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Black Forest Desk",
-  "version": "0.1.6",
-  "description": "AllData Create R/O → Labels print, plus SSF checkout On-the-Lot last-name helper.",
+  "version": "0.1.7",
+  "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
   "browser_specific_settings": {
     "gecko": {
       "id": "black-forest-desk@blackforestautomotive.com",
@@ -38,10 +38,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://ssfautoparts.com/*",
-        "https://www.ssfautoparts.com/*"
-      ],
+      "matches": ["https://ssfautoparts.com/*", "https://www.ssfautoparts.com/*"],
       "js": ["config.js", "toast.js", "lot-names.js", "content-ssf.js"],
       "run_at": "document_idle"
     }
