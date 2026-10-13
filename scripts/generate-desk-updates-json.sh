@@ -11,7 +11,7 @@ REPO="BlackForestPorsche/label-connect"
 
 mkdir -p "$DIST"
 
-VER="$(python3 -c 'import json; print(json.load(open("'$ROOT'/extension/version.json"))["version"])')"
+VER="$(python3 -c "import json; print(json.load(open('$ROOT/extension/version.json'))['version'])")"
 XPI_STABLE="$DIST/Black.Forest.Desk.xpi"
 XPI_VERSIONED="$DIST/Black.Forest.Desk-${VER}.xpi"
 

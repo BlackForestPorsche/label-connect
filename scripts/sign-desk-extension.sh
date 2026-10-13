@@ -22,7 +22,7 @@ if [[ -z "${API_KEY}" || -z "${API_SECRET}" ]]; then
   exit 0
 fi
 
-VER="$(python3 -c 'import json; print(json.load(open("'$ROOT'/extension/version.json"))["version"])')"
+VER="$(python3 -c "import json; print(json.load(open('$ROOT/extension/version.json'))['version'])")"
 ART="$DIST/signed"
 rm -rf "$ART"
 mkdir -p "$ART"

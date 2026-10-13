@@ -17,7 +17,7 @@ STABLE_CHROME_NAME="Black.Forest.Desk-chromium.zip"
 mkdir -p "$DIST"
 npm --prefix "$ROOT" run sync-extension >/dev/null
 
-VER="$(python3 -c 'import json; print(json.load(open("'$ROOT'/extension/version.json"))["version"])')"
+VER="$(python3 -c "import json; print(json.load(open('$ROOT/extension/version.json'))['version'])")"
 
 # Firefox XPI (zip of firefox/ with manifest at root)
 XPI_ID="$DIST/${ID}.xpi"
