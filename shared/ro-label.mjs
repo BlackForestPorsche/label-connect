@@ -14,21 +14,36 @@ const MAX_LEN = {
   customerName: 48,
 };
 
-const FORBIDDEN_EVENT_RE = /update|schedule|assign|new[\s_-]*r\/?o/i;
+const FORBIDDEN_EVENT_RE = /update|schedule|assign|new[ _-]*r[/]?o/i;
 
 function clean(value, max) {
   const text = String(value ?? "")
-    .replace(/\s+/g, " ")
+    .replace(/ +/g, " ")
     .trim();
   if (!text) return "";
   return text.slice(0, max);
 }
 
-/** Last whitespace token of a full name (same heuristic as the extension scrape). */
+/**
+ * Customer last name only — never first name or first initial.
+ * Handles "LAST, FIRST", "J. LAST", "J LAST", "J.LAST", and "FIRST LAST".
+ * Same heuristic as the extension scrape.
+ */
 export function extractLastName(fullName) {
-  const text = clean(fullName, MAX_LEN.customerName);
+  let text = clean(fullName, MAX_LEN.customerName);
   if (!text) return "";
+  // "LAST, FIRST" / "LAST, F." → LAST
+  if (text.includes(",")) {
+    text = text.split(",")[0].trim();
+  }
+  // Leading first initial: "J. Smith", "J Smith", "J.Smith"
+  text = text.replace(/^[A-Za-z][.]? +/, "").replace(/^[A-Za-z][.](?=[A-Za-z])/, "");
   const parts = text.split(" ").filter(Boolean);
+  if (!parts.length) return "";
+  // Drop a trailing bare initial if anything remains ("Smith J" → "Smith").
+  if (parts.length > 1 && /^[A-Za-z][.]?$/.test(parts[parts.length - 1])) {
+    parts.pop();
+  }
   return parts[parts.length - 1] || "";
 }
 
@@ -45,16 +60,20 @@ export function normalizeRoPayload(raw) {
   if (FORBIDDEN_EVENT_RE.test(event)) {
     return { ok: false, error: "Only Create R/O may auto-print. Update, Schedule, Assign, and New R/O are blocked." };
   }
-  if (event && !/^(create(-?r\/?o)?|create)$/i.test(event)) {
+  if (event && !/^(create(-?r[/]?o)?|create)$/i.test(event)) {
     return { ok: false, error: "Only Create R/O may auto-print. Unknown event was rejected." };
   }
 
-  let lastName = clean(raw.lastName ?? raw.last_name, MAX_LEN.lastName);
+  // Always run through extractLastName so "J. Owner" / "Owner, J" never print an initial.
+  let lastName = extractLastName(raw.lastName ?? raw.last_name);
   const customerName = clean(raw.customerName ?? raw.customer ?? raw.name, MAX_LEN.customerName);
   if (!lastName && customerName) lastName = extractLastName(customerName);
+  lastName = clean(lastName, MAX_LEN.lastName);
 
   const model = clean(raw.model, MAX_LEN.model);
   const roNumber = clean(raw.roNumber ?? raw.ro ?? raw.documentNumber, MAX_LEN.roNumber);
+  // Per-Create click id from the Desk extension — never used as a customer/person key.
+  const createArmId = clean(raw.createArmId ?? raw.create_arm_id ?? raw.createId, 64);
   const source = clean(raw.source ?? "alldata", 32) || "alldata";
   const dryRun = Boolean(raw.dryRun === true || raw.dryRun === "1" || raw.dryRun === 1);
 
@@ -69,6 +88,7 @@ export function normalizeRoPayload(raw) {
       lastName,
       model,
       customerName,
+      createArmId,
       source,
       event: "create-ro",
       dryRun,
@@ -171,7 +191,7 @@ export function planRoPrint(raw, mediaList = FALLBACK_MEDIA) {
 export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
   const media = mediaBySku(mediaList, "30252") ?? FALLBACK_MEDIA[0];
   const lines = roLabelLines(fields);
-  if (lines.length < 2) {
+  if (!(lines.length >= 2)) {
     throw new Error("Need lastName and model to render.");
   }
 
@@ -189,7 +209,7 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
   const box = viewSafe.w > 8 && viewSafe.h > 6 ? viewSafe : { x: 0, y: 0, w: media.heightPt, h: media.widthPt };
   const rowH = box.h / lines.length;
 
-  for (let i = 0; i < lines.length; i += 1) {
+  for (let i = 0; i !== lines.length; i += 1) {
     const text = lines[i];
     const face = i === 0 ? fontBold : font;
     const row = { x: box.x, y: box.y + rowH * i, w: box.w, h: rowH };
