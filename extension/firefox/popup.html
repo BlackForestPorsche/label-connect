@@ -29,8 +29,7 @@
         margin: 0 0 4px;
         font-weight: 600;
       }
-      input,
-      select {
+      input {
         width: 100%;
         box-sizing: border-box;
         margin: 0 0 10px;
@@ -38,8 +37,6 @@
         border: 1px solid #b9b2a4;
         border-radius: 4px;
         background: #fff;
-        color: inherit;
-        font: inherit;
       }
       button {
         width: 100%;
@@ -79,19 +76,20 @@
   <body>
     <h1>Black Forest Desk</h1>
     <p>
-      Pick your shop person, then enter your <strong>desk PIN</strong> (same PIN as the shop unlock / Plasma widget) to load On the Lot names for SSF.
+      Prefer the shop site session in this Firefox profile (no second PIN). Tools unlock and desk PIN are backups.
       Create RO print uses local Labels only — no PIN.
     </p>
+    <button id="useShopSession" type="button">Use shop session</button>
+    <button id="useTools" class="secondary" type="button">Use Tools session</button>
     <label for="person">Person</label>
-    <select id="person" autocomplete="username" aria-label="Shop person"></select>
+    <input id="person" autocomplete="username" placeholder="e.g. logan" />
     <label for="pin">Desk PIN</label>
     <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4–12 digits" />
-    <button id="unlock" type="button">Unlock with desk PIN</button>
+    <button id="unlock" class="secondary" type="button">Unlock with desk PIN</button>
     <button id="checkUpdate" class="secondary" type="button">Check for extension update</button>
     <div id="status" role="status"></div>
     <div id="update" role="status"></div>
     <div id="version" class="meta"></div>
-    <script src="lot-names.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
