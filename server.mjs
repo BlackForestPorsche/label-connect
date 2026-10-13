@@ -6,6 +6,7 @@ import QRCode from "qrcode";
 import { describePrinter } from "./shared/detect.mjs";
 import { sendToQueue } from "./shared/print.mjs";
 import { safePageKey } from "./shared/media.mjs";
+import { planRoPrint } from "./shared/ro-label.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -138,6 +139,24 @@ const server = createServer(async (req, res) => {
       }
       const result = await exclusive(() => sendToQueue(png, { pageKey, widthPt, heightPt, copies }));
       send(res, 200, result);
+      return;
+    }
+    // AllData Create RO bridge: JSON in -> preview out. Never calls CUPS.
+    if (req.method === "POST" && url.pathname === "/api/print-ro") {
+      const raw = await readBody(req, 64_000);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw.toString("utf8") || "{}");
+      } catch {
+        send(res, 400, { error: "JSON body required." });
+        return;
+      }
+      const plan = planRoPrint(parsed);
+      if (!plan.ok) {
+        send(res, 400, { error: plan.error });
+        return;
+      }
+      send(res, 200, plan);
       return;
     }
     if (req.method === "GET") {
