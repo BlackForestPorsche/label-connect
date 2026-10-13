@@ -2,13 +2,15 @@
 # Install Black Forest Desk into Firefox on the desk (shell/profile/policies).
 # No GUI tour. No AllData/SSF browser automation.
 #
+# Hard rule: NEVER create or switch Firefox profiles. Only install into the
+# existing default profile that Firefox already uses.
+#
 # Strategy (unsigned / no AMO):
 # 1) Pack XPI from git tree
-# 2) Drop into the default Firefox profile extensions/ folder
-# 3) Write user.js prefs so the profile accepts the sideloaded add-on when possible
-#    (Firefox Developer Edition / Nightly / unbranded; Release may still require
-#     Temporary Add-on until AMO self-distribution is wired)
-# 4) Write optional policies.json under ~/.mozilla/firefox/ for force_install hints
+# 2) Resolve the existing default profile (fail if none)
+# 3) Drop XPI into that profile's extensions/ folder
+# 4) Write user.js prefs so the profile accepts the sideloaded add-on when possible
+# 5) Write optional policies.json under ~/.mozilla/firefox/ for force_install hints
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
@@ -49,66 +51,112 @@ if [[ ! -f "$XPI" ]]; then
   exit 1
 fi
 
-FF_HOME="${FIREFOX_HOME:-$HOME/.mozilla/firefox}"
-mkdir -p "$FF_HOME"
+# Resolve existing default profile only — never create/switch profiles.
+# Searches FIREFOX_HOME (if set), then ~/.mozilla/firefox, then ~/.config/mozilla/firefox.
+profile_dir="$(
+  python3 - <<'PY'
+import configparser
+import os
+import pathlib
+import sys
 
-# Resolve default profile from profiles.ini (Install*/Default=1 or Profile*/Default=1)
-profile_dir=""
-if [[ -f "$FF_HOME/profiles.ini" ]]; then
-  profile_dir="$(
-    python3 - <<'PY' "$FF_HOME"
-import configparser, pathlib, sys
-home = pathlib.Path(sys.argv[1])
-ini = configparser.ConfigParser()
-ini.read(home / "profiles.ini")
-# Prefer Install section Default= profile
-for section in ini.sections():
-    if section.startswith("Install") and ini.has_option(section, "Default"):
-        rel = ini.get(section, "Default")
+candidates = []
+env_home = os.environ.get("FIREFOX_HOME", "").strip()
+if env_home:
+    candidates.append(pathlib.Path(env_home))
+home = pathlib.Path.home()
+candidates.append(home / ".mozilla" / "firefox")
+candidates.append(home / ".config" / "mozilla" / "firefox")
+
+seen = set()
+homes = []
+for h in candidates:
+    try:
+        key = str(h.resolve()) if h.exists() else str(h)
+    except OSError:
+        key = str(h)
+    if key in seen:
+        continue
+    seen.add(key)
+    homes.append(h)
+
+
+def resolve_from_ini(ff_home: pathlib.Path):
+    ini_path = ff_home / "profiles.ini"
+    if not ini_path.is_file():
+        return None
+    ini = configparser.ConfigParser()
+    ini.read(ini_path)
+
+    def path_for(section: str):
+        rel = ini.get(section, "Path") if ini.has_option(section, "Path") else None
+        if section.startswith("Install") and ini.has_option(section, "Default"):
+            rel = ini.get(section, "Default")
+        if not rel:
+            return None
         path = pathlib.Path(rel)
-        print(path if path.is_absolute() else home / path)
-        raise SystemExit
-for section in ini.sections():
-    if not section.startswith("Profile"):
-        continue
-    if ini.get(section, "Default", fallback="0") != "1":
-        continue
-    if ini.get(section, "IsRelative", fallback="1") == "1":
-        print(home / ini.get(section, "Path"))
-    else:
-        print(ini.get(section, "Path"))
-    raise SystemExit
-# Fallback: first Profile
-for section in ini.sections():
-    if section.startswith("Profile") and ini.has_option(section, "Path"):
+        if ini.get(section, "IsRelative", fallback="1") == "1" or (
+            section.startswith("Install") and not path.is_absolute()
+        ):
+            return ff_home / path
+        return path
+
+    # Prefer Install* Default (what Firefox actually launches)
+    for section in ini.sections():
+        if section.startswith("Install") and ini.has_option(section, "Default"):
+            p = path_for(section)
+            if p is not None and p.is_dir():
+                return p
+
+    # Then Profile* with Default=1
+    for section in ini.sections():
+        if not section.startswith("Profile"):
+            continue
+        if ini.get(section, "Default", fallback="0") != "1":
+            continue
+        if not ini.has_option(section, "Path"):
+            continue
+        rel = ini.get(section, "Path")
+        path = pathlib.Path(rel)
         if ini.get(section, "IsRelative", fallback="1") == "1":
-            print(home / ini.get(section, "Path"))
-        else:
-            print(ini.get(section, "Path"))
-        raise SystemExit
+            path = ff_home / path
+        if path.is_dir():
+            return path
+
+    return None
+
+
+for ff_home in homes:
+    profile = resolve_from_ini(ff_home)
+    if profile is not None:
+        print(profile)
+        raise SystemExit(0)
+
+print(
+    "ERROR: No existing Firefox default profile found.\n"
+    "Open Firefox once so it creates your real profile, then re-run this script.\n"
+    "This installer will never create or switch profiles.",
+    file=sys.stderr,
+)
+raise SystemExit(2)
 PY
-  )"
-fi
+)" || {
+  notify "Desk extension install failed" "No existing Firefox default profile — open Firefox once, then retry. Never creates profiles."
+  exit 2
+}
 
 if [[ -z "${profile_dir}" || ! -d "${profile_dir}" ]]; then
-  # Create a dedicated desk profile path if Firefox has never been opened.
-  profile_dir="$FF_HOME/blackforest-desk.default"
-  mkdir -p "$profile_dir"
-  if [[ ! -f "$FF_HOME/profiles.ini" ]]; then
-    cat >"$FF_HOME/profiles.ini" <<EOF
-[General]
-StartWithLastProfile=1
-Version=2
-
-[Profile0]
-Name=blackforest-desk
-IsRelative=1
-Path=blackforest-desk.default
-Default=1
-EOF
-  fi
-  notify "Desk extension" "Created Firefox profile at $profile_dir (open Firefox once so it binds)."
+  notify "Desk extension install failed" "Resolved profile missing: ${profile_dir:-<empty>}"
+  exit 2
 fi
+
+# Never install into the legacy agent-created desk-only profile.
+case "$(basename "$profile_dir")" in
+  blackforest-desk.default|blackforest-desk)
+    notify "Desk extension install failed" "Refusing blackforest-desk.default — fix profiles.ini Default to your real profile, then retry."
+    exit 2
+    ;;
+esac
 
 ext_dir="$profile_dir/extensions"
 mkdir -p "$ext_dir"
@@ -138,7 +186,8 @@ for line in lines:
 path.write_text(out, encoding="utf-8")
 PY
 
-# Optional policies (per-user) — force_installed from file URL
+# Optional policies (per-user) — force_installed from file URL.
+# Policies do not create or switch profiles.
 policies_dir="$HOME/.mozilla/firefox/policies"
 mkdir -p "$policies_dir"
 cat >"$policies_dir/policies.json" <<EOF
