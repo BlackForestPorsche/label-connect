@@ -9,6 +9,25 @@ One MV3 package for desk browsers (**Firefox**, **Chrome**, **Edge**) on **Windo
 
 Lives in this repo under `extension/` so desk installs stay one git pull with Labels.
 
+## Download (install yourself — preferred)
+
+Stable GitHub Release assets (tag `desk-extension`):
+
+| Browser | File | URL |
+| --- | --- | --- |
+| **Firefox** | `Black.Forest.Desk.xpi` | https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk.xpi |
+| **Chrome / Edge** | `Black.Forest.Desk-chromium.zip` | https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk-chromium.zip |
+
+Release page / latest: https://github.com/BlackForestPorsche/label-connect/releases/latest
+
+**Firefox:** open your normal profile → `about:addons` → gear → **Install Add-on From File…** → pick the XPI. Do **not** create a new Firefox profile.
+
+**Chrome / Edge:** unzip the zip → `chrome://extensions` / `edge://extensions` → Developer mode → **Load unpacked** → select the unzipped folder.
+
+Pack locally: `bash scripts/pack-desk-extension.sh` → `extension/dist/Black.Forest.Desk.xpi` (+ chromium zip).
+
+---
+
 ## Auto-update (shop path)
 
 AMO / Chrome Web Store signing is **not** required for the desk.

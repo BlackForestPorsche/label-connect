@@ -1,0 +1,31 @@
+name: publish-desk-extension
+on:
+  push:
+    paths:
+      - ".github/workflows/publish-desk-extension.yml"
+      - "scripts/pack-desk-extension.sh"
+      - "scripts/gh-release-desk-extension.sh"
+      - "extension/firefox/**"
+      - "extension/chromium/**"
+      - "extension/shared/**"
+      - "extension/version.json"
+  workflow_dispatch:
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack and publish desk-extension release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zip
+          bash scripts/pack-desk-extension.sh
+          ls -la extension/dist/
+          test -f extension/dist/Black.Forest.Desk.xpi
+          test -f extension/dist/Black.Forest.Desk-chromium.zip
+          bash scripts/gh-release-desk-extension.sh
