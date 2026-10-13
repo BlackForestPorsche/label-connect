@@ -11,7 +11,7 @@
       }
       body {
         margin: 0;
-        width: 280px;
+        width: 300px;
         padding: 14px;
         background: #f3efe6;
       }
@@ -48,17 +48,29 @@
         font-weight: 700;
         cursor: pointer;
       }
+      button.secondary {
+        margin-top: 8px;
+        background: #4a4538;
+      }
       button:disabled {
         opacity: 0.55;
         cursor: default;
       }
-      #status {
+      #status,
+      #update {
         margin-top: 10px;
         min-height: 1.2em;
         font-weight: 600;
       }
       .ok { color: #1f4d2a; }
       .err { color: #7a1f1f; }
+      .warn { color: #6a4a12; }
+      .meta {
+        margin-top: 8px;
+        font-size: 11px;
+        opacity: 0.65;
+        font-weight: 500;
+      }
     </style>
   </head>
   <body>
@@ -69,7 +81,10 @@
     <label for="pin">PIN</label>
     <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" />
     <button id="unlock" type="button">Unlock lot names</button>
+    <button id="checkUpdate" class="secondary" type="button">Check for extension update</button>
     <div id="status" role="status"></div>
+    <div id="update" role="status"></div>
+    <div id="version" class="meta"></div>
     <script src="popup.js"></script>
   </body>
 </html>
