@@ -1,5 +1,5 @@
 {
-  "version": "0.1.5",
-  "message": "Firefox strict_min_version 140.0 (required for data_collection_permissions). On the desk: bash scripts/update-desk-extension.sh (also runs from update-labels.sh).",
+  "version": "0.1.6",
+  "message": "Desk PIN unlock UX (no cryptic unauthorized) + Firefox 140 data_collection. On the desk: bash scripts/update-desk-extension.sh (also runs from update-labels.sh).",
   "url": "https://github.com/BlackForestPorsche/label-connect"
 }
