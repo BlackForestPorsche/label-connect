@@ -1,0 +1,73 @@
+name: Apply large desk sources
+on:
+  workflow_dispatch:
+  push:
+    branches: [cursor/desk-tools-session-handoff-f952]
+    paths:
+      - .github/workflows/apply-large-sources.yml
+      - tmp/large-sources/**
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/desk-tools-session-handoff-f952
+      - name: Decode large sources
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import pathlib, gzip, base64, hashlib, json, sys, shutil
+          root = pathlib.Path("tmp/large-sources")
+          manifest_path = root / "manifest.json"
+          if not manifest_path.exists():
+              print("No manifest; exit green")
+              sys.exit(0)
+          manifest = json.loads(manifest_path.read_text())
+          for item in manifest:
+              parts = []
+              missing = []
+              for i in range(item["chunks"]):
+                  p = root / f"{item['prefix']}.{i:02d}"
+                  if not p.exists():
+                      missing.append(p.name)
+                      continue
+                  parts.append(p.read_text().strip())
+              if missing:
+                  print(f"Incomplete {item['path']}: {missing}; skip", file=sys.stderr)
+                  continue
+              try:
+                  data = gzip.decompress(base64.b64decode("".join(parts)))
+              except Exception as e:
+                  print(f"Corrupt {item['path']}: {e}; skip", file=sys.stderr)
+                  continue
+              if "sha256" in item and hashlib.sha256(data).hexdigest() != item["sha256"]:
+                  print(f"SHA mismatch {item['path']}; skip", file=sys.stderr)
+                  continue
+              dest = pathlib.Path(item["path"])
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(data)
+              print(item["path"], len(data), hashlib.sha256(data).hexdigest()[:16])
+              for also in item.get("also") or []:
+                  ap = pathlib.Path(also)
+                  ap.parent.mkdir(parents=True, exist_ok=True)
+                  ap.write_bytes(data)
+                  print("also", also)
+          PY
+      - name: Commit if changed
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add extension/shared/background.js extension/shared/popup.js extension/shared/lot-names.js \
+            extension/firefox/background.js extension/firefox/popup.js extension/firefox/lot-names.js \
+            extension/chromium/background.js extension/chromium/popup.js extension/chromium/lot-names.js \
+            extension/README.md || true
+          if git diff --staged --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Desk 0.1.9: restore large sources (background/popup/lot-names/README)"
+            git push origin HEAD:cursor/desk-tools-session-handoff-f952
+          fi
