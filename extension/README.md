@@ -70,20 +70,27 @@ bash scripts/update-desk-extension.sh
 
 Gecko id: `black-forest-desk@blackforestautomotive.com`.
 
-**Note:** Release Firefox may still ignore unsigned sideloads. The install script sets profile prefs used by Developer Edition / Nightly / unbranded builds, drops the XPI into the default profile, and writes policies. If the add-on does not appear after restart, use **Load Temporary Add-on** once from `extension/firefox/manifest.json` (about:debugging) until AMO self-distribution exists — Create RO print still works the same.
+**Note:** Release Firefox may still ignore unsigned sideloads. The install script sets profile prefs used by Developer Edition / Nightly / unbranded builds, drops the XPI into the default profile, and writes policies. If the add-on does not appear after restart, use **Load Temporary Add-on** (below) until AMO self-distribution exists — Create RO print still works the same.
 
 ## Install — Chrome / Edge (Chromium MV3)
 
-Package folder: `extension/chromium/`
+Package folder: `extension/chromium/` (same sibling layout as Firefox: `manifest.json` + `popup.html` at folder root).
 
 1. `npm run sync-extension`
-2. `chrome://extensions` / `edge://extensions` → Developer mode → **Load unpacked** → `label-connect/extension/chromium`
+2. `chrome://extensions` / `edge://extensions` → Developer mode → **Load unpacked** → `label-connect/extension/chromium` (the folder that contains `manifest.json` and `popup.html`)
 3. Leave that path forever; after `git pull` / `update-desk-extension.sh`, click **Reload** on the card when the version badge shows `↑`
 
-## Install — Firefox temporary (quick test)
+## Install — Firefox temporary (desk day-to-day)
 
-1. `npm run sync-extension`
-2. `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → `extension/firefox/manifest.json`
+1. `npm run sync-extension` (or `git pull` so `extension/firefox/popup.html` is present).
+2. `about:debugging#/runtime/this-firefox`
+3. If **Black Forest Desk** is already listed under Temporary Extensions, **Remove** it first (clears a stale/wrong root).
+4. **Load Temporary Add-on…** → pick **exactly one** of:
+   - `extension/firefox/manifest.json` (must be the file **inside** `extension/firefox/` so `popup.html` / `popup.js` resolve as siblings), or
+   - a packed `Black.Forest.Desk.xpi` (`extension/dist/` or `~/Downloads/`)
+5. Do **not** load `extension/manifest.json`, the parent `extension/` folder, or a symlink outside `firefox/`.
+
+If the toolbar popup shows `File not found` / `moz-extension://…/popup.html`, the pack is fine — **Remove** the temporary add-on and load again from step 4.
 
 ## Windows desk checklist
 
