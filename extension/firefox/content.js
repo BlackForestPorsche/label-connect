@@ -1,6 +1,7 @@
 /* global chrome, browser, AllDataRoLabels */
 /**
  * AllData Manage Online — arm only on Create R/O, then print last name + model.
+ * Every Create click prints once after success — including when an open RO already exists.
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
@@ -9,8 +10,11 @@
 
   let armed = false;
   let armedAt = 0;
+  let armedBaselineRo = "";
+  let armedHadUpdate = false;
+  let armedHadCreate = false;
   let pendingTimer = null;
-  let lastPrintedKey = "";
+  let lastPrintedRo = "";
   let lastPrintedAt = 0;
 
   function toast(message, kind) {
@@ -20,13 +24,24 @@
   function disarm() {
     armed = false;
     armedAt = 0;
+    armedBaselineRo = "";
+    armedHadUpdate = false;
+    armedHadCreate = false;
     if (pendingTimer) {
       clearTimeout(pendingTimer);
       pendingTimer = null;
     }
   }
 
+  function snapshotAtArm() {
+    const fields = typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
+    armedBaselineRo = String(fields.roNumber || "").trim();
+    armedHadUpdate = typeof api.updateControlPresent === "function" && api.updateControlPresent();
+    armedHadCreate = typeof api.createControlPresent === "function" && api.createControlPresent();
+  }
+
   function armFromCreate() {
+    snapshotAtArm();
     armed = true;
     armedAt = Date.now();
     if (pendingTimer) clearTimeout(pendingTimer);
@@ -39,15 +54,31 @@
     scheduleSuccessChecks();
   }
 
+  /** Only suppress a retry of the same RO# — never block a second Create for the same customer. */
   function alreadyPrinted(fields) {
-    const key = `${fields.roNumber || ""}|${fields.lastName}|${fields.model}`;
-    if (key && key === lastPrintedKey && Date.now() - lastPrintedAt < 60_000) return true;
-    return false;
+    const ro = String(fields.roNumber || "").trim();
+    if (!ro) return false;
+    return ro === lastPrintedRo && Date.now() - lastPrintedAt < 60_000;
   }
 
   function markPrinted(fields) {
-    lastPrintedKey = `${fields.roNumber || ""}|${fields.lastName}|${fields.model}`;
+    const ro = String(fields.roNumber || "").trim();
+    if (ro) lastPrintedRo = ro;
     lastPrintedAt = Date.now();
+  }
+
+  /**
+   * Never send the pre-Create (open) RO# — that would hit server 24h idempotency and skip.
+   * Prefer a new RO# after Create; otherwise omit so every Create still prints.
+   */
+  function fieldsForPrint(scraped) {
+    const scrapedRo = String(scraped.roNumber || "").trim();
+    const roNumber = scrapedRo && scrapedRo !== armedBaselineRo ? scrapedRo : "";
+    return {
+      lastName: scraped.lastName,
+      model: scraped.model,
+      roNumber,
+    };
   }
 
   async function requestPrint(fields) {
@@ -97,17 +128,26 @@
     if (!armed) return;
     const createStillThere = typeof api.createControlPresent === "function" && api.createControlPresent();
     const updateThere = typeof api.updateControlPresent === "function" && api.updateControlPresent();
-    const fields = typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
-    const success = (!createStillThere && Boolean(fields.lastName && fields.model)) ||
-      (updateThere && Boolean(fields.lastName && fields.model)) ||
-      (Boolean(fields.roNumber) && Boolean(fields.lastName && fields.model) && Date.now() - armedAt > 400);
+    const scraped = typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
+    const roChanged =
+      Boolean(scraped.roNumber) &&
+      String(scraped.roNumber).trim() !== armedBaselineRo;
+    const createGone = armedHadCreate && !createStillThere;
+    // When an open RO already shows Update, do not treat that as Create success.
+    const updateAppeared = !armedHadUpdate && updateThere;
+
+    const success =
+      (createGone && Boolean(scraped.lastName && scraped.model)) ||
+      (updateAppeared && Boolean(scraped.lastName && scraped.model)) ||
+      (roChanged && Boolean(scraped.lastName && scraped.model) && Date.now() - armedAt > 400);
 
     if (!success) return;
-    if (!fields.lastName || !fields.model) {
+    if (!scraped.lastName || !scraped.model) {
       disarm();
       toast("Label skipped — could not read last name or model.", "skip");
       return;
     }
+    const fields = fieldsForPrint(scraped);
     disarm();
     requestPrint(fields);
   }
