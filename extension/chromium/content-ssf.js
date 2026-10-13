@@ -159,20 +159,40 @@
     placeholder.textContent = "Select last name…";
     select.append(placeholder);
 
-    let names = [];
+    let result = { names: [] };
     try {
+      const runtime = typeof browser !== "undefined" ? browser : chrome;
       if (forceRefresh) {
-        const runtime = typeof browser !== "undefined" ? browser : chrome;
         await runtime.storage.local.remove(["lotLastNames", "lotLastNamesAt"]);
       }
-      names = await api.loadLotLastNames();
+      if (runtime?.runtime?.sendMessage) {
+        result = (await runtime.runtime.sendMessage({ type: "lot-last-names" })) || { names: [] };
+      } else if (api.loadLotLastNames) {
+        result = { names: await api.loadLotLastNames() };
+      }
     } catch {
-      names = [];
+      result = { names: [] };
+    }
+
+    const names = Array.isArray(result.names) ? result.names : [];
+
+    if (result.needsAuth) {
+      hint.textContent =
+        result.message ||
+        "Enter your desk PIN in the Black Forest Desk popup (toolbar icon), then click Refresh. Same person + PIN as shop unlock.";
+      select.disabled = false;
+      return;
+    }
+
+    if (result.error && !names.length) {
+      hint.textContent = result.error;
+      select.disabled = false;
+      return;
     }
 
     if (!names.length) {
       hint.textContent =
-        "No lot names yet (On the Lot only). Open the extension popup → person + PIN, then Refresh. Book names are never used.";
+        "No lot names yet (On the Lot only). Open the Black Forest Desk popup → enter desk PIN, then Refresh. Book names are never used.";
       select.disabled = false;
       return;
     }
