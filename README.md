@@ -2,6 +2,10 @@
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
+**0.1.8** - Create RO labels: **last name only** (strip first initial forms like `J. Owner` / `Owner, J`); print on **every** Create R/O even when that customer already has an open RO (no longer treat pre-existing Update/RO# as success). The scraped RO# is for server idempotency only — label ink is still last name + model.
+
+**0.1.7** - Desk unlock: Person dropdown (no free-text) + lowercase session + clear desk-PIN errors.
+
 **0.1.6** - Black Forest Desk: map shop `unauthorized` to clear **desk PIN** unlock copy; lowercase person like the Plasma widget; host permissions include `127.0.0.1:8080`; SSF empty state points at the popup PIN. Keeps Firefox `strict_min_version` **140.0** + `data_collection_permissions` from 0.1.5.
 
 **0.1.5** - Firefox `strict_min_version` raised to **140.0** (AMO requirement when `data_collection_permissions` is present).
@@ -17,7 +21,8 @@ This public repo is the **release remote** for the shop PC install at `~/label-c
 Hard rules:
 
 - **Only Create R/O** prints. Never Update R/O, Schedule New R/O, or Assign R/O.
-- Label lines: **last name** + **model** (e.g. `Owner` / `Macan`).
+- Label lines: **last name** + **model** (e.g. `Owner` / `Macan`). No first initial, no RO# on the label.
+- Print on every Create R/O success, including when an open RO already exists for that customer.
 - Local Labels URL: `http://127.0.0.1:8080` (or `PORT` / extension `labelsBaseUrl`).
 
 Dry-run (no printer job):
