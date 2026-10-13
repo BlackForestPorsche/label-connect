@@ -2,9 +2,9 @@
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
-**0.1.3** - AllData Create RO auto-print: `POST /api/print-ro` renders **customer last name + vehicle model** on 30252 (safe ImageableArea margins) and prints. Rejects Update / Schedule / Assign. Idempotent by `roNumber`. **Black Forest Desk** browser extension (Chrome/Edge/Firefox) in [`extension/`](extension/README.md): Create RO → Labels plus SSF checkout On-the-Lot last-name dropdown (same install).
+**0.1.6** - Black Forest Desk: map shop `unauthorized` to clear **desk PIN** unlock copy; lowercase person like the Plasma widget; host permissions include `127.0.0.1:8080`; SSF empty state points at the popup PIN. Keeps Firefox `strict_min_version` 140.0 + `data_collection_permissions`.
 
-**0.1.1** - Editor shows the CUPS/PPD safe print zone (dashed box) and keeps blocks inside it so edge content is not clipped on the LabelWriter 550 (30252 Address uses the driver ImageableArea, about 1-1.5 mm on the short sides and a larger inset on the feed end).
+**0.1.5** - Firefox `strict_min_version` 140.0 (required for `data_collection_permissions`).
 
 This public repo is the **release remote** for the shop PC install at `~/label-connect`. App source also lives under `label-connect/` on the private `blackforest-tools` branch `cursor/labelwriter-550-6410` ([PR #3](https://github.com/BlackForestPorsche/blackforest-tools/pull/3)).
 
