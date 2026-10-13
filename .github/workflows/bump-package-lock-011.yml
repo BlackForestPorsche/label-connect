@@ -1,0 +1,27 @@
+name: bump-package-lock-011
+on:
+  push:
+    paths:
+      - "scripts/_package-lock.json.b64gz"
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, gzip, pathlib
+          data = gzip.decompress(base64.b64decode(pathlib.Path("scripts/_package-lock.json.b64gz").read_text().strip()))
+          pathlib.Path("package-lock.json").write_bytes(data)
+          print("wrote", len(data))
+          PY
+          git config user.name "BlackForestPorsche"
+          git config user.email "service@blackforestautomotive.com"
+          git add package-lock.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Bump package-lock.json to 0.1.1."
+          git push
