@@ -103,9 +103,11 @@ If the toolbar popup shows `File not found` / `moz-extension://…/popup.html`, 
 
 | Field | Source |
 | --- | --- |
-| Last name | “Last Name” / “Customer” field; else last token of customer name |
+| Last name | “Last Name” / “Customer” field; last name only (strips `J.` / `LAST, F` forms — never first initial on the label) |
 | Model | “Model” field; else Year/Make/Model line; else known Porsche model token on screen |
-| RO number | Optional; used only for server idempotency |
+| RO number | Optional; AllData repair-order id for server idempotency only — **not printed** on the label |
+
+Every **Create R/O** success prints, even when that customer already has an open RO or you Create again for the same tester person. Dedupe is per Create click / new RO id — never by customer. Pre-existing Update / old RO# is not treated as success and is not sent to Labels (that was causing “already printed this RO”). Update / Schedule New / Assign never print.
 
 If last name or model cannot be read after Create succeeds, the extension toasts **Label skipped** and does not print.
 
