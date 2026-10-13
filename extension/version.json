@@ -1,5 +1,5 @@
 {
-  "version": "0.1.3",
-  "message": "Create RO print + SSF On-the-Lot dropdown. On the desk: bash scripts/update-desk-extension.sh (also runs from update-labels.sh).",
+  "version": "0.1.4",
+  "message": "Firefox data_collection_permissions (required none). On the desk: bash scripts/update-desk-extension.sh (also runs from update-labels.sh).",
   "url": "https://github.com/BlackForestPorsche/label-connect"
 }
