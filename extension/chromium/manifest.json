@@ -15,6 +15,10 @@
   "background": {
     "service_worker": "background.js"
   },
+  "action": {
+    "default_title": "Black Forest Desk",
+    "default_popup": "popup.html"
+  },
   "content_scripts": [
     {
       "matches": ["https://manageonline.alldata.com/*"],
@@ -29,8 +33,5 @@
       "js": ["config.js", "toast.js", "lot-names.js", "content-ssf.js"],
       "run_at": "document_idle"
     }
-  ],
-  "action": {
-    "default_title": "Black Forest Desk"
-  }
+  ]
 }
