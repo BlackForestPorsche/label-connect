@@ -49,15 +49,15 @@
     const lower = text.toLowerCase();
     // Never surface raw API codes like "unauthorized".
     if (lower === "unauthorized" || lower === "unauthorised") {
-      return "Desk PIN rejected (or person not found). Use the desk/shop widget PIN for the selected person — not another password.";
+      return "Desk PIN rejected (or person not found). Use the desk/shop widget PIN for the selected person \u2014 not another password.";
     }
     if (looksLikeApiCode(text)) {
       const map = {
         unauthorized:
-          "Desk PIN rejected (or person not found). Use the desk/shop widget PIN for the selected person — not another password.",
-        locked: "Too many PIN tries — wait, then unlock again.",
+          "Desk PIN rejected (or person not found). Use the desk/shop widget PIN for the selected person \u2014 not another password.",
+        locked: "Too many PIN tries \u2014 wait, then unlock again.",
         pin_change_required: "Set a PIN on the shop site first, then unlock here.",
-        bad_request: "Pick a shop person from the list and enter a 4–12 digit desk PIN.",
+        bad_request: "Pick a shop person from the list and enter a 4\u201312 digit desk PIN.",
         rate_limited: "Too many tries. Wait a minute, then enter your desk PIN again.",
       };
       return map[lower] || `Unlock failed (${text}). Enter your desk PIN and try again.`;
@@ -90,7 +90,7 @@
   async function restore() {
     try {
       const manifest = runtime.runtime.getManifest();
-      versionEl.textContent = `Installed ${manifest.version} · updates via git / update-desk-extension.sh`;
+      versionEl.textContent = `Installed ${manifest.version} \u00b7 updates via git / update-desk-extension.sh`;
       const stored = await runtime.storage.local.get([
         "shopPerson",
         "shopWidgetTokenExpiresAt",
@@ -104,7 +104,7 @@
       }
       if (stored.deskUpdateAvailable?.version) {
         setUpdate(
-          `Update ${stored.deskUpdateAvailable.version} ready — run bash scripts/update-desk-extension.sh on the desk.`,
+          `Update ${stored.deskUpdateAvailable.version} ready \u2014 run bash scripts/update-desk-extension.sh on the desk.`,
           "warn",
         );
       }
@@ -126,11 +126,11 @@
       return;
     }
     if (!/^\d{4,12}$/.test(pin)) {
-      setStatus("Desk PIN must be 4–12 digits (shop / Plasma widget PIN).", "err");
+      setStatus("Desk PIN must be 4\u201312 digits (shop / Plasma widget PIN).", "err");
       return;
     }
     button.disabled = true;
-    setStatus(`Signing in as “${person}” with desk PIN…`);
+    setStatus(`Signing in as \u201c${person}\u201d with desk PIN\u2026`);
     try {
       await runtime.storage.local.set({ shopPerson: person });
       const response = await runtime.runtime.sendMessage({
@@ -142,7 +142,7 @@
         setStatus(humanizeUnlockError(response?.error), "err");
         return;
       }
-      setStatus(`Lot names unlocked as “${person}”. Open SSF checkout and Refresh if needed.`, "ok");
+      setStatus(`Lot names unlocked as \u201c${person}\u201d. Open SSF checkout and Refresh if needed.`, "ok");
     } catch {
       setStatus("Extension background unavailable. Reload the temporary add-on, then enter your desk PIN.", "err");
     } finally {
@@ -152,13 +152,13 @@
 
   checkBtn.addEventListener("click", async () => {
     checkBtn.disabled = true;
-    setUpdate("Checking…");
+    setUpdate("Checking\u2026");
     try {
       const response = await runtime.runtime.sendMessage({ type: "check-update", force: true });
       const available = response?.available;
       if (available?.version) {
         setUpdate(
-          `Update ${available.version} ready — on the desk run: bash ~/label-connect/scripts/update-desk-extension.sh`,
+          `Update ${available.version} ready \u2014 on the desk run: bash ~/label-connect/scripts/update-desk-extension.sh`,
           "warn",
         );
       } else {
