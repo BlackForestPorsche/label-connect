@@ -1,0 +1,32 @@
+name: bump-lock-sed
+on:
+  push:
+    paths:
+      - ".github/workflows/bump-lock-sed.yml"
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("package-lock.json")
+          text = p.read_text()
+          text2 = text.replace('"version": "0.1.0"', '"version": "0.1.1"', 2)
+          if text2 == text:
+              print("already 0.1.1 or unexpected format")
+          else:
+              p.write_text(text2)
+              print("bumped two version fields")
+          PY
+          git config user.name "BlackForestPorsche"
+          git config user.email "service@blackforestautomotive.com"
+          git add package-lock.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Bump package-lock.json to 0.1.1."
+          git push
