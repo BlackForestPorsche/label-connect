@@ -1,0 +1,4 @@
+line1: /^[A-Za-z]\.\?\s+/
+line2: /^[A-Za-z]\.\?$/
+line3: /^[A-Za-z]\\.?\\s+/
+line4-correct-from-batch1: /^[A-Za-z]\.\?\s+/
