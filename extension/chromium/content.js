@@ -1,122 +1,161 @@
-/* global globalThis, chrome, browser */
+/* global chrome, browser, AllDataRoLabels */
 /**
- * Content script: arm only on Create R/O activation, wait for success, scrape, ask background to print.
- * Never arms Update R/O, Schedule New R/O, or Assign R/O.
+ * AllData Manage Online — arm only on Create R/O, then print last name + model.
  */
 (function () {
-  const api = globalThis.AllDataRoLabels;
-  if (!api) return;
-
   const runtime = typeof browser !== "undefined" ? browser : chrome;
-  let armed = null;
-  let printing = false;
+  const api = globalThis.AllDataRoLabels || {};
+  const SUCCESS_WAIT_MS = api.SUCCESS_WAIT_MS || 12000;
 
-  function closestControl(target) {
-    if (!(target instanceof Element)) return null;
-    return target.closest("button, a, [role='button'], input[type='button'], input[type='submit']");
+  let armed = false;
+  let armedAt = 0;
+  let pendingTimer = null;
+  let lastPrintedKey = "";
+  let lastPrintedAt = 0;
+
+  function toast(message, kind) {
+    if (typeof api.showToast === "function") api.showToast(message, kind);
   }
 
-  function armCreate(control) {
-    if (printing) return;
-    if (api.isForbiddenControl(control)) return;
-    if (!api.isCreateControl(control)) return;
-    armed = {
-      at: Date.now(),
-      // Snapshot before create mutates the Work screen.
-      pre: api.scrapePayload(),
-    };
+  function disarm() {
+    armed = false;
+    armedAt = 0;
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
   }
 
-  async function tryPrintAfterSuccess() {
-    if (!armed || printing) return;
-    if (Date.now() - armed.at > api.SUCCESS_WAIT_MS) {
-      armed = null;
+  function armFromCreate() {
+    armed = true;
+    armedAt = Date.now();
+    if (pendingTimer) clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => {
+      if (armed) {
+        disarm();
+        toast("Label skipped — Create R/O success not confirmed.", "skip");
+      }
+    }, SUCCESS_WAIT_MS);
+    scheduleSuccessChecks();
+  }
+
+  function alreadyPrinted(fields) {
+    const key = `${fields.roNumber || ""}|${fields.lastName}|${fields.model}`;
+    if (key && key === lastPrintedKey && Date.now() - lastPrintedAt < 60_000) return true;
+    return false;
+  }
+
+  function markPrinted(fields) {
+    lastPrintedKey = `${fields.roNumber || ""}|${fields.lastName}|${fields.model}`;
+    lastPrintedAt = Date.now();
+  }
+
+  async function requestPrint(fields) {
+    if (alreadyPrinted(fields)) {
+      toast("Label skipped — already sent.", "skip");
       return;
     }
-
-    // Success gate: Create control gone / Update appeared, or RO number newly visible.
-    const createGone = !api.createButtonPresent();
-    const updateHere = api.updateButtonPresent();
-    const payload = api.scrapePayload();
-    const roNow = payload.roNumber;
-    const roNew = Boolean(roNow && roNow !== (armed.pre.roNumber || ""));
-
-    if (!(createGone || updateHere || roNew)) return;
-
-    const lastName = payload.lastName || armed.pre.lastName;
-    const model = payload.model || armed.pre.model;
-    if (!lastName || !model) {
-      api.showToast("Label skipped — need last name and model.", "skip");
-      armed = null;
-      return;
-    }
-
-    printing = true;
-    const body = {
-      event: "create-ro",
-      source: "alldata-extension",
-      lastName,
-      model,
-      roNumber: roNow || armed.pre.roNumber || "",
-      customerName: lastName,
-    };
-    armed = null;
-
+    let response;
     try {
-      const response = await runtime.runtime.sendMessage({ type: "print-ro", payload: body });
-      if (!response || response.error) {
-        api.showToast(response?.error || "Labels did not print.", "error");
-      } else if (response.skipped) {
-        api.showToast(response.message || "Label skipped — already printed.", "skip");
-      } else if (response.printed) {
-        api.showToast(`Label: ${lastName} / ${model}`, "ok");
-      } else {
-        api.showToast(response.message || "Label request finished.", "ok");
-      }
-    } catch (error) {
-      api.showToast(error instanceof Error ? error.message : "Labels bridge failed.", "error");
-    } finally {
-      printing = false;
+      response = await runtime.runtime.sendMessage({
+        type: "print-ro",
+        payload: {
+          event: "create-ro",
+          lastName: fields.lastName,
+          model: fields.model,
+          roNumber: fields.roNumber || "",
+          source: "alldata-extension",
+        },
+      });
+    } catch {
+      toast("Label skipped — extension background unavailable.", "error");
+      return;
+    }
+    if (!response || response.error) {
+      toast(response?.error || "Label skipped — Labels error.", "error");
+      return;
+    }
+    if (response.skipped) {
+      toast("Label skipped — already printed this RO.", "skip");
+      markPrinted(fields);
+      return;
+    }
+    if (response.printed || response.dryRun) {
+      markPrinted(fields);
+      toast(
+        response.dryRun
+          ? `Dry run: ${fields.lastName} / ${fields.model}`
+          : `Printed ${fields.lastName} / ${fields.model}`,
+        "ok",
+      );
+      return;
+    }
+    toast("Label skipped — unexpected Labels response.", "skip");
+  }
+
+  function tryCompleteAfterCreate() {
+    if (!armed) return;
+    const createStillThere = typeof api.createControlPresent === "function" && api.createControlPresent();
+    const updateThere = typeof api.updateControlPresent === "function" && api.updateControlPresent();
+    const fields = typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
+    const success = (!createStillThere && Boolean(fields.lastName && fields.model)) ||
+      (updateThere && Boolean(fields.lastName && fields.model)) ||
+      (Boolean(fields.roNumber) && Boolean(fields.lastName && fields.model) && Date.now() - armedAt > 400);
+
+    if (!success) return;
+    if (!fields.lastName || !fields.model) {
+      disarm();
+      toast("Label skipped — could not read last name or model.", "skip");
+      return;
+    }
+    disarm();
+    requestPrint(fields);
+  }
+
+  function scheduleSuccessChecks() {
+    const delays = [300, 800, 1500, 2500, 4000, 6500, 9000, 11500];
+    for (const ms of delays) {
+      setTimeout(() => {
+        if (armed) tryCompleteAfterCreate();
+      }, ms);
     }
   }
 
-  document.addEventListener(
-    "click",
-    (event) => {
-      const control = closestControl(event.target);
-      if (!control) return;
-      if (api.isForbiddenControl(control)) {
-        armed = null;
+  function eventPath(event) {
+    if (typeof event.composedPath === "function") return event.composedPath();
+    const path = [];
+    let node = event.target;
+    while (node) {
+      path.push(node);
+      node = node.parentNode;
+    }
+    return path;
+  }
+
+  function onPointer(event) {
+    const path = eventPath(event);
+    for (const node of path) {
+      if (!node || node.nodeType !== 1) continue;
+      if (typeof api.isForbiddenControl === "function" && api.isForbiddenControl(node)) {
+        disarm();
         return;
       }
-      armCreate(control);
-    },
-    true,
-  );
-
-  // Capture keyboard activation of the focused Create control.
-  document.addEventListener(
-    "keydown",
-    (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      const control = closestControl(event.target);
-      if (!control) return;
-      if (api.isForbiddenControl(control)) {
-        armed = null;
+      if (typeof api.isCreateControl === "function" && api.isCreateControl(node)) {
+        armFromCreate();
         return;
       }
-      armCreate(control);
-    },
-    true,
-  );
+    }
+  }
 
-  const observer = new MutationObserver(() => {
-    void tryPrintAfterSuccess();
+  document.addEventListener("click", onPointer, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    onPointer(event);
+  }, true);
+
+  // MutationObserver: if Create disappears after arm, try scrape.
+  const mo = new MutationObserver(() => {
+    if (armed) tryCompleteAfterCreate();
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-
-  // Poll lightly while armed — some SPA updates skip useful mutation records.
-  setInterval(() => {
-    if (armed) void tryPrintAfterSuccess();
-  }, 400);
+  mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
 })();
