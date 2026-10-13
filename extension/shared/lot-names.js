@@ -14,13 +14,14 @@
   const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
   const PERSON_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
   const PIN_RE = /^\d{4,12}$/;
+  /** Desk unlock roster (plasmoid fallback). */
+  const DESK_PEOPLE = Object.freeze(["logan", "stephen", "steve", "carla", "john"]);
 
   function lastNameFromLotLabel(label) {
     const text = String(label || "")
       .replace(/\s+/g, " ")
       .trim();
     if (!text || /^no\s*name$/i.test(text)) return "";
-    // "LAST, FIRST" → LAST
     if (text.includes(",")) {
       const head = text.split(",")[0].trim();
       if (head) return head;
@@ -45,21 +46,16 @@
     return names;
   }
 
-  /** Same as Plasma widget: shop person ids are lowercase slugs. */
   function normalizePerson(person) {
     return String(person || "")
       .trim()
       .toLowerCase();
   }
 
-  /**
-   * Map shop widget API error codes to desk-facing copy.
-   * Shop returns lowercase codes like "unauthorized" — never show those raw.
-   */
   function friendlyWidgetError(code, status) {
     const key = String(code || "").trim().toLowerCase();
     if (key === "unauthorized" || status === 401) {
-      return "Wrong person or desk PIN. Use the same shop unlock name (lowercase, e.g. logan), then enter your desk PIN in this popup.";
+      return "Desk PIN rejected (or person not found). Pick a person from the list and use the desk/shop widget PIN — not another password.";
     }
     if (key === "locked" || status === 429) {
       return "Too many PIN tries — wait a bit, then unlock again with your desk PIN.";
@@ -77,7 +73,6 @@
       return "Shop rate-limited this request. Wait a minute, then try again.";
     }
     if (key && !/^[a-z_]+$/.test(key)) {
-      // Unexpected human sentence from server — pass through.
       return String(code);
     }
     if (status) return `Shop unlock failed (${status}). Enter your desk PIN in the popup.`;
@@ -97,9 +92,7 @@
     if (!runtime?.storage?.local) return;
     try {
       await runtime.storage.local.set(obj);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   async function setPinBadge(needsPin) {
@@ -121,9 +114,7 @@
           await runtime.action.setTitle?.({ title: "Black Forest Desk" });
         }
       }
-    } catch {
-      // badge optional
-    }
+    } catch {}
   }
 
   async function shopBaseUrl() {
@@ -163,10 +154,7 @@
     return { ok: true, person: normalized, source: source || "pin" };
   }
 
-  /**
-   * Read bf_shop_gate from the default Firefox/Chromium profile (same profile as the shop tab).
-   * Never logs the cookie value.
-   */
+  /** Read bf_shop_gate from the default browser profile. Never logs the value. */
   async function readShopGateCookie() {
     const base = await shopBaseUrl();
     const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
@@ -175,9 +163,7 @@
     }
     try {
       const cookie = await runtime.cookies.get({ url: `${base}/`, name });
-      if (cookie && cookie.value) {
-        return { present: true, value: cookie.value };
-      }
+      if (cookie && cookie.value) return { present: true };
       return { present: false, reason: "missing" };
     } catch {
       return { present: false, reason: "cookie_error" };
@@ -185,15 +171,15 @@
   }
 
   /**
-   * Website shop session → Desk Bearer.
-   * Requires shop route POST /api/widget/session/from-gate (cookie bf_shop_gate → widget token).
-   * Uses the real browser profile cookies — never creates/switches Firefox profiles.
+   * Website shop session → Desk Bearer via POST /api/widget/session/from-gate.
+   * Degrades cleanly when the route is missing (404/406): falls back to Tools/PIN.
    */
   async function importSiteGateSession() {
     const gate = await readShopGateCookie();
     if (!gate.present) {
       return {
-        error: "Shop site is not signed in in this Firefox profile. Unlock shop.blackforestautomotive.com first.",
+        error:
+          "Shop site is not signed in in this Firefox profile. Unlock shop.blackforestautomotive.com first.",
         reason: "no_gate_cookie",
       };
     }
@@ -203,20 +189,13 @@
     try {
       response = await fetch(`${base}/api/widget/session/from-gate`, {
         method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        // Send the profile's bf_shop_gate cookie (host permission + cookies).
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
         credentials: "include",
         body: "{}",
         cache: "no-store",
       });
     } catch {
-      return {
-        error: "Could not reach the shop from-gate API. Is the shop online?",
-        reason: "network",
-      };
+      return { error: "Could not reach the shop from-gate API.", reason: "network" };
     }
 
     let data = null;
@@ -226,11 +205,10 @@
       data = null;
     }
 
-    // 404/406 = route not deployed yet (Grok paste docs/grok-widget-from-gate.md).
     if (response.status === 404 || response.status === 406) {
       return {
         error:
-          "Shop is signed in, but from-gate is not on the site yet. Paste docs/grok-widget-from-gate.md to Grok, or unlock Black Forest Tools / enter desk PIN.",
+          "Shop is signed in, but from-gate is not on the site yet. Unlock Tools or enter desk PIN (Grok paste: grok-widget-from-gate).",
         reason: "from_gate_missing",
         gatePresent: true,
       };
@@ -250,9 +228,7 @@
 
     const token = data?.token || data?.accessToken || data?.bearer || data?.widgetToken;
     const expiresAt = data?.expiresAt || data?.widgetExpiresAt;
-    if (!token) {
-      return { error: "from-gate returned no token.", reason: "bad_payload" };
-    }
+    if (!token) return { error: "from-gate returned no token.", reason: "bad_payload" };
     return storeWidgetToken({
       token,
       expiresAt,
@@ -261,9 +237,6 @@
     });
   }
 
-  /**
-   * Complementary: import Bearer from Black Forest Tools loopback bridge.
-   */
   async function importToolsWidgetSession() {
     const base = await toolsBridgeBaseUrl();
     let response;
@@ -275,7 +248,7 @@
       });
     } catch {
       return {
-        error: "Black Forest Tools is not reachable. Open Tools unlocked, or use the shop site session.",
+        error: "Black Forest Tools is not reachable. Open Tools unlocked, or use shop session / PIN.",
         reason: "bridge_unreachable",
       };
     }
@@ -304,10 +277,6 @@
     });
   }
 
-  /**
-   * Background-only: Bearer session for widget API.
-   * Never logs PIN/token.
-   */
   async function createWidgetSession({ person, pin }) {
     const normalized = normalizePerson(person);
     const pinText = String(pin || "");
@@ -359,7 +328,6 @@
     const expiresAt = Number(stored.shopWidgetTokenExpiresAt || 0);
     if (token && expiresAt > Date.now() + 60_000) return { token };
 
-    // Prefer website session in this Firefox profile (the reported gap).
     if (trySite) {
       const fromSite = await importSiteGateSession();
       if (fromSite.ok) {
@@ -377,9 +345,6 @@
     return { needsAuth: true };
   }
 
-  /**
-   * Background-only lot fetch. Never calls book-today.
-   */
   async function resolveLotLastNames() {
     const cached = await storageGet(["lotLastNames", "lotLastNamesAt"]);
     const cachedNames = Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [];
@@ -455,18 +420,12 @@
     return { names, source: "lot" };
   }
 
-  /**
-   * Content-script friendly: ask the background, fall back to short cache.
-   * Returns an array of names (legacy). Prefer resolve via message for auth hints.
-   */
   async function loadLotLastNames() {
     if (runtime?.runtime?.sendMessage) {
       try {
         const response = await runtime.runtime.sendMessage({ type: "lot-last-names" });
         if (response && Array.isArray(response.names)) return response.names;
-      } catch {
-        // fall through to local cache
-      }
+      } catch {}
     }
     const cached = await storageGet(["lotLastNames", "lotLastNamesAt"]);
     const names = Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [];
@@ -477,6 +436,7 @@
 
   api.lastNameFromLotLabel = lastNameFromLotLabel;
   api.lotLabelsToLastNames = lotLabelsToLastNames;
+  api.DESK_PEOPLE = DESK_PEOPLE;
   api.normalizePerson = normalizePerson;
   api.friendlyWidgetError = friendlyWidgetError;
   api.createWidgetSession = createWidgetSession;
