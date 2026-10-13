@@ -1,93 +1,68 @@
-# AllData Create RO → Labels (browser extension)
+# Black Forest Desk (browser extension)
 
-On **Create R/O** success in ALLDATA Manage Online, posts customer **last name** + vehicle **model** to the local Labels app and prints a 30252 label.
+One unpacked install for **Firefox / Chrome / Edge** covering:
 
-**Never** prints on Update R/O, Schedule New R/O, or Assign R/O.
+1. **AllData Create R/O → Labels** (first ship) — print customer last name + vehicle model on Create only.
+2. **SSF Autoparts checkout** — Order reference (`PO # / RO #`) dropdown of **On the Lot** customer last names (not the book).
 
-Lives in this repo under `extension/` (not a separate `alldata-ro-labels` repo) so desk installs stay one git pull with Labels.
+Lives in `label-connect/extension/` so desk updates stay one git pull with Labels.
 
 ## Requirements
 
-1. Labels running locally (`http://127.0.0.1:8080` by default, or set `labelsBaseUrl` in extension storage).
-2. Browser: **Firefox**, **Chrome**, or **Edge**.
-3. Desk OS: **Manjaro/Linux** (CUPS `LabelWriter550`) or **Windows** (PrintTo to a LabelWriter/DYMO printer).
+1. Labels running locally for AllData print (`http://127.0.0.1:8080`, or `labelsBaseUrl` in extension storage).
+2. Browser: Firefox, Chrome, or Edge.
+3. Optional for SSF live names: shop widget bearer in `shopWidgetToken` (On the Lot API). Without it the dropdown mounts empty until names are cached.
 
-## Install — Chrome / Edge (Chromium MV3)
+## Install — Chrome / Edge
 
-Package folder: `extension/chromium/`
+Folder: `extension/chromium/`
 
-1. Open `chrome://extensions` (Chrome) or `edge://extensions` (Edge).
-2. Enable **Developer mode**.
-3. **Load unpacked** → select `label-connect/extension/chromium`.
-4. Open `https://manageonline.alldata.com` and create a test R/O once Labels is up.
+1. `chrome://extensions` or `edge://extensions` → Developer mode → **Load unpacked** → select that folder.
+2. AllData: open Manage Online, Create R/O once Labels is up.
+3. SSF: open `https://www.ssfautoparts.com/checkout` — dropdown appears under Order reference when the field is found.
 
-Optional custom Labels URL (default `http://127.0.0.1:8080`):
+## Install — Firefox
+
+Folder: `extension/firefox/`
+
+1. `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → `manifest.json`.
+2. Same hosts as Chromium (AllData + SSF).
+
+## Storage keys
+
+| Key | Purpose |
+| --- | --- |
+| `labelsBaseUrl` | Labels loopback (default `http://127.0.0.1:8080`) |
+| `shopBaseUrl` | Shop origin (default `https://shop.blackforestautomotive.com`) |
+| `shopWidgetToken` | Bearer for `GET /api/widget/views/lot` |
+| `lotLastNames` | Cached last names from On the Lot |
+
+Seed cache for a smoke test without shop auth:
 
 ```js
-// DevTools console on any page, or an extension service-worker console:
-chrome.storage.local.set({ labelsBaseUrl: "http://127.0.0.1:8080" })
+chrome.storage.local.set({ lotLastNames: ["Owner", "Smith"] })
 ```
 
-## Install — Firefox (MV3)
+## AllData hard rules
 
-Package folder: `extension/firefox/`
+- Print **only** on Create R/O success.
+- **Never** Update R/O, Schedule New R/O, Assign R/O.
+- Label lines: last name + model.
 
-### Temporary (quick test)
+## SSF rules (Logan)
 
-1. Open `about:debugging#/runtime/this-firefox`.
-2. **Load Temporary Add-on…** → pick `extension/firefox/manifest.json`.
-3. Reloads clear temporary add-ons — use a permanent profile install for the desk.
+- Names from **On the Lot only** (car `owner` → last token). **Not** shop book appointments.
+- Same extension package / one install.
+- Does not block or depend on Create RO print succeeding.
 
-### Permanent (desk)
+## Manjaro + Windows
 
-1. Zip the `extension/firefox` folder contents (manifest at zip root), or keep the unpacked tree.
-2. Prefer `about:debugging` → **Load Temporary Add-on** after each Labels update, **or** sign/self-distribute later.
-3. For shop Manjaro Firefox: Load Temporary Add-on at login is enough if Labels + this tree live under `~/label-connect`.
+See repo root README. Load this extension after Labels update; reload the add-on when `extension/` changes. Do not automate AllData or SSF GUIs from the Manjaro agent.
 
-## Manjaro desk checklist
-
-```bash
-cd ~/label-connect
-git pull
-npm install
-bash scripts/update-labels.sh   # if you use the helper
-# ensure Labels server is up (boot service or scripts/start-labels.sh)
-```
-
-Then load `extension/chromium` in Chrome/Edge **or** `extension/firefox` via `about:debugging`.
-
-Do **not** automate the AllData GUI from the Manjaro agent — humans click Create R/O in the browser.
-
-## Windows desk checklist
-
-1. Install / update Labels the same way as Linux (`git clone` / pull + `npm install` + `npm start`, port 8080).
-2. Confirm a Windows printer named like **LabelWriter** / **DYMO** exists (or set `LABELS_PRINTER` to the exact queue name before starting Labels).
-3. Load unpacked extension in Edge or Chrome from `extension/chromium`, or Firefox from `extension/firefox`.
-
-## What gets scraped
-
-| Field | Source |
-| --- | --- |
-| Last name | “Last Name” / “Customer” field; else last token of customer name |
-| Model | “Model” field; else Year/Make/Model line; else known Porsche model token on screen |
-| RO number | Optional; used only for server idempotency |
-
-If last name or model cannot be read after Create succeeds, the extension toasts **Label skipped** and does not print.
-
-## Smoke test (no AllData)
-
-With Labels running:
+## Smoke — Labels dry-run
 
 ```bash
 curl -s -X POST 'http://127.0.0.1:8080/api/print-ro?dryRun=1' \
   -H 'content-type: application/json' \
   -d '{"event":"create-ro","lastName":"Owner","model":"Macan","roNumber":"TEST001"}'
-```
-
-Update-shaped payloads must fail:
-
-```bash
-curl -s -X POST 'http://127.0.0.1:8080/api/print-ro?dryRun=1' \
-  -H 'content-type: application/json' \
-  -d '{"event":"update-ro","lastName":"Owner","model":"Macan"}'
 ```
