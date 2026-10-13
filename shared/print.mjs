@@ -27,32 +27,85 @@ export async function pngToPdf(png, widthPt, heightPt, copies) {
   return doc.save();
 }
 
-export async function sendToQueue(png, { pageKey, widthPt, heightPt, copies }) {
-  const pdf = await pngToPdf(png, widthPt, heightPt, copies);
-  const dir = await mkdtemp(path.join(tmpdir(), "label-"));
+function windowsPrinterName() {
+  const override = String(process.env.LABELS_PRINTER || "").trim();
+  if (override) return override;
+  return QUEUE;
+}
+
+/**
+ * Windows: PrintTo the LabelWriter/DYMO queue (or LABELS_PRINTER).
+ * Resolves a matching installed printer when the default name is missing.
+ */
+async function sendPdfWindows(pdfPath) {
+  const wanted = windowsPrinterName();
+  const script = `
+$ErrorActionPreference = 'Stop'
+$wanted = ${JSON.stringify(wanted)}
+$pdf = ${JSON.stringify(pdfPath)}
+function Resolve-LabelPrinter([string]$name) {
+  $printers = @(Get-CimInstance Win32_Printer | Select-Object -ExpandProperty Name)
+  if ($printers -contains $name) { return $name }
+  $match = $printers | Where-Object { $_ -match 'LabelWriter|DYMO' } | Select-Object -First 1
+  if ($match) { return $match }
+  throw "No LabelWriter/DYMO printer found. Set LABELS_PRINTER to the exact queue name."
+}
+$printer = Resolve-LabelPrinter $wanted
+Start-Process -FilePath $pdf -Verb PrintTo -ArgumentList $printer -WindowStyle Hidden -Wait
+Write-Output $printer
+`;
+  const result = await run(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    60000,
+  );
+  if (result.code !== 0) {
+    const detail = (result.stderr || result.stdout || "PrintTo failed.").trim();
+    throw new Error(detail.split("\n")[0]);
+  }
+  return { job: (result.stdout || "").trim() || wanted };
+}
+
+async function sendPdfLinux(pdfPath, pageKey) {
+  const args = printArgs(pageKey, pdfPath);
+  let result = await run("lp", args, 20000);
+  if (result.code !== 0 && /PrintQuality/i.test(`${result.stderr}\n${result.stdout}`)) {
+    const cleaned = [];
+    for (let i = 0; i < args.length; i += 1) {
+      if (args[i] === "-o" && args[i + 1] === "PrintQuality=Graphics") {
+        i += 1;
+        continue;
+      }
+      cleaned.push(args[i]);
+    }
+    result = await run("lp", cleaned, 20000);
+  }
+  if (result.code === 127) throw new Error(`This computer cannot reach ${QUEUE}.`);
+  if (result.code !== 0) {
+    const detail = (result.stderr || result.stdout || "The printer did not take the label.").trim();
+    throw new Error(detail.split("\n")[0]);
+  }
+  return { job: (result.stdout || "").trim() };
+}
+
+/** Send an already-rendered PDF to the LabelWriter queue (Linux CUPS or Windows PrintTo). */
+export async function sendPdfToQueue(pdfBytes, { pageKey }) {
+  const key = safePageKey(pageKey);
+  if (!key) throw new Error("That label size is not on the 550.");
+  const dir = await mkdtemp(path.join(tmpdir(), "label-ro-"));
   const file = path.join(dir, "label.pdf");
   try {
-    await writeFile(file, pdf);
-    const args = printArgs(pageKey, file);
-    let result = await run("lp", args, 20000);
-    if (result.code !== 0 && /PrintQuality/i.test(`${result.stderr}\n${result.stdout}`)) {
-      const cleaned = [];
-      for (let i = 0; i < args.length; i += 1) {
-        if (args[i] === "-o" && args[i + 1] === "PrintQuality=Graphics") {
-          i += 1;
-          continue;
-        }
-        cleaned.push(args[i]);
-      }
-      result = await run("lp", cleaned, 20000);
+    await writeFile(file, pdfBytes);
+    if (process.platform === "win32") {
+      return await sendPdfWindows(file);
     }
-    if (result.code === 127) throw new Error(`This computer cannot reach ${QUEUE}.`);
-    if (result.code !== 0) {
-      const detail = (result.stderr || result.stdout || "The printer did not take the label.").trim();
-      throw new Error(detail.split("\n")[0]);
-    }
-    return { job: (result.stdout || "").trim() };
+    return await sendPdfLinux(file, key);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+export async function sendToQueue(png, { pageKey, widthPt, heightPt, copies }) {
+  const pdf = await pngToPdf(png, widthPt, heightPt, copies);
+  return sendPdfToQueue(pdf, { pageKey });
 }

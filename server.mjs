@@ -4,13 +4,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { describePrinter } from "./shared/detect.mjs";
-import { sendToQueue } from "./shared/print.mjs";
+import { sendPdfToQueue, sendToQueue } from "./shared/print.mjs";
 import { safePageKey } from "./shared/media.mjs";
+import { createRoPrintStore } from "./shared/ro-idempotency.mjs";
+import { normalizeRoPayload, planRoPrint, renderRoLabelPdf, roLabelLines } from "./shared/ro-label.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
 const dataDir = path.join(root, "data");
 const labelsFile = path.join(dataDir, "labels.json");
+const roPrintsFile = path.join(dataDir, "ro-prints.json");
+const roPrintStore = createRoPrintStore(roPrintsFile);
 const port = Number(process.env.PORT || 8080);
 const host = "0.0.0.0";
 
@@ -138,6 +142,75 @@ const server = createServer(async (req, res) => {
       }
       const result = await exclusive(() => sendToQueue(png, { pageKey, widthPt, heightPt, copies }));
       send(res, 200, result);
+      return;
+    }
+    // AllData Create RO → real LabelWriter print (last name + model only).
+    if (req.method === "POST" && url.pathname === "/api/print-ro") {
+      const raw = await readBody(req, 64_000);
+      let parsed;
+      try {
+        parsed = JSON.parse(raw.toString("utf8") || "{}");
+      } catch {
+        send(res, 400, { error: "JSON body required." });
+        return;
+      }
+      const dryRunQuery = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
+      const body = { ...parsed, dryRun: dryRunQuery || parsed.dryRun === true || parsed.dryRun === "1" };
+      const normalized = normalizeRoPayload(body);
+      if (!normalized.ok) {
+        send(res, 400, { error: normalized.error });
+        return;
+      }
+      const { fields } = normalized;
+      const plan = planRoPrint(fields);
+      if (!plan.ok) {
+        send(res, 400, { error: plan.error });
+        return;
+      }
+
+      if (fields.roNumber && (await roPrintStore.has(fields.roNumber))) {
+        send(res, 200, {
+          ok: true,
+          skipped: true,
+          printed: false,
+          dryRun: Boolean(fields.dryRun),
+          message: `Already printed RO ${fields.roNumber} within 24h.`,
+          fields,
+          lines: roLabelLines(fields),
+          doc: plan.doc,
+        });
+        return;
+      }
+
+      if (fields.dryRun) {
+        send(res, 200, {
+          ok: true,
+          dryRun: true,
+          printed: false,
+          skipped: false,
+          message: plan.message,
+          fields,
+          lines: plan.lines,
+          doc: plan.doc,
+        });
+        return;
+      }
+
+      const { pdf, media } = await renderRoLabelPdf(fields);
+      const result = await exclusive(() => sendPdfToQueue(pdf, { pageKey: media.key }));
+      if (fields.roNumber) {
+        await roPrintStore.mark(fields.roNumber, { lastName: fields.lastName, model: fields.model });
+      }
+      send(res, 200, {
+        ok: true,
+        dryRun: false,
+        printed: true,
+        skipped: false,
+        job: result.job || "",
+        fields,
+        lines: plan.lines,
+        doc: plan.doc,
+      });
       return;
     }
     if (req.method === "GET") {

@@ -59,9 +59,13 @@ NEW="$(git rev-parse HEAD)"
 /usr/bin/npm install --silent >/dev/null 2>&1 || /usr/bin/npm install
 chmod +x "$ROOT/scripts/"*.sh 2>/dev/null || true
 bash "$ROOT/scripts/install-desktop-entry.sh" >/dev/null
+# Keep Black Forest Desk (Firefox/Chromium) in sync with this Labels tree.
+if [[ -x "$ROOT/scripts/update-desk-extension.sh" ]]; then
+  bash "$ROOT/scripts/update-desk-extension.sh" --quiet || true
+fi
 
 if [[ "$OLD" == "$NEW" ]]; then
   notify "Labels up to date" "No new commits on $BRANCH."
 else
-  notify "Labels updated" "Pulled $(git rev-parse --short HEAD). Reopen Labels to use the new build."
+  notify "Labels updated" "Pulled $(git rev-parse --short HEAD). Reopen Labels; Desk extension refreshed too."
 fi

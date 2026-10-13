@@ -1,10 +1,40 @@
 # Labels (LabelWriter 550)
 
-Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550**.
+Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
-**0.1.1** — Editor shows the CUPS/PPD safe print zone (dashed box) and keeps blocks inside it so edge content is not clipped on the LabelWriter 550 (30252 Address uses the driver ImageableArea, about 1–1.5 mm on the short sides and a larger inset on the feed end).
+**0.1.3** - AllData Create RO auto-print: `POST /api/print-ro` renders **customer last name + vehicle model** on 30252 (safe ImageableArea margins) and prints. Rejects Update / Schedule / Assign. Idempotent by `roNumber`. **Black Forest Desk** browser extension (Chrome/Edge/Firefox) in [`extension/`](extension/README.md): Create RO → Labels plus SSF checkout On-the-Lot last-name dropdown (same install).
+
+**0.1.1** - Editor shows the CUPS/PPD safe print zone (dashed box) and keeps blocks inside it so edge content is not clipped on the LabelWriter 550 (30252 Address uses the driver ImageableArea, about 1-1.5 mm on the short sides and a larger inset on the feed end).
 
 This public repo is the **release remote** for the shop PC install at `~/label-connect`. App source also lives under `label-connect/` on the private `blackforest-tools` branch `cursor/labelwriter-550-6410` ([PR #3](https://github.com/BlackForestPorsche/blackforest-tools/pull/3)).
+
+## AllData Create RO → print
+
+Hard rules:
+
+- **Only Create R/O** prints. Never Update R/O, Schedule New R/O, or Assign R/O.
+- Label lines: **last name** + **model** (e.g. `Owner` / `Macan`).
+- Local Labels URL: `http://127.0.0.1:8080` (or `PORT` / extension `labelsBaseUrl`).
+
+Dry-run (no printer job):
+
+```bash
+curl -s -X POST 'http://127.0.0.1:8080/api/print-ro?dryRun=1' \
+  -H 'content-type: application/json' \
+  -d '{"event":"create-ro","lastName":"Owner","model":"Macan","roNumber":"J001094"}'
+```
+
+Real print (Create-only payload):
+
+```bash
+curl -s -X POST 'http://127.0.0.1:8080/api/print-ro' \
+  -H 'content-type: application/json' \
+  -d '{"event":"create-ro","lastName":"Owner","model":"Macan","roNumber":"J001094"}'
+```
+
+Update-shaped `event` values return **400**.
+
+Browser extension install (Manjaro + Windows, Firefox/Chrome/Edge): see [extension/README.md](extension/README.md).
 
 ## Manjaro install
 
@@ -24,4 +54,8 @@ cd ~/label-connect
 bash scripts/update-labels.sh
 ```
 
-Then reopen Labels so the server picks up the new files.
+Then reopen Labels so the server picks up the new files. Reload the browser extension if `extension/` changed.
+
+## Windows note
+
+Start Labels with Node (`npm start`, port 8080). Printing uses PowerShell **PrintTo** against a printer named `LabelWriter550` or any installed queue matching `LabelWriter|DYMO`. Override with env `LABELS_PRINTER`.
