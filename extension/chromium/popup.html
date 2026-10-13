@@ -29,7 +29,8 @@
         margin: 0 0 4px;
         font-weight: 600;
       }
-      input {
+      input,
+      select {
         width: 100%;
         box-sizing: border-box;
         margin: 0 0 10px;
@@ -37,6 +38,8 @@
         border: 1px solid #b9b2a4;
         border-radius: 4px;
         background: #fff;
+        color: inherit;
+        font: inherit;
       }
       button {
         width: 100%;
@@ -75,16 +78,22 @@
   </head>
   <body>
     <h1>Black Forest Desk</h1>
-    <p>Shop PIN unlocks On the Lot names for SSF. Create RO print uses local Labels only.</p>
+    <p>
+      Prefer the shop site session in this Firefox profile (no second PIN). Person dropdown + desk PIN remain as backup; Tools unlock is optional.
+      Create RO print uses local Labels only — no PIN.
+    </p>
+    <button id="useShopSession" type="button">Use shop session</button>
+    <button id="useTools" class="secondary" type="button">Use Tools session</button>
     <label for="person">Person</label>
-    <input id="person" autocomplete="username" placeholder="Desk name" />
-    <label for="pin">PIN</label>
-    <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" />
-    <button id="unlock" type="button">Unlock lot names</button>
+    <select id="person" autocomplete="username" aria-label="Shop person"></select>
+    <label for="pin">Desk PIN</label>
+    <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4–12 digits" />
+    <button id="unlock" class="secondary" type="button">Unlock with desk PIN</button>
     <button id="checkUpdate" class="secondary" type="button">Check for extension update</button>
     <div id="status" role="status"></div>
     <div id="update" role="status"></div>
     <div id="version" class="meta"></div>
+    <script src="lot-names.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
