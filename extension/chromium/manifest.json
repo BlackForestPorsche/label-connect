@@ -3,10 +3,7 @@
   "name": "Black Forest Desk",
   "version": "0.1.7",
   "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
-  "permissions": [
-    "storage",
-    "alarms"
-  ],
+  "permissions": ["storage", "alarms"],
   "host_permissions": [
     "https://manageonline.alldata.com/*",
     "https://ssfautoparts.com/*",
@@ -27,28 +24,13 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://manageonline.alldata.com/*"
-      ],
-      "js": [
-        "config.js",
-        "scrape.js",
-        "toast.js",
-        "content.js"
-      ],
+      "matches": ["https://manageonline.alldata.com/*"],
+      "js": ["config.js", "scrape.js", "toast.js", "content.js"],
       "run_at": "document_idle"
     },
     {
-      "matches": [
-        "https://ssfautoparts.com/*",
-        "https://www.ssfautoparts.com/*"
-      ],
-      "js": [
-        "config.js",
-        "toast.js",
-        "lot-names.js",
-        "content-ssf.js"
-      ],
+      "matches": ["https://ssfautoparts.com/*", "https://www.ssfautoparts.com/*"],
+      "js": ["config.js", "toast.js", "lot-names.js", "content-ssf.js"],
       "run_at": "document_idle"
     }
   ]
