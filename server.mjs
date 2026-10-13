@@ -102,7 +102,7 @@ const server = createServer(async (req, res) => {
       const qr = QRCode.create(text, { errorCorrectionLevel: "M" });
       const size = qr.modules.size;
       const cells = [];
-      for (let y = 0; i < size; y += 1) {
+      for (let y = 0; y < size; y += 1) {
         for (let x = 0; x < size; x += 1) cells.push(qr.modules.get(y, x) ? 1 : 0);
       }
       send(res, 200, { size, cells });
