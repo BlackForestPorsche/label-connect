@@ -70,20 +70,27 @@ bash scripts/update-desk-extension.sh
 
 Gecko id: `black-forest-desk@blackforestautomotive.com`.
 
-**Note:** Release Firefox may still ignore unsigned sideloads. The install script sets profile prefs used by Developer Edition / Nightly / unbranded builds, drops the XPI into the default profile, and writes policies. If the add-on does not appear after restart, use **Load Temporary Add-on** once from `extension/firefox/manifest.json` (about:debugging) until AMO self-distribution exists — Create RO print still works the same.
+**Note:** Release Firefox may still ignore unsigned sideloads. The install script sets profile prefs used by Developer Edition / Nightly / unbranded builds, drops the XPI into the default profile, and writes policies. If the add-on does not appear after restart, use **Load Temporary Add-on** (below) until AMO self-distribution exists — Create RO print still works the same.
 
 ## Install — Chrome / Edge (Chromium MV3)
 
-Package folder: `extension/chromium/`
+Package folder: `extension/chromium/` (same sibling layout as Firefox: `manifest.json` + `popup.html` at folder root).
 
 1. `npm run sync-extension`
-2. `chrome://extensions` / `edge://extensions` → Developer mode → **Load unpacked** → `label-connect/extension/chromium`
+2. `chrome://extensions` / `edge://extensions` → Developer mode → **Load unpacked** → `label-connect/extension/chromium` (the folder that contains `manifest.json` and `popup.html`)
 3. Leave that path forever; after `git pull` / `update-desk-extension.sh`, click **Reload** on the card when the version badge shows `↑`
 
-## Install — Firefox temporary (quick test)
+## Install — Firefox temporary (desk day-to-day)
 
-1. `npm run sync-extension`
-2. `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → `extension/firefox/manifest.json`
+1. `npm run sync-extension` (or `git pull` so `extension/firefox/popup.html` is present).
+2. `about:debugging#/runtime/this-firefox`
+3. If **Black Forest Desk** is already listed under Temporary Extensions, **Remove** it first (clears a stale/wrong root).
+4. **Load Temporary Add-on…** → pick **exactly one** of:
+   - `extension/firefox/manifest.json` (must be the file **inside** `extension/firefox/` so `popup.html` / `popup.js` resolve as siblings), or
+   - a packed `Black.Forest.Desk.xpi` (`extension/dist/` or `~/Downloads/`)
+5. Do **not** load `extension/manifest.json`, the parent `extension/` folder, or a symlink outside `firefox/`.
+
+If the toolbar popup shows `File not found` / `moz-extension://…/popup.html`, the pack is fine — **Remove** the temporary add-on and load again from step 4.
 
 ## Windows desk checklist
 
@@ -104,19 +111,21 @@ If last name or model cannot be read after Create succeeds, the extension toasts
 
 ## SSF — On the Lot dropdown
 
-1. Open the extension popup → shop **person** (lowercase, e.g. `logan`) + **desk PIN** (same as shop unlock / Plasma widget).
+1. Open the extension popup → pick **Person** from the dropdown + **desk PIN** (same as shop unlock / Plasma widget).
 2. Go to `https://www.ssfautoparts.com/checkout`.
 3. Next to Order reference, pick a last name — it fills `PO # / RO #`.
 4. Empty lot → quiet empty state. Book appointments are never queried.
 
 ### If you see “Unauthorized”
 
-The shop widget API returns the code `unauthorized` for a bad/missing PIN session. Desk **0.1.6+** maps that to “enter desk PIN” copy. Fix:
+The shop widget API returns the code `unauthorized` for a bad/missing PIN session (and for capitalized person names). Desk **0.1.7+** uses a **Person dropdown**, lowercases before session, and never shows the raw code. Fix:
 
 1. Click the **Black Forest Desk** toolbar icon (badge may show `PIN`).
-2. Person = lowercase shop unlock name; **Desk PIN** = same PIN as the site / plasmoid.
-3. **Unlock with desk PIN**, then on SSF checkout click **Refresh**.
-4. Create RO print does **not** use the desk PIN — only local Labels at `http://127.0.0.1:8080`.
+2. Select your person from the list (already lowercase — e.g. `logan`).
+3. **Desk PIN** = same PIN as the shop unlock / Plasma widget — not a Windows/email password.
+4. **Unlock with desk PIN**, then on SSF checkout click **Refresh**.
+5. Create RO print does **not** use the desk PIN — only local Labels at `http://127.0.0.1:8080`.
+6. Stale temp add-on: Remove in `about:debugging`, then load `~/Downloads/Black.Forest.Desk.xpi`.
 
 ## Smoke test (no AllData)
 
