@@ -1,5 +1,5 @@
 {
-  "version": "0.1.8",
-  "message": "Firefox auto-update from GitHub Releases (gecko update_url + updates.json). Includes Person dropdown unlock from 0.1.7. Temporary add-ons cannot auto-update — install the signed XPI once (about:addons → Install Add-on From File), then Firefox pulls new releases. Chromium: Load unpacked or CWS later.",
-  "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
+  "version": "0.1.9",
+  "message": "Create RO labels: last name only + model; print every Create (dedupe by Create click / new RO id, not customer). Open-RO no longer triggers already-printed skip.",
+  "url": "https://github.com/BlackForestPorsche/label-connect"
 }
