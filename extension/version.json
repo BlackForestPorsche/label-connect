@@ -1,5 +1,5 @@
 {
-  "version": "0.1.9",
-  "message": "Shared login: import shop site bf_shop_gate via from-gate (same Firefox profile); Person dropdown + gecko update_url kept. Degrades to Tools/PIN if from-gate 406. On the desk: bash scripts/update-desk-extension.sh or wait for signed XPI auto-update.",
+  "version": "0.1.10",
+  "message": "Create RO labels: last name only + model; print every Create (dedupe by Create click / new RO id, not customer). Fixes already-printed skip on new Create for same person.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }

@@ -168,6 +168,8 @@ const server = createServer(async (req, res) => {
         return;
       }
 
+      // Idempotency is by concrete RO id only — never by customer/person/name.
+      // Extension omits open/baseline RO# so a new Create for the same person always prints.
       if (fields.roNumber && (await roPrintStore.has(fields.roNumber))) {
         send(res, 200, {
           ok: true,

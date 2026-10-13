@@ -46,12 +46,21 @@
     return bits.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
   }
 
+  /** Last name only — strip "LAST, FIRST", leading "J." / "J ", trailing bare initial. */
   function lastNameFromFull(name) {
-    const text = String(name || "")
+    let text = String(name || "")
       .replace(/\s+/g, " ")
       .trim();
     if (!text) return "";
+    if (text.includes(",")) {
+      text = text.split(",")[0].trim();
+    }
+    text = text.replace(/^[A-Za-z]\.?\s+/, "").replace(/^[A-Za-z]\.(?=[A-Za-z])/, "");
     const parts = text.split(" ").filter(Boolean);
+    if (!parts.length) return "";
+    if (parts.length > 1 && /^[A-Za-z]\.?$/.test(parts[parts.length - 1])) {
+      parts.pop();
+    }
     return parts[parts.length - 1] || "";
   }
 
