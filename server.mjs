@@ -4,19 +4,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { describePrinter } from "./shared/detect.mjs";
-import { sendToQueue, sendPdfToQueue } from "./shared/print.mjs";
+import { sendPdfToQueue, sendToQueue } from "./shared/print.mjs";
 import { safePageKey } from "./shared/media.mjs";
 import { createRoPrintStore } from "./shared/ro-idempotency.mjs";
-import { buildRoLabelDoc, normalizeRoPayload, planRoPrint, renderRoLabelPdf, roLabelLines } from "./shared/ro-label.mjs";
+import { normalizeRoPayload, planRoPrint, renderRoLabelPdf, roLabelLines } from "./shared/ro-label.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
 const dataDir = path.join(root, "data");
 const labelsFile = path.join(dataDir, "labels.json");
 const roPrintsFile = path.join(dataDir, "ro-prints.json");
+const roPrintStore = createRoPrintStore(roPrintsFile);
 const port = Number(process.env.PORT || 8080);
 const host = "0.0.0.0";
-const roPrintStore = createRoPrintStore(roPrintsFile);
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -102,7 +102,7 @@ const server = createServer(async (req, res) => {
       const qr = QRCode.create(text, { errorCorrectionLevel: "M" });
       const size = qr.modules.size;
       const cells = [];
-      for (let y = 0; y < size; y += 1) {
+      for (let y = 0; i < size; y += 1) {
         for (let x = 0; x < size; x += 1) cells.push(qr.modules.get(y, x) ? 1 : 0);
       }
       send(res, 200, { size, cells });
@@ -144,8 +144,7 @@ const server = createServer(async (req, res) => {
       send(res, 200, result);
       return;
     }
-    // AllData Create RO: lastName + model → 30252 → CUPS (Linux) or PrintTo (Windows).
-    // Fail closed on Update / Schedule / Assign. Idempotent by roNumber.
+    // AllData Create RO → real LabelWriter print (last name + model only).
     if (req.method === "POST" && url.pathname === "/api/print-ro") {
       const raw = await readBody(req, 64_000);
       let parsed;
@@ -155,43 +154,50 @@ const server = createServer(async (req, res) => {
         send(res, 400, { error: "JSON body required." });
         return;
       }
-      const wantDryRun = Boolean(parsed.dryRun) || url.searchParams.get("dryRun") === "1";
-      if (wantDryRun) {
-        const plan = planRoPrint({ ...parsed, dryRun: true });
-        if (!plan.ok) {
-          send(res, 400, { error: plan.error });
-          return;
-        }
-        send(res, 200, plan);
-        return;
-      }
-
-      const normalized = normalizeRoPayload(parsed);
+      const dryRunQuery = url.searchParams.get("dryRun") === "1" || url.searchParams.get("dryRun") === "true";
+      const body = { ...parsed, dryRun: dryRunQuery || parsed.dryRun === true || parsed.dryRun === "1" };
+      const normalized = normalizeRoPayload(body);
       if (!normalized.ok) {
         send(res, 400, { error: normalized.error });
         return;
       }
       const { fields } = normalized;
-      const lines = roLabelLines(fields);
-      const doc = buildRoLabelDoc(fields);
+      const plan = planRoPrint(fields);
+      if (!plan.ok) {
+        send(res, 400, { error: plan.error });
+        return;
+      }
 
       if (fields.roNumber && (await roPrintStore.has(fields.roNumber))) {
         send(res, 200, {
           ok: true,
-          dryRun: false,
-          printed: false,
           skipped: true,
-          reason: "already-printed",
-          message: `Already printed for RO ${fields.roNumber}.`,
+          printed: false,
+          dryRun: Boolean(fields.dryRun),
+          message: `Already printed RO ${fields.roNumber} within 24h.`,
           fields,
-          lines,
-          doc,
+          lines: roLabelLines(fields),
+          doc: plan.doc,
         });
         return;
       }
 
-      const rendered = await renderRoLabelPdf(fields);
-      const result = await exclusive(() => sendPdfToQueue(rendered.pdf, { pageKey: rendered.media.key }));
+      if (fields.dryRun) {
+        send(res, 200, {
+          ok: true,
+          dryRun: true,
+          printed: false,
+          skipped: false,
+          message: plan.message,
+          fields,
+          lines: plan.lines,
+          doc: plan.doc,
+        });
+        return;
+      }
+
+      const { pdf, media } = await renderRoLabelPdf(fields);
+      const result = await exclusive(() => sendPdfToQueue(pdf, { pageKey: media.key }));
       if (fields.roNumber) {
         await roPrintStore.mark(fields.roNumber, { lastName: fields.lastName, model: fields.model });
       }
@@ -200,12 +206,10 @@ const server = createServer(async (req, res) => {
         dryRun: false,
         printed: true,
         skipped: false,
-        message: `Printed ${fields.lastName} / ${fields.model}.`,
-        job: result.job,
-        via: result.via,
+        job: result.job || "",
         fields,
-        lines,
-        doc,
+        lines: plan.lines,
+        doc: plan.doc,
       });
       return;
     }
