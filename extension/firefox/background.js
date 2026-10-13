@@ -64,7 +64,16 @@
       data = null;
     }
     if (!response.ok) {
-      return { error: (data && data.error) || `Labels returned ${response.status}.` };
+      const code = data && data.error;
+      if (response.status === 401 || response.status === 403) {
+        // Local Labels /api/print-ro has no shop PIN — this is almost always a misconfigured
+        // bridge/proxy. Do not echo cryptic "unauthorized".
+        return {
+          error:
+            "Labels rejected the print request. Confirm Labels is running at 127.0.0.1:8080 (Create RO does not use the desk PIN).",
+        };
+      }
+      return { error: code || `Labels returned ${response.status}.` };
     }
     return data || { ok: true };
   }
@@ -112,7 +121,7 @@
         ? {
             version: remoteVersion,
             local,
-            message: remote.message || "Run update-desk-extension (or Update Labels) on the desk.",
+            message: remote.message || "Firefox signed installs auto-update from GitHub Releases; Chromium: reload Load unpacked or run update-desk-extension.sh.",
             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
@@ -158,6 +167,41 @@
         return false;
       }
       api.createWidgetSession(message.payload || {}).then(sendResponse);
+      return true;
+    }
+    if (message.type === "site-session-import") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.importSiteGateSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.importSiteGateSession().then(sendResponse);
+      return true;
+    }
+    if (message.type === "tools-session-import") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.importToolsWidgetSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.importToolsWidgetSession().then(sendResponse);
+      return true;
+    }
+    if (message.type === "shop-site-session") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.storeWidgetToken) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      const payload = message.payload || {};
+      api
+        .storeWidgetToken({
+          token: payload.token,
+          expiresAt: payload.expiresAt,
+          person: payload.person,
+          source: payload.source || "shop-site",
+        })
+        .then(sendResponse);
       return true;
     }
     if (message.type === "check-update") {
