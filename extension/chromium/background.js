@@ -1,74 +1,37 @@
-/* global chrome, browser */
+/* global chrome, browser, AllDataRoLabels */
 /**
  * Black Forest Desk background:
- * - POST Create RO payloads to local Labels (/api/print-ro)
- * - Fetch On the Lot last names from shop widget API (never book-today)
+ * - AllData Create RO → POST local Labels /api/print-ro
+ * - SSF → On the Lot last names (widget lot API, never book-today)
+ * - Soft auto-update check against label-connect extension/version.json
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
-  const DEFAULT_LABELS = "http://127.0.0.1:8080";
-  const DEFAULT_SHOP = "https://shop.blackforestautomotive.com";
+  const DEFAULT_BASE = "http://127.0.0.1:8080";
+  const VERSION_URL =
+    "https://raw.githubusercontent.com/BlackForestPorsche/label-connect/main/extension/version.json";
+  const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
 
-  async function storageGet(keys) {
+  // Chromium MV3 service worker: pull shared helpers.
+  if (typeof importScripts === "function") {
     try {
-      return (await runtime.storage.local.get(keys)) || {};
+      importScripts("config.js", "lot-names.js");
     } catch {
-      return {};
-    }
-  }
-
-  async function storageSet(obj) {
-    try {
-      await runtime.storage.local.set(obj);
-    } catch {
-      // ignore
+      // Firefox loads scripts via manifest background.scripts instead.
     }
   }
 
   async function labelsBaseUrl() {
-    const stored = await storageGet(["labelsBaseUrl"]);
-    const value = stored.labelsBaseUrl;
-    if (typeof value === "string" && /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(value.trim())) {
-      return value.trim().replace(/\/$/, "");
+    try {
+      const stored = await runtime.storage.local.get(["labelsBaseUrl"]);
+      const value = stored && stored.labelsBaseUrl;
+      if (typeof value === "string" && /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(value.trim())) {
+        return value.trim().replace(/\/$/, "");
+      }
+    } catch {
+      // storage may be unavailable in some test loads
     }
-    return DEFAULT_LABELS;
-  }
-
-  async function shopBaseUrl() {
-    const stored = await storageGet(["shopBaseUrl"]);
-    const value = stored.shopBaseUrl;
-    if (typeof value === "string" && /^https:\/\/shop\.blackforestautomotive\.com\/?$/i.test(value.trim())) {
-      return value.trim().replace(/\/$/, "");
-    }
-    return DEFAULT_SHOP;
-  }
-
-  function lastNameFromLotLabel(label) {
-    const text = String(label || "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!text || /^no\s*name$/i.test(text)) return "";
-    if (text.includes(",")) {
-      const head = text.split(",")[0].trim();
-      if (head) return head;
-    }
-    const parts = text.split(" ").filter(Boolean);
-    return parts[parts.length - 1] || "";
-  }
-
-  function lotItemsToLastNames(items) {
-    const seen = new Set();
-    const names = [];
-    for (const item of items || []) {
-      const last = lastNameFromLotLabel(item && item.label);
-      if (!last) continue;
-      const key = last.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      names.push(last);
-    }
-    names.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-    return names;
+    return DEFAULT_BASE;
   }
 
   async function printRo(payload) {
@@ -106,94 +69,71 @@
     return data || { ok: true };
   }
 
-  async function ensureWidgetToken() {
-    const stored = await storageGet(["shopWidgetToken", "shopWidgetTokenExpiresAt"]);
-    const token = stored.shopWidgetToken;
-    const expiresAt = Number(stored.shopWidgetTokenExpiresAt || 0);
-    if (token && expiresAt > Date.now() + 60_000) {
-      return { token };
+  function localVersion() {
+    try {
+      return String(runtime.runtime.getManifest()?.version || "0");
+    } catch {
+      return "0";
     }
-    return { needsAuth: true };
   }
 
-  async function widgetSession({ person, pin }) {
-    const base = await shopBaseUrl();
-    let response;
-    try {
-      response = await fetch(`${base}/api/widget/session`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ person, pin }),
-      });
-    } catch {
-      return { error: "Shop widget session unreachable." };
-    }
-    let data = null;
-    try {
-      data = await response.json();
-    } catch {
-      data = null;
-    }
-    if (!response.ok) {
-      return { error: (data && data.error) || `Session failed (${response.status}).` };
-    }
-    const token = data?.token || data?.accessToken || data?.bearer;
-    if (!token) return { error: "Session response missing token." };
-    const ttlMs = 8 * 60 * 60 * 1000;
-    await storageSet({
-      shopWidgetToken: token,
-      shopWidgetTokenExpiresAt: Date.now() + ttlMs,
-    });
-    return { ok: true };
+  function parseVersion(v) {
+    return String(v || "0")
+      .split(/[.+-]/)
+      .map((part) => Number.parseInt(part, 10) || 0);
   }
 
-  async function fetchLotLastNames() {
-    const auth = await ensureWidgetToken();
-    if (auth.needsAuth) {
-      const cached = await storageGet(["lotLastNames"]);
-      return {
-        needsAuth: true,
-        names: Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [],
-      };
+  function isNewer(remote, local) {
+    const a = parseVersion(remote);
+    const b = parseVersion(local);
+    const n = Math.max(a.length, b.length);
+    for (let i = 0; i < n; i += 1) {
+      const x = a[i] || 0;
+      const y = b[i] || 0;
+      if (x > y) return true;
+      if (x < y) return false;
     }
-    const base = await shopBaseUrl();
-    let response;
+    return false;
+  }
+
+  async function checkForUpdate(force) {
     try {
-      response = await fetch(`${base}/api/widget/views/lot`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${auth.token}`,
-          Accept: "application/json",
-        },
+      const stored = await runtime.storage.local.get(["deskUpdateCheckedAt", "deskUpdateAvailable"]);
+      const checkedAt = Number(stored.deskUpdateCheckedAt || 0);
+      if (!force && checkedAt && Date.now() - checkedAt < UPDATE_CHECK_MS && stored.deskUpdateAvailable) {
+        return stored.deskUpdateAvailable;
+      }
+      const response = await fetch(`${VERSION_URL}?t=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`version.json ${response.status}`);
+      const remote = await response.json();
+      const remoteVersion = String(remote.version || "");
+      const local = localVersion();
+      const available = remoteVersion && isNewer(remoteVersion, local)
+        ? {
+            version: remoteVersion,
+            local,
+            message: remote.message || "Run update-desk-extension (or Update Labels) on the desk.",
+            url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
+          }
+        : null;
+      await runtime.storage.local.set({
+        deskUpdateCheckedAt: Date.now(),
+        deskUpdateAvailable: available,
       });
+      if (available && runtime.action?.setBadgeText) {
+        await runtime.action.setBadgeText({ text: "↑" });
+        await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+        await runtime.action.setTitle?.({
+          title: `Black Forest Desk — update ${available.version} ready`,
+        });
+      } else if (runtime.action?.setBadgeText) {
+        await runtime.action.setBadgeText({ text: "" });
+        await runtime.action.setTitle?.({ title: "Black Forest Desk" });
+      }
+      return available;
     } catch {
-      const cached = await storageGet(["lotLastNames"]);
-      return {
-        error: "Lot view unreachable.",
-        names: Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [],
-      };
+      return null;
     }
-    if (response.status === 401 || response.status === 403) {
-      await storageSet({ shopWidgetToken: "", shopWidgetTokenExpiresAt: 0 });
-      return { needsAuth: true, names: [] };
-    }
-    let data = null;
-    try {
-      data = await response.json();
-    } catch {
-      data = null;
-    }
-    if (!response.ok) {
-      const cached = await storageGet(["lotLastNames"]);
-      return {
-        error: (data && data.error) || `Lot view failed (${response.status}).`,
-        names: Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [],
-      };
-    }
-    const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
-    const names = lotItemsToLastNames(items);
-    await storageSet({ lotLastNames: names, lotLastNamesAt: Date.now() });
-    return { names };
   }
 
   runtime.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -203,13 +143,40 @@
       return true;
     }
     if (message.type === "lot-last-names") {
-      fetchLotLastNames().then(sendResponse);
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.resolveLotLastNames) {
+        sendResponse({ names: [], source: "error", message: "Lot helper missing." });
+        return false;
+      }
+      api.resolveLotLastNames().then(sendResponse);
       return true;
     }
     if (message.type === "widget-session") {
-      widgetSession(message.payload || {}).then(sendResponse);
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.createWidgetSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.createWidgetSession(message.payload || {}).then(sendResponse);
+      return true;
+    }
+    if (message.type === "check-update") {
+      checkForUpdate(Boolean(message.force)).then((available) => sendResponse({ available }));
       return true;
     }
     return false;
   });
+
+  // Soft update check on worker start + daily-ish alarm when available.
+  void checkForUpdate(false);
+  if (runtime.alarms?.create) {
+    try {
+      runtime.alarms.create("desk-update-check", { periodInMinutes: 360 });
+      runtime.alarms.onAlarm.addListener((alarm) => {
+        if (alarm?.name === "desk-update-check") void checkForUpdate(false);
+      });
+    } catch {
+      // alarms permission optional
+    }
+  }
 })();
