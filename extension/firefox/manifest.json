@@ -9,17 +9,18 @@
       "strict_min_version": "109.0"
     }
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "alarms"],
   "host_permissions": [
     "https://manageonline.alldata.com/*",
     "https://ssfautoparts.com/*",
     "https://www.ssfautoparts.com/*",
     "https://shop.blackforestautomotive.com/*",
+    "https://raw.githubusercontent.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": ["config.js", "lot-names.js", "background.js"]
   },
   "action": {
     "default_title": "Black Forest Desk",
