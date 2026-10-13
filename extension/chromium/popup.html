@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Black Forest Desk</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font: 13px/1.35 system-ui, sans-serif;
+        color: #1c1914;
+      }
+      body {
+        margin: 0;
+        width: 280px;
+        padding: 14px;
+        background: #f3efe6;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+      p {
+        margin: 0 0 12px;
+        opacity: 0.75;
+      }
+      label {
+        display: block;
+        margin: 0 0 4px;
+        font-weight: 600;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        margin: 0 0 10px;
+        padding: 7px 8px;
+        border: 1px solid #b9b2a4;
+        border-radius: 4px;
+        background: #fff;
+      }
+      button {
+        width: 100%;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: 4px;
+        background: #1f4d2a;
+        color: #f4f1ea;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      #status {
+        margin-top: 10px;
+        min-height: 1.2em;
+        font-weight: 600;
+      }
+      .ok { color: #1f4d2a; }
+      .err { color: #7a1f1f; }
+    </style>
+  </head>
+  <body>
+    <h1>Black Forest Desk</h1>
+    <p>Shop PIN unlocks On the Lot names for SSF. Create RO print uses local Labels only.</p>
+    <label for="person">Person</label>
+    <input id="person" autocomplete="username" placeholder="Desk name" />
+    <label for="pin">PIN</label>
+    <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" />
+    <button id="unlock" type="button">Unlock lot names</button>
+    <div id="status" role="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>
