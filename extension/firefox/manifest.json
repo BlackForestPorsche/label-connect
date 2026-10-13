@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Black Forest Desk",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "AllData Create R/O → Labels print, plus SSF checkout On-the-Lot last-name helper.",
   "browser_specific_settings": {
     "gecko": {
@@ -19,7 +19,9 @@
     "https://www.ssfautoparts.com/*",
     "https://shop.blackforestautomotive.com/*",
     "https://raw.githubusercontent.com/*",
+    "http://127.0.0.1:8080/*",
     "http://127.0.0.1/*",
+    "http://localhost:8080/*",
     "http://localhost/*"
   ],
   "background": {
