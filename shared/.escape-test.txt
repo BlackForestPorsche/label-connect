@@ -1,2 +1,0 @@
-regex: /^[A-Za-z]\.?\s+/
-plain: \s and \/?o
