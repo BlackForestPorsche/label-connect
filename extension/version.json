@@ -1,5 +1,5 @@
 {
-  "version": "0.1.7",
-  "message": "Desk unlock: Person dropdown (no free-text) + lowercase session + clear desk-PIN errors. On the desk: bash scripts/update-desk-extension.sh.",
+  "version": "0.1.8",
+  "message": "Create RO labels: last name only (no first initial), print every Create even with an open RO. RO# is for idempotency only — not printed on the label.",
   "url": "https://github.com/BlackForestPorsche/label-connect"
 }
