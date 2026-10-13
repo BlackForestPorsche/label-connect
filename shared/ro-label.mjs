@@ -14,11 +14,11 @@ const MAX_LEN = {
   customerName: 48,
 };
 
-const FORBIDDEN_EVENT_RE = /update|schedule|assign|new[\s_-]*r\/?o/i;
+const FORBIDDEN_EVENT_RE = /update|schedule|assign|new[\u005cs_-]*r\u005c/?o/i;
 
 function clean(value, max) {
   const text = String(value ?? "")
-    .replace(/\s+/g, " ")
+    .replace(/\u005cs+/g, " ")
     .trim();
   if (!text) return "";
   return text.slice(0, max);
@@ -37,11 +37,11 @@ export function extractLastName(fullName) {
     text = text.split(",")[0].trim();
   }
   // Leading first initial: "J. Smith", "J Smith", "J.Smith"
-  text = text.replace(/^[A-Za-z]\.\?\s+/, "").replace(/^[A-Za-z]\.(?=[A-Za-z])/, "");
+  text = text.replace(/^[A-Za-z]\u005c.?\u005cs+/, "").replace(/^[A-Za-z]\u005c.(?=[A-Za-z])/, "");
   const parts = text.split(" ").filter(Boolean);
   if (!parts.length) return "";
   // Drop a trailing bare initial if anything remains ("Smith J" → "Smith").
-  if (parts.length > 1 && /^[A-Za-z]\.\?$/.test(parts[parts.length - 1])) {
+  if (parts.length > 1 && /^[A-Za-z]\u005c.?$/.test(parts[parts.length - 1])) {
     parts.pop();
   }
   return parts[parts.length - 1] || "";
@@ -60,7 +60,7 @@ export function normalizeRoPayload(raw) {
   if (FORBIDDEN_EVENT_RE.test(event)) {
     return { ok: false, error: "Only Create R/O may auto-print. Update, Schedule, Assign, and New R/O are blocked." };
   }
-  if (event && !/^(create(-?r\/?o)?|create)$/i.test(event)) {
+  if (event && !/^(create(-?r\u005c/?o)?|create)$/i.test(event)) {
     return { ok: false, error: "Only Create R/O may auto-print. Unknown event was rejected." };
   }
 
@@ -200,9 +200,6 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
 
-  // Layout in turned view space (matches buildRoLabelDoc), then map each
-  // baseline into page space. Editor CW: view(x,y) = (pageY, pageW - pageX).
-  // Inverse: page(x,y) = (pageW - viewY, viewX).
   const box = viewSafe.w > 8 && viewSafe.h > 6 ? viewSafe : { x: 0, y: 0, w: media.heightPt, h: media.widthPt };
   const rowH = box.h / lines.length;
 
@@ -222,13 +219,9 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
       const textW = measure(line, layout.size);
       const vx = row.x + (row.w - textW) / 2;
       const vyTop = row.y + layout.startY + lineIndex * layout.lineHeight;
-      // Baseline in view coords (y grows downward in editor; PDF y grows up).
-      // Convert editor-top-left view point to PDF page bottom-left via the
-      // same CW turn the Labels paint() uses, then rotate glyphs +90°.
       const viewBaselineY = vyTop + layout.size * 0.8;
       const pageX = media.widthPt - viewBaselineY;
       const pageY = vx;
-      // Clamp lightly into page safe zone so ImageableArea is respected.
       const x = Math.min(Math.max(pageX, pageSafe.x), pageSafe.x + pageSafe.w);
       const y = Math.min(Math.max(pageY, pageSafe.y), pageSafe.y + pageSafe.h - 1);
       page.drawText(line, {
