@@ -121,7 +121,7 @@
         ? {
             version: remoteVersion,
             local,
-            message: remote.message || "Run update-desk-extension (or Update Labels) on the desk.",
+            message: remote.message || "Firefox signed installs auto-update from GitHub Releases; Chromium: reload Load unpacked or run update-desk-extension.sh.",
             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
