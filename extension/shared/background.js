@@ -66,8 +66,6 @@
     if (!response.ok) {
       const code = data && data.error;
       if (response.status === 401 || response.status === 403) {
-        // Local Labels /api/print-ro has no shop PIN — this is almost always a misconfigured
-        // bridge/proxy. Do not echo cryptic "unauthorized".
         return {
           error:
             "Labels rejected the print request. Confirm Labels is running at 127.0.0.1:8080 (Create RO does not use the desk PIN).",
@@ -167,6 +165,33 @@
         return false;
       }
       api.createWidgetSession(message.payload || {}).then(sendResponse);
+      return true;
+    }
+    // Reserved for Tools↔Firefox↔Desk synced sign-in (shared-login agent).
+    // Expect payload { token, expiresAt?, person? } from exchange/handoff — no PIN.
+    // PIN popup + Person dropdown remain the fallback unlock until that path lands.
+    if (message.type === "import-widget-token") {
+      const payload = message.payload || {};
+      const token = typeof payload.token === "string" ? payload.token.trim() : "";
+      if (!token) {
+        sendResponse({ error: "Missing widget token." });
+        return false;
+      }
+      const parsedExpiry = payload.expiresAt ? Date.parse(payload.expiresAt) : NaN;
+      const ttlMs = Number.isFinite(parsedExpiry)
+        ? Math.max(parsedExpiry - Date.now(), 60_000)
+        : 8 * 60 * 60 * 1000;
+      const person = String(payload.person || "")
+        .trim()
+        .toLowerCase();
+      runtime.storage.local
+        .set({
+          shopWidgetToken: token,
+          shopWidgetTokenExpiresAt: Date.now() + ttlMs,
+          ...(person ? { shopPerson: person } : {}),
+        })
+        .then(() => sendResponse({ ok: true, person: person || undefined }))
+        .catch(() => sendResponse({ error: "Could not store widget token." }));
       return true;
     }
     if (message.type === "check-update") {
