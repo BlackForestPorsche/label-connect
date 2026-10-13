@@ -1,0 +1,36 @@
+name: apply-safe-margins-app-js
+on:
+  push:
+    paths:
+      - "scripts/_app.js.b64gz"
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode public/app.js and commit
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, gzip, pathlib, re
+          data = gzip.decompress(base64.b64decode(pathlib.Path("scripts/_app.js.b64gz").read_text().strip()))
+          pathlib.Path("public/app.js").write_bytes(data)
+          print("wrote public/app.js", len(data))
+          lock = pathlib.Path("package-lock.json")
+          if lock.exists():
+              text = lock.read_text()
+              text2 = re.sub(r'(\"version\":\\s*\")0\\.1\\.0(\")', r"\\g<1>0.1.1\\g<2>", text, count=2)
+              lock.write_text(text2)
+          PY
+          git config user.name "BlackForestPorsche"
+          git config user.email "service@blackforestautomotive.com"
+          git add public/app.js package-lock.json
+          if git diff --cached --quiet; then
+            echo "no commit needed"
+            exit 0
+          fi
+          git commit -m "Restore full Labels editor with safe print margins (0.1.1)."
+          git push

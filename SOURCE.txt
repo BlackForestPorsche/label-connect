@@ -1,8 +1,7 @@
 Release remote: https://github.com/BlackForestPorsche/label-connect
-Upstream source: https://github.com/BlackForestPorsche/blackforest-tools
+Upstream mirror: https://github.com/BlackForestPorsche/blackforest-tools
 Branch: cursor/labelwriter-550-6410
 PR: https://github.com/BlackForestPorsche/blackforest-tools/pull/3
-Synced from commit: 60a045822b92eecd4149b60ab748493f800f3ce6
+Version: 0.1.1 — CUPS ImageableArea safe print margins (viewSafeRect / pageSafeRect), editor safe-zone guide, block clamp.
 Installed as a dedicated Labels app checkout (not shop-desktop).
 Update on this PC: bash ~/label-connect/scripts/update-labels.sh
-Center-and-fit text mode included.
