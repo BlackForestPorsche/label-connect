@@ -1,6 +1,10 @@
 name: publish-desk-extension
+# Publishes the stable GitHub Release tag `desk-extension` (XPI + chromium zip).
+# Main-only: feature-branch pushes used to race on the same asset names and spam
+# "run failed" emails. Unsigned pack/publish is expected — no AMO secrets required.
 on:
   push:
+    branches: [main]
     paths:
       - ".github/workflows/publish-desk-extension.yml"
       - "scripts/pack-desk-extension.sh"
@@ -10,6 +14,9 @@ on:
       - "extension/shared/**"
       - "extension/version.json"
   workflow_dispatch:
+concurrency:
+  group: publish-desk-extension
+  cancel-in-progress: false
 jobs:
   publish:
     runs-on: ubuntu-latest
