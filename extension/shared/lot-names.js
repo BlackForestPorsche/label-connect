@@ -12,6 +12,12 @@
   const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
   const PERSON_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
   const PIN_RE = /^\d{4,12}$/;
+  /**
+   * Desk unlock roster (same people as shop / Plasma widget PIN unlock).
+   * Shop has no public GET /api/widget/people yet — keep in sync with plasmoid
+   * recipient fallback: logan, stephen, steve, carla, john.
+   */
+  const DESK_PEOPLE = Object.freeze(["logan", "stephen", "steve", "carla", "john"]);
 
   function lastNameFromLotLabel(label) {
     const text = String(label || "")
@@ -57,7 +63,7 @@
   function friendlyWidgetError(code, status) {
     const key = String(code || "").trim().toLowerCase();
     if (key === "unauthorized" || status === 401) {
-      return "Wrong person or desk PIN. Use the same shop unlock name (lowercase, e.g. logan), then enter your desk PIN in this popup.";
+      return "Desk PIN rejected (or person not found). Pick a person from the list and use the desk/shop widget PIN — not another password.";
     }
     if (key === "locked" || status === 429) {
       return "Too many PIN tries — wait a bit, then unlock again with your desk PIN.";
@@ -293,6 +299,7 @@
 
   api.lastNameFromLotLabel = lastNameFromLotLabel;
   api.lotLabelsToLastNames = lotLabelsToLastNames;
+  api.DESK_PEOPLE = DESK_PEOPLE;
   api.normalizePerson = normalizePerson;
   api.friendlyWidgetError = friendlyWidgetError;
   api.createWidgetSession = createWidgetSession;
