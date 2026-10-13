@@ -1,0 +1,43 @@
+[
+  {
+    "path": "extension/shared/background.js",
+    "prefix": "extension__shared__background.js.gz.b64",
+    "chunks": 5,
+    "sha256": "3d0d7b64ef0384abbd25766ec7bd6c37a1feae372133455f75167ab04a757ad6",
+    "bytes": 7827,
+    "also": [
+      "extension/firefox/background.js",
+      "extension/chromium/background.js"
+    ]
+  },
+  {
+    "path": "extension/shared/popup.js",
+    "prefix": "extension__shared__popup.js.gz.b64",
+    "chunks": 5,
+    "sha256": "af7d4b7c4cb78bdb5568bf5ec48eda70916100a286fddec8f658f0a5aed2b5fc",
+    "bytes": 8181,
+    "also": [
+      "extension/firefox/popup.js",
+      "extension/chromium/popup.js"
+    ]
+  },
+  {
+    "path": "extension/shared/lot-names.js",
+    "prefix": "extension__shared__lot-names.js.gz.b64",
+    "chunks": 7,
+    "sha256": "b08bf89a650c5595cfc1eaf74e24c6c5336b5a90bca6eb603bf9d0860448fa63",
+    "bytes": 15388,
+    "also": [
+      "extension/firefox/lot-names.js",
+      "extension/chromium/lot-names.js"
+    ]
+  },
+  {
+    "path": "extension/README.md",
+    "prefix": "extension__README.md.gz.b64",
+    "chunks": 6,
+    "sha256": "65dbda636b6df53a159a485e66db937b8735f5da80e33d0b82ce396fd0244a05",
+    "bytes": 7149,
+    "also": []
+  }
+]
