@@ -12,12 +12,10 @@
     "https://raw.githubusercontent.com/BlackForestPorsche/label-connect/main/extension/version.json";
   const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
 
-  // Chromium MV3 service worker: pull shared helpers.
   if (typeof importScripts === "function") {
     try {
       importScripts("config.js", "lot-names.js");
     } catch {
-      // Firefox loads scripts via manifest background.scripts instead.
     }
   }
 
@@ -29,7 +27,6 @@
         return value.trim().replace(/\/$/, "");
       }
     } catch {
-      // storage may be unavailable in some test loads
     }
     return DEFAULT_BASE;
   }
@@ -66,8 +63,6 @@
     if (!response.ok) {
       const code = data && data.error;
       if (response.status === 401 || response.status === 403) {
-        // Local Labels /api/print-ro has no shop PIN — this is almost always a misconfigured
-        // bridge/proxy. Do not echo cryptic "unauthorized".
         return {
           error:
             "Labels rejected the print request. Confirm Labels is running at 127.0.0.1:8080 (Create RO does not use the desk PIN).",
@@ -121,7 +116,7 @@
         ? {
             version: remoteVersion,
             local,
-            message: remote.message || "Run update-desk-extension (or Update Labels) on the desk.",
+            message: remote.message || "Firefox signed installs auto-update from GitHub Releases; Chromium: reload Load unpacked or run update-desk-extension.sh.",
             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
@@ -176,7 +171,6 @@
     return false;
   });
 
-  // Soft update check on worker start + daily-ish alarm when available.
   void checkForUpdate(false);
   if (runtime.alarms?.create) {
     try {
@@ -185,7 +179,6 @@
         if (alarm?.name === "desk-update-check") void checkForUpdate(false);
       });
     } catch {
-      // alarms permission optional
     }
   }
 })();
