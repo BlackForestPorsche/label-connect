@@ -1,4 +1,5 @@
 node_modules/
 data/
+extension/dist/
 *.log
 .DS_Store
