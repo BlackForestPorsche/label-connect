@@ -3,6 +3,9 @@
   const cfg = root.AllDataRoLabels || (root.AllDataRoLabels = {});
   cfg.DEFAULT_LABELS_BASE = "http://127.0.0.1:8080";
   cfg.DEFAULT_SHOP_BASE = "https://shop.blackforestautomotive.com";
+  // Black Forest Tools loopback (shop-desktop 1.5.3+) — complementary to site-gate import.
+  cfg.DEFAULT_TOOLS_BRIDGE_BASE = "http://127.0.0.1:8788";
+  cfg.SHOP_GATE_COOKIE = "bf_shop_gate";
   cfg.CREATE_LABEL_RE = /^\s*create\s*r\s*\/?\s*o\s*$/i;
   cfg.UPDATE_LABEL_RE = /^\s*update\s*r\s*\/?\s*o\s*$/i;
   cfg.ASSIGN_LABEL_RE = /^\s*assign\s*r\s*\/?\s*o\s*$/i;
