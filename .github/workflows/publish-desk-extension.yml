@@ -1,7 +1,7 @@
 name: publish-desk-extension
-# Publishes the stable GitHub Release tag `desk-extension` (XPI + chromium zip).
-# Main-only: feature-branch pushes used to race on the same asset names and spam
-# "run failed" emails. Unsigned pack/publish is expected — no AMO secrets required.
+# Publishes stable GitHub Release tag `desk-extension` (XPI + updates.json + chromium zip).
+# Main-only (+ workflow_dispatch): feature-branch pushes must not publish (PR #11).
+# Unsigned pack/publish stays green when AMO secrets are absent; signing is optional.
 on:
   push:
     branches: [main]
@@ -9,6 +9,8 @@ on:
       - ".github/workflows/publish-desk-extension.yml"
       - "scripts/pack-desk-extension.sh"
       - "scripts/gh-release-desk-extension.sh"
+      - "scripts/generate-desk-updates-json.sh"
+      - "scripts/sign-desk-extension.sh"
       - "extension/firefox/**"
       - "extension/chromium/**"
       - "extension/shared/**"
@@ -24,9 +26,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Pack and publish desk-extension release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Pack desk extension
         run: |
           set -euo pipefail
           sudo apt-get update -qq
@@ -35,4 +38,30 @@ jobs:
           ls -la extension/dist/
           test -f extension/dist/Black.Forest.Desk.xpi
           test -f extension/dist/Black.Forest.Desk-chromium.zip
+          test -f extension/dist/updates.json
+      - name: Sign Firefox XPI (AMO unlisted) when secrets exist
+        id: sign
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
+          WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          set -euo pipefail
+          export WEB_EXT_API_KEY="${WEB_EXT_API_KEY:-${AMO_JWT_ISSUER:-}}"
+          export WEB_EXT_API_SECRET="${WEB_EXT_API_SECRET:-${AMO_JWT_SECRET:-}}"
+          if [[ -z "${WEB_EXT_API_KEY}" || -z "${WEB_EXT_API_SECRET}" ]]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AMO / web-ext secrets missing — publishing unsigned XPI + updates.json. Job stays green. Add WEB_EXT_API_KEY + WEB_EXT_API_SECRET (or AMO_JWT_ISSUER + AMO_JWT_SECRET) for a Mozilla-signed installable XPI."
+            exit 0
+          fi
+          bash scripts/sign-desk-extension.sh
+          bash scripts/generate-desk-updates-json.sh
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          ls -la extension/dist/
+      - name: Publish desk-extension release (XPI + updates.json + chromium)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           bash scripts/gh-release-desk-extension.sh
