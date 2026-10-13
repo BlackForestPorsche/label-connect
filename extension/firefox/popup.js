@@ -4,12 +4,13 @@
   const personEl = document.getElementById("person");
   const pinEl = document.getElementById("pin");
   const button = document.getElementById("unlock");
+  const siteBtn = document.getElementById("useShopSession");
+  const toolsBtn = document.getElementById("useTools");
   const checkBtn = document.getElementById("checkUpdate");
   const status = document.getElementById("status");
   const updateEl = document.getElementById("update");
   const versionEl = document.getElementById("version");
 
-  /** Fallback if lot-names.js did not load (should not happen in packaged builds). */
   const FALLBACK_PEOPLE = ["logan", "stephen", "steve", "carla", "john"];
 
   function deskPeople() {
@@ -44,23 +45,22 @@
   }
 
   function humanizeUnlockError(raw) {
-    if (!raw) return "Unlock failed. Enter your desk PIN and try again.";
+    if (!raw) return "Unlock failed. Use shop session, Tools, or desk PIN.";
     const text = String(raw).trim();
     const lower = text.toLowerCase();
-    // Never surface raw API codes like "unauthorized".
     if (lower === "unauthorized" || lower === "unauthorised") {
-      return "Desk PIN rejected (or person not found). Use the desk/shop widget PIN for the selected person \u2014 not another password.";
+      return "Desk PIN rejected (or person not found). Or unlock the shop site and click Use shop session.";
     }
     if (looksLikeApiCode(text)) {
       const map = {
         unauthorized:
-          "Desk PIN rejected (or person not found). Use the desk/shop widget PIN for the selected person \u2014 not another password.",
-        locked: "Too many PIN tries \u2014 wait, then unlock again.",
+          "Desk PIN rejected (or person not found). Or unlock the shop site and click Use shop session.",
+        locked: "Too many PIN tries — wait, then unlock again.",
         pin_change_required: "Set a PIN on the shop site first, then unlock here.",
-        bad_request: "Pick a shop person from the list and enter a 4\u201312 digit desk PIN.",
-        rate_limited: "Too many tries. Wait a minute, then enter your desk PIN again.",
+        bad_request: "Pick a shop person from the list and enter a 4–12 digit desk PIN.",
+        rate_limited: "Too many tries. Wait a minute, then try again.",
       };
-      return map[lower] || `Unlock failed (${text}). Enter your desk PIN and try again.`;
+      return map[lower] || `Unlock failed (${text}).`;
     }
     return text;
   }
@@ -80,31 +80,65 @@
     } else if (people.length === 1) {
       personEl.value = people[0];
     } else if (people.includes("logan")) {
-      // Desk default when nothing stored yet.
       personEl.value = "logan";
     } else if (people.length) {
       personEl.selectedIndex = 0;
     }
   }
 
+  async function tryImport(type, { quiet } = {}) {
+    try {
+      const response = await runtime.runtime.sendMessage({ type });
+      if (response?.ok) {
+        if (response.person) fillPersonSelect(response.person);
+        const label =
+          response.source === "tools-bridge" || type === "tools-session-import"
+            ? "Lot names unlocked from Black Forest Tools."
+            : "Lot names unlocked from the shop site session.";
+        setStatus(label, "ok");
+        return true;
+      }
+      if (!quiet) setStatus(humanizeUnlockError(response?.error), "err");
+      return false;
+    } catch {
+      if (!quiet) setStatus("Extension background unavailable. Reload the add-on.", "err");
+      return false;
+    }
+  }
+
   async function restore() {
     try {
       const manifest = runtime.runtime.getManifest();
-      versionEl.textContent = `Installed ${manifest.version} \u00b7 updates via git / update-desk-extension.sh`;
+      versionEl.textContent = `Installed ${manifest.version} · Firefox auto-update via releases when signed XPI is installed`;
       const stored = await runtime.storage.local.get([
         "shopPerson",
         "shopWidgetTokenExpiresAt",
+        "shopWidgetTokenSource",
         "deskUpdateAvailable",
       ]);
       fillPersonSelect(stored.shopPerson);
       if (stored.shopWidgetTokenExpiresAt && Number(stored.shopWidgetTokenExpiresAt) > Date.now()) {
-        setStatus("Lot names unlocked with desk PIN.", "ok");
+        const src = stored.shopWidgetTokenSource;
+        setStatus(
+          src === "site-gate"
+            ? "Lot names unlocked from the shop site session."
+            : src === "tools-bridge"
+              ? "Lot names unlocked from Black Forest Tools."
+              : "Lot names unlocked with desk PIN.",
+          "ok",
+        );
       } else {
-        setStatus("Select person, enter desk PIN to unlock On the Lot names for SSF.");
+        const fromSite = await tryImport("site-session-import", { quiet: true });
+        if (!fromSite) {
+          const fromTools = await tryImport("tools-session-import", { quiet: true });
+          if (!fromTools) {
+            setStatus("Select person + PIN, or unlock the shop site / Tools first.");
+          }
+        }
       }
       if (stored.deskUpdateAvailable?.version) {
         setUpdate(
-          `Update ${stored.deskUpdateAvailable.version} ready \u2014 run bash scripts/update-desk-extension.sh on the desk.`,
+          `Update ${stored.deskUpdateAvailable.version} ready — run bash scripts/update-desk-extension.sh on the desk.`,
           "warn",
         );
       }
@@ -118,7 +152,7 @@
     const pin = pinEl.value;
     if (person && personEl.value !== person) personEl.value = person;
     if (!person || !pin) {
-      setStatus("Select a person and enter your desk PIN.", "err");
+      setStatus("Select a person and enter your desk PIN (or Use shop session).", "err");
       return;
     }
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(person)) {
@@ -126,11 +160,11 @@
       return;
     }
     if (!/^\d{4,12}$/.test(pin)) {
-      setStatus("Desk PIN must be 4\u201312 digits (shop / Plasma widget PIN).", "err");
+      setStatus("Desk PIN must be 4–12 digits (shop / Plasma widget PIN).", "err");
       return;
     }
     button.disabled = true;
-    setStatus(`Signing in as \u201c${person}\u201d with desk PIN\u2026`);
+    setStatus(`Signing in as “${person}” with desk PIN…`);
     try {
       await runtime.storage.local.set({ shopPerson: person });
       const response = await runtime.runtime.sendMessage({
@@ -142,23 +176,47 @@
         setStatus(humanizeUnlockError(response?.error), "err");
         return;
       }
-      setStatus(`Lot names unlocked as \u201c${person}\u201d. Open SSF checkout and Refresh if needed.`, "ok");
+      setStatus(`Lot names unlocked as “${person}”. Open SSF checkout and Refresh if needed.`, "ok");
     } catch {
-      setStatus("Extension background unavailable. Reload the temporary add-on, then enter your desk PIN.", "err");
+      setStatus("Extension background unavailable. Reload the add-on, then enter your desk PIN.", "err");
     } finally {
       button.disabled = false;
     }
   });
 
+  if (siteBtn) {
+    siteBtn.addEventListener("click", async () => {
+      siteBtn.disabled = true;
+      setStatus("Using shop site session…");
+      try {
+        await tryImport("site-session-import", { quiet: false });
+      } finally {
+        siteBtn.disabled = false;
+      }
+    });
+  }
+
+  if (toolsBtn) {
+    toolsBtn.addEventListener("click", async () => {
+      toolsBtn.disabled = true;
+      setStatus("Asking Black Forest Tools…");
+      try {
+        await tryImport("tools-session-import", { quiet: false });
+      } finally {
+        toolsBtn.disabled = false;
+      }
+    });
+  }
+
   checkBtn.addEventListener("click", async () => {
     checkBtn.disabled = true;
-    setUpdate("Checking\u2026");
+    setUpdate("Checking…");
     try {
       const response = await runtime.runtime.sendMessage({ type: "check-update", force: true });
       const available = response?.available;
       if (available?.version) {
         setUpdate(
-          `Update ${available.version} ready \u2014 on the desk run: bash ~/label-connect/scripts/update-desk-extension.sh`,
+          `Update ${available.version} ready — on the desk run: bash ~/label-connect/scripts/update-desk-extension.sh`,
           "warn",
         );
       } else {
