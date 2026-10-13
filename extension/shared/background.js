@@ -169,6 +169,41 @@
       api.createWidgetSession(message.payload || {}).then(sendResponse);
       return true;
     }
+    if (message.type === "site-session-import") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.importSiteGateSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.importSiteGateSession().then(sendResponse);
+      return true;
+    }
+    if (message.type === "tools-session-import") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.importToolsWidgetSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.importToolsWidgetSession().then(sendResponse);
+      return true;
+    }
+    if (message.type === "shop-site-session") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.storeWidgetToken) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      const payload = message.payload || {};
+      api
+        .storeWidgetToken({
+          token: payload.token,
+          expiresAt: payload.expiresAt,
+          person: payload.person,
+          source: payload.source || "shop-site",
+        })
+        .then(sendResponse);
+      return true;
+    }
     if (message.type === "check-update") {
       checkForUpdate(Boolean(message.force)).then((available) => sendResponse({ available }));
       return true;
