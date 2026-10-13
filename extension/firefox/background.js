@@ -66,6 +66,8 @@
     if (!response.ok) {
       const code = data && data.error;
       if (response.status === 401 || response.status === 403) {
+        // Local Labels /api/print-ro has no shop PIN — this is almost always a misconfigured
+        // bridge/proxy. Do not echo cryptic "unauthorized".
         return {
           error:
             "Labels rejected the print request. Confirm Labels is running at 127.0.0.1:8080 (Create RO does not use the desk PIN).",
@@ -167,6 +169,41 @@
       api.createWidgetSession(message.payload || {}).then(sendResponse);
       return true;
     }
+    if (message.type === "site-session-import") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.importSiteGateSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.importSiteGateSession().then(sendResponse);
+      return true;
+    }
+    if (message.type === "tools-session-import") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.importToolsWidgetSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.importToolsWidgetSession().then(sendResponse);
+      return true;
+    }
+    if (message.type === "shop-site-session") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.storeWidgetToken) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      const payload = message.payload || {};
+      api
+        .storeWidgetToken({
+          token: payload.token,
+          expiresAt: payload.expiresAt,
+          person: payload.person,
+          source: payload.source || "shop-site",
+        })
+        .then(sendResponse);
+      return true;
+    }
     if (message.type === "check-update") {
       checkForUpdate(Boolean(message.force)).then((available) => sendResponse({ available }));
       return true;
@@ -174,6 +211,7 @@
     return false;
   });
 
+  // Soft update check on worker start + daily-ish alarm when available.
   void checkForUpdate(false);
   if (runtime.alarms?.create) {
     try {
