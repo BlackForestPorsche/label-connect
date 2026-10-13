@@ -7,6 +7,8 @@ import { parseSkuDump, parseStatus } from "./status.mjs";
 const PPD_CANDIDATES = [
   `/etc/cups/ppd/${QUEUE}.ppd`,
   `/etc/cups/ppd/${QUEUE.toLowerCase()}.ppd`,
+  // Readable copy when the queue PPD is root:cups mode 640.
+  "/usr/share/cups/model/dymo/lw550.ppd",
 ];
 
 function run(cmd, args, timeoutMs = 4000) {
@@ -153,6 +155,7 @@ export async function describePrinter() {
       name: matched.name,
       widthPt: matched.widthPt,
       heightPt: matched.heightPt,
+      imageable: matched.imageable ?? null,
       remaining: roll.status.remaining || null,
       bay: roll.status.bay,
       bayLabel: roll.status.bayLabel,
@@ -179,6 +182,7 @@ export async function describePrinter() {
       name: item.name,
       widthPt: item.widthPt,
       heightPt: item.heightPt,
+      imageable: item.imageable ?? null,
     })),
   };
 }
