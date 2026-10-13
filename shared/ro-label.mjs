@@ -24,11 +24,26 @@ function clean(value, max) {
   return text.slice(0, max);
 }
 
-/** Last whitespace token of a full name (same heuristic as the extension scrape). */
+/**
+ * Customer last name only — never first name or first initial.
+ * Handles "LAST, FIRST", "J. LAST", "J LAST", "J.LAST", and "FIRST LAST".
+ * Same heuristic as the extension scrape.
+ */
 export function extractLastName(fullName) {
-  const text = clean(fullName, MAX_LEN.customerName);
+  let text = clean(fullName, MAX_LEN.customerName);
   if (!text) return "";
+  // "LAST, FIRST" / "LAST, F." → LAST
+  if (text.includes(",")) {
+    text = text.split(",")[0].trim();
+  }
+  // Leading first initial: "J. Smith", "J Smith", "J.Smith"
+  text = text.replace(/^[A-Za-z]\.?\s+/, "").replace(/^[A-Za-z]\.(?=[A-Za-z])/, "");
   const parts = text.split(" ").filter(Boolean);
+  if (!parts.length) return "";
+  // Drop a trailing bare initial if anything remains ("Smith J" → "Smith").
+  if (parts.length > 1 && /^[A-Za-z]\.?$/.test(parts[parts.length - 1])) {
+    parts.pop();
+  }
   return parts[parts.length - 1] || "";
 }
 
@@ -49,12 +64,16 @@ export function normalizeRoPayload(raw) {
     return { ok: false, error: "Only Create R/O may auto-print. Unknown event was rejected." };
   }
 
-  let lastName = clean(raw.lastName ?? raw.last_name, MAX_LEN.lastName);
+  // Always run through extractLastName so "J. Owner" / "Owner, J" never print an initial.
+  let lastName = extractLastName(raw.lastName ?? raw.last_name);
   const customerName = clean(raw.customerName ?? raw.customer ?? raw.name, MAX_LEN.customerName);
   if (!lastName && customerName) lastName = extractLastName(customerName);
+  lastName = clean(lastName, MAX_LEN.lastName);
 
   const model = clean(raw.model, MAX_LEN.model);
   const roNumber = clean(raw.roNumber ?? raw.ro ?? raw.documentNumber, MAX_LEN.roNumber);
+  // Per-Create click id from the Desk extension — never used as a customer/person key.
+  const createArmId = clean(raw.createArmId ?? raw.create_arm_id ?? raw.createId, 64);
   const source = clean(raw.source ?? "alldata", 32) || "alldata";
   const dryRun = Boolean(raw.dryRun === true || raw.dryRun === "1" || raw.dryRun === 1);
 
@@ -69,6 +88,7 @@ export function normalizeRoPayload(raw) {
       lastName,
       model,
       customerName,
+      createArmId,
       source,
       event: "create-ro",
       dryRun,
