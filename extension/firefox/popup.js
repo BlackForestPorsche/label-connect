@@ -1,4 +1,4 @@
-/* global chrome, browser */
+/* global chrome, browser, AllDataRoLabels */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
   const personEl = document.getElementById("person");
@@ -11,6 +11,25 @@
   const updateEl = document.getElementById("update");
   const versionEl = document.getElementById("version");
 
+  const FALLBACK_PEOPLE = ["logan", "stephen", "steve", "carla", "john"];
+
+  function deskPeople() {
+    const fromApi = globalThis.AllDataRoLabels?.DESK_PEOPLE;
+    if (Array.isArray(fromApi) && fromApi.length) {
+      return fromApi.map((p) => String(p).trim().toLowerCase()).filter(Boolean);
+    }
+    return FALLBACK_PEOPLE.slice();
+  }
+
+  function normalizePerson(person) {
+    if (typeof globalThis.AllDataRoLabels?.normalizePerson === "function") {
+      return globalThis.AllDataRoLabels.normalizePerson(person);
+    }
+    return String(person || "")
+      .trim()
+      .toLowerCase();
+  }
+
   function setStatus(text, kind) {
     status.textContent = text;
     status.className = kind === "ok" ? "ok" : kind === "err" ? "err" : "";
@@ -19,23 +38,6 @@
   function setUpdate(text, kind) {
     updateEl.textContent = text;
     updateEl.className = kind === "ok" ? "ok" : kind === "warn" ? "warn" : kind === "err" ? "err" : "";
-  }
-
-  function normalizePerson(person) {
-    return String(person || "")
-      .trim()
-      .toLowerCase();
-  }
-
-  function setPersonValue(person) {
-    if (!personEl || !person) return;
-    const value = normalizePerson(person);
-    if (personEl.tagName === "SELECT") {
-      const opt = Array.from(personEl.options || []).find((o) => o.value === value);
-      if (opt) personEl.value = value;
-    } else {
-      personEl.value = value;
-    }
   }
 
   function looksLikeApiCode(text) {
@@ -47,40 +49,59 @@
     const text = String(raw).trim();
     const lower = text.toLowerCase();
     if (lower === "unauthorized" || lower === "unauthorised") {
-      return "Wrong person or desk PIN. Or unlock the shop site in this Firefox profile and click Use shop session.";
+      return "Desk PIN rejected (or person not found). Or unlock the shop site and click Use shop session.";
     }
     if (looksLikeApiCode(text)) {
       const map = {
-        unauthorized: "Wrong person or desk PIN. Try Use shop session if the site is unlocked.",
+        unauthorized:
+          "Desk PIN rejected (or person not found). Or unlock the shop site and click Use shop session.",
         locked: "Too many PIN tries — wait, then unlock again.",
         pin_change_required: "Set a PIN on the shop site first, then unlock here.",
-        bad_request: "Enter a valid shop person (lowercase) and a 4–12 digit desk PIN.",
+        bad_request: "Pick a shop person from the list and enter a 4–12 digit desk PIN.",
         rate_limited: "Too many tries. Wait a minute, then try again.",
-        from_gate_missing: text,
       };
       return map[lower] || `Unlock failed (${text}).`;
     }
     return text;
   }
 
+  function fillPersonSelect(selected) {
+    const people = deskPeople();
+    personEl.replaceChildren();
+    for (const id of people) {
+      const opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = id;
+      personEl.appendChild(opt);
+    }
+    const want = normalizePerson(selected);
+    if (want && people.includes(want)) {
+      personEl.value = want;
+    } else if (people.length === 1) {
+      personEl.value = people[0];
+    } else if (people.includes("logan")) {
+      personEl.value = "logan";
+    } else if (people.length) {
+      personEl.selectedIndex = 0;
+    }
+  }
+
   async function tryImport(type, { quiet } = {}) {
     try {
       const response = await runtime.runtime.sendMessage({ type });
       if (response?.ok) {
-        if (response.person) setPersonValue(response.person);
+        if (response.person) fillPersonSelect(response.person);
         const label =
-          response.source === "tools-bridge"
+          response.source === "tools-bridge" || type === "tools-session-import"
             ? "Lot names unlocked from Black Forest Tools."
-            : response.source === "site-gate" || type === "site-session-import"
-              ? "Lot names unlocked from the shop site session."
-              : "Lot names unlocked.";
+            : "Lot names unlocked from the shop site session.";
         setStatus(label, "ok");
         return true;
       }
       if (!quiet) setStatus(humanizeUnlockError(response?.error), "err");
       return false;
     } catch {
-      if (!quiet) setStatus("Extension background unavailable. Reload the temporary add-on.", "err");
+      if (!quiet) setStatus("Extension background unavailable. Reload the add-on.", "err");
       return false;
     }
   }
@@ -88,14 +109,14 @@
   async function restore() {
     try {
       const manifest = runtime.runtime.getManifest();
-      versionEl.textContent = `Installed ${manifest.version} · updates via git / update-desk-extension.sh`;
+      versionEl.textContent = `Installed ${manifest.version} · Firefox auto-update via releases when signed XPI is installed`;
       const stored = await runtime.storage.local.get([
         "shopPerson",
         "shopWidgetTokenExpiresAt",
         "shopWidgetTokenSource",
         "deskUpdateAvailable",
       ]);
-      if (stored.shopPerson) setPersonValue(stored.shopPerson);
+      fillPersonSelect(stored.shopPerson);
       if (stored.shopWidgetTokenExpiresAt && Number(stored.shopWidgetTokenExpiresAt) > Date.now()) {
         const src = stored.shopWidgetTokenSource;
         setStatus(
@@ -103,13 +124,17 @@
             ? "Lot names unlocked from the shop site session."
             : src === "tools-bridge"
               ? "Lot names unlocked from Black Forest Tools."
-              : "Lot names unlocked.",
+              : "Lot names unlocked with desk PIN.",
           "ok",
         );
       } else {
-        // Site first (reported gap), then Tools — no PIN retype when already signed in.
         const fromSite = await tryImport("site-session-import", { quiet: true });
-        if (!fromSite) await tryImport("tools-session-import", { quiet: true });
+        if (!fromSite) {
+          const fromTools = await tryImport("tools-session-import", { quiet: true });
+          if (!fromTools) {
+            setStatus("Select person + PIN, or unlock the shop site / Tools first.");
+          }
+        }
       }
       if (stored.deskUpdateAvailable?.version) {
         setUpdate(
@@ -118,20 +143,28 @@
         );
       }
     } catch {
-      // ignore
+      fillPersonSelect("logan");
     }
   }
 
   button.addEventListener("click", async () => {
     const person = normalizePerson(personEl.value);
     const pin = pinEl.value;
+    if (person && personEl.value !== person) personEl.value = person;
     if (!person || !pin) {
-      setStatus("Person and PIN required (or Use shop session).", "err");
+      setStatus("Select a person and enter your desk PIN (or Use shop session).", "err");
       return;
     }
-    setPersonValue(person);
+    if (!/^[a-z][a-z0-9-]{0,31}$/.test(person)) {
+      setStatus("Pick a shop person from the list.", "err");
+      return;
+    }
+    if (!/^\d{4,12}$/.test(pin)) {
+      setStatus("Desk PIN must be 4–12 digits (shop / Plasma widget PIN).", "err");
+      return;
+    }
     button.disabled = true;
-    setStatus("Signing in…");
+    setStatus(`Signing in as “${person}” with desk PIN…`);
     try {
       await runtime.storage.local.set({ shopPerson: person });
       const response = await runtime.runtime.sendMessage({
@@ -143,9 +176,9 @@
         setStatus(humanizeUnlockError(response?.error), "err");
         return;
       }
-      setStatus("Lot names unlocked.", "ok");
+      setStatus(`Lot names unlocked as “${person}”. Open SSF checkout and Refresh if needed.`, "ok");
     } catch {
-      setStatus("Extension background unavailable. Reload the temporary add-on.", "err");
+      setStatus("Extension background unavailable. Reload the add-on, then enter your desk PIN.", "err");
     } finally {
       button.disabled = false;
     }
@@ -196,5 +229,6 @@
     }
   });
 
+  fillPersonSelect("logan");
   restore();
 })();
