@@ -12,13 +12,14 @@
   const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
   const PERSON_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
   const PIN_RE = /^\d{4,12}$/;
+  /** Desk unlock roster (plasmoid fallback). */
+  const DESK_PEOPLE = Object.freeze(["logan", "stephen", "steve", "carla", "john"]);
 
   function lastNameFromLotLabel(label) {
     const text = String(label || "")
       .replace(/\s+/g, " ")
       .trim();
     if (!text || /^no\s*name$/i.test(text)) return "";
-    // "LAST, FIRST" → LAST
     if (text.includes(",")) {
       const head = text.split(",")[0].trim();
       if (head) return head;
@@ -43,21 +44,16 @@
     return names;
   }
 
-  /** Same as Plasma widget: shop person ids are lowercase slugs. */
   function normalizePerson(person) {
     return String(person || "")
       .trim()
       .toLowerCase();
   }
 
-  /**
-   * Map shop widget API error codes to desk-facing copy.
-   * Shop returns lowercase codes like "unauthorized" — never show those raw.
-   */
   function friendlyWidgetError(code, status) {
     const key = String(code || "").trim().toLowerCase();
     if (key === "unauthorized" || status === 401) {
-      return "Wrong person or desk PIN. Use the same shop unlock name (lowercase, e.g. logan), then enter your desk PIN in this popup.";
+      return "Desk PIN rejected (or person not found). Pick a person from the list and use the desk/shop widget PIN — not another password.";
     }
     if (key === "locked" || status === 429) {
       return "Too many PIN tries — wait a bit, then unlock again with your desk PIN.";
@@ -75,7 +71,6 @@
       return "Shop rate-limited this request. Wait a minute, then try again.";
     }
     if (key && !/^[a-z_]+$/.test(key)) {
-      // Unexpected human sentence from server — pass through.
       return String(code);
     }
     if (status) return `Shop unlock failed (${status}). Enter your desk PIN in the popup.`;
@@ -95,9 +90,7 @@
     if (!runtime?.storage?.local) return;
     try {
       await runtime.storage.local.set(obj);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   async function setPinBadge(needsPin) {
@@ -119,9 +112,7 @@
           await runtime.action.setTitle?.({ title: "Black Forest Desk" });
         }
       }
-    } catch {
-      // badge optional
-    }
+    } catch {}
   }
 
   async function shopBaseUrl() {
@@ -133,10 +124,6 @@
     return api.DEFAULT_SHOP_BASE || DEFAULT_SHOP;
   }
 
-  /**
-   * Background-only: Bearer session for widget API.
-   * Never logs PIN/token.
-   */
   async function createWidgetSession({ person, pin }) {
     const normalized = normalizePerson(person);
     const pinText = String(pin || "");
@@ -193,9 +180,6 @@
     return { needsAuth: true };
   }
 
-  /**
-   * Background-only lot fetch. Never calls book-today.
-   */
   async function resolveLotLastNames() {
     const cached = await storageGet(["lotLastNames", "lotLastNamesAt"]);
     const cachedNames = Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [];
@@ -271,18 +255,12 @@
     return { names, source: "lot" };
   }
 
-  /**
-   * Content-script friendly: ask the background, fall back to short cache.
-   * Returns an array of names (legacy). Prefer resolve via message for auth hints.
-   */
   async function loadLotLastNames() {
     if (runtime?.runtime?.sendMessage) {
       try {
         const response = await runtime.runtime.sendMessage({ type: "lot-last-names" });
         if (response && Array.isArray(response.names)) return response.names;
-      } catch {
-        // fall through to local cache
-      }
+      } catch {}
     }
     const cached = await storageGet(["lotLastNames", "lotLastNamesAt"]);
     const names = Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [];
@@ -293,6 +271,7 @@
 
   api.lastNameFromLotLabel = lastNameFromLotLabel;
   api.lotLabelsToLastNames = lotLabelsToLastNames;
+  api.DESK_PEOPLE = DESK_PEOPLE;
   api.normalizePerson = normalizePerson;
   api.friendlyWidgetError = friendlyWidgetError;
   api.createWidgetSession = createWidgetSession;
