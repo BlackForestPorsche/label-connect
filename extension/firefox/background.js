@@ -64,7 +64,16 @@
       data = null;
     }
     if (!response.ok) {
-      return { error: (data && data.error) || `Labels returned ${response.status}.` };
+      const code = data && data.error;
+      if (response.status === 401 || response.status === 403) {
+        // Local Labels /api/print-ro has no shop PIN — this is almost always a misconfigured
+        // bridge/proxy. Do not echo cryptic "unauthorized".
+        return {
+          error:
+            "Labels rejected the print request. Confirm Labels is running at 127.0.0.1:8080 (Create RO does not use the desk PIN).",
+        };
+      }
+      return { error: code || `Labels returned ${response.status}.` };
     }
     return data || { ok: true };
   }

@@ -10,6 +10,8 @@
   const runtime = typeof browser !== "undefined" ? browser : typeof chrome !== "undefined" ? chrome : null;
   const DEFAULT_SHOP = "https://shop.blackforestautomotive.com";
   const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+  const PERSON_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+  const PIN_RE = /^\d{4,12}$/;
 
   function lastNameFromLotLabel(label) {
     const text = String(label || "")
@@ -41,6 +43,45 @@
     return names;
   }
 
+  /** Same as Plasma widget: shop person ids are lowercase slugs. */
+  function normalizePerson(person) {
+    return String(person || "")
+      .trim()
+      .toLowerCase();
+  }
+
+  /**
+   * Map shop widget API error codes to desk-facing copy.
+   * Shop returns lowercase codes like "unauthorized" — never show those raw.
+   */
+  function friendlyWidgetError(code, status) {
+    const key = String(code || "").trim().toLowerCase();
+    if (key === "unauthorized" || status === 401) {
+      return "Wrong person or desk PIN. Use the same shop unlock name (lowercase, e.g. logan), then enter your desk PIN in this popup.";
+    }
+    if (key === "locked" || status === 429) {
+      return "Too many PIN tries — wait a bit, then unlock again with your desk PIN.";
+    }
+    if (key === "pin_change_required") {
+      return "This person must set a PIN on the shop site first, then unlock here.";
+    }
+    if (key === "https_required") {
+      return "Shop widget login needs HTTPS. Check shop.blackforestautomotive.com.";
+    }
+    if (key === "bad_request") {
+      return "Enter a valid shop person (lowercase letters) and a 4–12 digit desk PIN.";
+    }
+    if (key === "rate_limited") {
+      return "Shop rate-limited this request. Wait a minute, then try again.";
+    }
+    if (key && !/^[a-z_]+$/.test(key)) {
+      // Unexpected human sentence from server — pass through.
+      return String(code);
+    }
+    if (status) return `Shop unlock failed (${status}). Enter your desk PIN in the popup.`;
+    return "Could not unlock. Enter your desk PIN in the Black Forest Desk popup.";
+  }
+
   async function storageGet(keys) {
     if (!runtime?.storage?.local) return {};
     try {
@@ -59,6 +100,30 @@
     }
   }
 
+  async function setPinBadge(needsPin) {
+    if (!runtime?.action?.setBadgeText) return;
+    try {
+      if (needsPin) {
+        await runtime.action.setBadgeText({ text: "PIN" });
+        await runtime.action.setBadgeBackgroundColor?.({ color: "#7a1f1f" });
+        await runtime.action.setTitle?.({
+          title: "Black Forest Desk — enter desk PIN to unlock lot names",
+        });
+      } else {
+        const stored = await storageGet(["deskUpdateAvailable"]);
+        if (stored.deskUpdateAvailable?.version) {
+          await runtime.action.setBadgeText({ text: "↑" });
+          await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+        } else {
+          await runtime.action.setBadgeText({ text: "" });
+          await runtime.action.setTitle?.({ title: "Black Forest Desk" });
+        }
+      }
+    } catch {
+      // badge optional
+    }
+  }
+
   async function shopBaseUrl() {
     const stored = await storageGet(["shopBaseUrl"]);
     const value = stored.shopBaseUrl;
@@ -73,16 +138,30 @@
    * Never logs PIN/token.
    */
   async function createWidgetSession({ person, pin }) {
+    const normalized = normalizePerson(person);
+    const pinText = String(pin || "");
+    if (!PERSON_ID_RE.test(normalized)) {
+      return {
+        error: "Enter a valid shop person (lowercase, same as unlock — e.g. logan).",
+      };
+    }
+    if (!PIN_RE.test(pinText)) {
+      return { error: "Desk PIN must be 4–12 digits (same PIN as the shop / Plasma widget)." };
+    }
+
     const base = await shopBaseUrl();
     let response;
     try {
       response = await fetch(`${base}/api/widget/session`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ person, pin }),
+        body: JSON.stringify({ person: normalized, pin: pinText }),
       });
     } catch {
-      return { error: "Shop widget session unreachable." };
+      return {
+        error:
+          "Could not reach the shop widget API. Check the network, then enter your desk PIN again.",
+      };
     }
     let data = null;
     try {
@@ -91,17 +170,19 @@
       data = null;
     }
     if (!response.ok) {
-      return { error: (data && data.error) || `Session failed (${response.status}).` };
+      return { error: friendlyWidgetError(data && data.error, response.status) };
     }
     const token = data?.token || data?.accessToken || data?.bearer;
-    if (!token) return { error: "Session response missing token." };
-    const ttlMs = 8 * 60 * 60 * 1000;
+    if (!token) return { error: "Shop unlock worked but returned no token. Try again." };
+    const parsedExpiry = data?.expiresAt ? Date.parse(data.expiresAt) : NaN;
+    const ttlMs = Number.isFinite(parsedExpiry) ? Math.max(parsedExpiry - Date.now(), 60_000) : 8 * 60 * 60 * 1000;
     await storageSet({
       shopWidgetToken: token,
       shopWidgetTokenExpiresAt: Date.now() + ttlMs,
-      shopPerson: String(person || "").trim(),
+      shopPerson: normalized,
     });
-    return { ok: true };
+    await setPinBadge(false);
+    return { ok: true, person: normalized };
   }
 
   async function ensureWidgetToken() {
@@ -118,14 +199,15 @@
   async function resolveLotLastNames() {
     const cached = await storageGet(["lotLastNames", "lotLastNamesAt"]);
     const cachedNames = Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [];
-    const cachedAt = Number(cached.lotLastNamesAt || 0);
     const auth = await ensureWidgetToken();
     if (auth.needsAuth) {
+      await setPinBadge(true);
       return {
         needsAuth: true,
         names: cachedNames,
         source: cachedNames.length ? "cache" : "auth",
-        message: "Unlock desk extension (person + PIN) in the popup.",
+        message:
+          "Enter your desk PIN in the Black Forest Desk popup (toolbar icon), then Refresh. Same person + PIN as the shop / Plasma widget.",
       };
     }
 
@@ -141,7 +223,7 @@
       });
     } catch {
       return {
-        error: "Lot view unreachable.",
+        error: "Lot view unreachable. Is the shop online?",
         names: cachedNames,
         source: cachedNames.length ? "cache" : "error",
       };
@@ -149,7 +231,23 @@
 
     if (response.status === 401 || response.status === 403) {
       await storageSet({ shopWidgetToken: "", shopWidgetTokenExpiresAt: 0 });
-      return { needsAuth: true, names: [], source: "auth", message: "PIN session expired — unlock again." };
+      await setPinBadge(true);
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      const code = data && data.error;
+      return {
+        needsAuth: true,
+        names: [],
+        source: "auth",
+        message:
+          code === "pin_change_required"
+            ? friendlyWidgetError(code, response.status)
+            : "Desk PIN session expired — open the Black Forest Desk popup and enter your desk PIN again.",
+      };
     }
 
     let data = null;
@@ -160,7 +258,7 @@
     }
     if (!response.ok) {
       return {
-        error: (data && data.error) || `Lot view failed (${response.status}).`,
+        error: friendlyWidgetError(data && data.error, response.status),
         names: cachedNames,
         source: cachedNames.length ? "cache" : "error",
       };
@@ -169,11 +267,13 @@
     const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
     const names = lotLabelsToLastNames(items);
     await storageSet({ lotLastNames: names, lotLastNamesAt: Date.now() });
+    await setPinBadge(false);
     return { names, source: "lot" };
   }
 
   /**
    * Content-script friendly: ask the background, fall back to short cache.
+   * Returns an array of names (legacy). Prefer resolve via message for auth hints.
    */
   async function loadLotLastNames() {
     if (runtime?.runtime?.sendMessage) {
@@ -193,6 +293,8 @@
 
   api.lastNameFromLotLabel = lastNameFromLotLabel;
   api.lotLabelsToLastNames = lotLabelsToLastNames;
+  api.normalizePerson = normalizePerson;
+  api.friendlyWidgetError = friendlyWidgetError;
   api.createWidgetSession = createWidgetSession;
   api.resolveLotLastNames = resolveLotLastNames;
   api.loadLotLastNames = loadLotLastNames;
