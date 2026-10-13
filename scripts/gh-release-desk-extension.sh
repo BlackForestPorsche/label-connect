@@ -2,6 +2,9 @@
 # Create or update the stable GitHub Release tag `desk-extension`
 # with Black.Forest.Desk.xpi + Black.Forest.Desk-chromium.zip.
 # Intended for Actions (GH_TOKEN / GITHUB_TOKEN) or a logged-in gh CLI.
+#
+# Concurrent uploads of the same asset name can still 422 even with --clobber;
+# we delete named assets first and retry once on name-already-exists.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
@@ -34,10 +37,36 @@ Latest: https://github.com/BlackForestPorsche/label-connect/releases/latest
 
 Install Firefox: about:addons → gear → Install Add-on From File → pick the XPI in your **normal** profile (never create a new profile).
 Chrome/Edge: unzip → Load unpacked.
+
+Unsigned XPI is expected until shop AMO credentials exist; GitHub Release is the desk update feed source.
 NOTES
 
-if gh release view "$TAG" >/dev/null 2>&1; then
+delete_named_assets() {
+  # Best-effort: remove colliding asset names before upload.
+  local name asset_id
+  for name in "Black.Forest.Desk.xpi" "Black.Forest.Desk-chromium.zip"; do
+    asset_id="$(
+      gh api "repos/BlackForestPorsche/label-connect/releases/tags/${TAG}" \
+        --jq ".assets[] | select(.name==\"${name}\") | .id" 2>/dev/null || true
+    )"
+    if [[ -n "${asset_id}" ]]; then
+      gh api -X DELETE "repos/BlackForestPorsche/label-connect/releases/assets/${asset_id}" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+upload_assets() {
   gh release upload "$TAG" "$XPI" "$CHROME" --clobber
+}
+
+if gh release view "$TAG" >/dev/null 2>&1; then
+  delete_named_assets
+  if ! upload_assets; then
+    echo "Upload failed; deleting assets and retrying once…" >&2
+    sleep 2
+    delete_named_assets
+    upload_assets
+  fi
   gh release edit "$TAG" \
     --title "Black Forest Desk v${VER}" \
     --notes-file "$NOTES_FILE" \
