@@ -1,18 +1,48 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parsePpd, mediaBySku, safePageKey, prefersTurn, FALLBACK_MEDIA } from "../shared/media.mjs";
+import {
+  parsePpd,
+  mediaBySku,
+  safePageKey,
+  prefersTurn,
+  FALLBACK_MEDIA,
+  pageSafeRect,
+  viewSafeRect,
+  DEFAULT_SAFE_PT,
+} from "../shared/media.mjs";
 import { parseStatus, parseSkuDump } from "../shared/status.mjs";
 import { PDFDocument } from "pdf-lib";
 import { printArgs, pngToPdf } from "../shared/print.mjs";
 import { code128 } from "../shared/code128.mjs";
 
 test("ppd page size becomes a CUPS key", () => {
-  const text = '*PageSize w79h252/30252 Address: "<</PageSize[79 252]/ImagingBBox null>>setpagedevice"';
+  const text = [
+    '*PageSize w79h252/30252 Address: "<</PageSize[79 252]/ImagingBBox null>>setpagedevice"',
+    '*ImageableArea w79h252/30252 Address: "4.32 4.32 76.08 235.44"',
+  ].join("\n");
   const media = parsePpd(text);
   assert.equal(media[0].key, "w79h252");
   assert.equal(media[0].sku, "30252");
   assert.equal(media[0].widthPt, 79);
   assert.equal(media[0].heightPt, 252);
+  assert.deepEqual(media[0].imageable, [4.32, 4.32, 76.08, 235.44]);
+});
+
+test("30252 safe zone matches PPD ImageableArea", () => {
+  const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 0.02, `${actual} !~ ${expected}`);
+  const media = mediaBySku(FALLBACK_MEDIA, "30252");
+  const page = pageSafeRect(media);
+  near(page.x, 4.32);
+  near(page.y, 16.56);
+  near(page.w, 71.76);
+  near(page.h, 231.12);
+
+  const view = viewSafeRect(media, true);
+  near(view.x, 16.56);
+  near(view.y, 2.92);
+  near(view.w, 231.12);
+  near(view.h, 71.76);
+  assert.ok(DEFAULT_SAFE_PT >= 4 && DEFAULT_SAFE_PT <= 6);
 });
 
 test("sku from the printer picks the address roll", () => {
