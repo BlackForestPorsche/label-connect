@@ -5,7 +5,7 @@
   "description": "AllData Create R/O → Labels print, plus SSF checkout On-the-Lot last-name helper.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "blackforest-desk@blackforestporsche",
+      "id": "black-forest-desk@blackforestautomotive.com",
       "strict_min_version": "109.0"
     }
   },
@@ -19,7 +19,11 @@
     "http://localhost/*"
   ],
   "background": {
-    "scripts": ["config.js", "lot-names.js", "background.js"]
+    "scripts": ["background.js"]
+  },
+  "action": {
+    "default_title": "Black Forest Desk",
+    "default_popup": "popup.html"
   },
   "content_scripts": [
     {
@@ -35,8 +39,5 @@
       "js": ["config.js", "toast.js", "lot-names.js", "content-ssf.js"],
       "run_at": "document_idle"
     }
-  ],
-  "action": {
-    "default_title": "Black Forest Desk"
-  }
+  ]
 }
