@@ -16,6 +16,32 @@ test("extractLastName takes the final token", () => {
   assert.equal(extractLastName("Single"), "Single");
 });
 
+test("extractLastName strips first initial forms", () => {
+  assert.equal(extractLastName("J. Owner"), "Owner");
+  assert.equal(extractLastName("J Owner"), "Owner");
+  assert.equal(extractLastName("J.Owner"), "Owner");
+  assert.equal(extractLastName("Owner, J"), "Owner");
+  assert.equal(extractLastName("Owner, J."), "Owner");
+  assert.equal(extractLastName("Owner, Ada"), "Owner");
+  assert.equal(extractLastName("Abernathy"), "Abernathy");
+});
+
+test("normalize strips first initial from lastName field", () => {
+  const result = normalizeRoPayload({
+    lastName: "J. Owner",
+    model: "Macan",
+    event: "create-ro",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.fields.lastName, "Owner");
+});
+
+test("ro label lines never include roNumber", () => {
+  const lines = roLabelLines({ lastName: "Owner", model: "Macan", roNumber: "J001094" });
+  assert.deepEqual(lines, ["Owner", "Macan"]);
+  assert.ok(!lines.some((line) => /J001094|RO/i.test(line)));
+});
+
 test("normalize accepts create-ro with lastName + model", () => {
   const result = normalizeRoPayload({
     ro: "J001094",
