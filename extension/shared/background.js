@@ -1,11 +1,21 @@
-/* global chrome, browser */
+/* global chrome, browser, AllDataRoLabels */
 /**
- * Extension service worker / background: POST Create RO payloads to local Labels.
- * Page JS never talks to 127.0.0.1 directly (avoids CORS / mixed-content issues).
+ * Black Forest desk extension background:
+ * - AllData Create RO → POST local Labels /api/print-ro
+ * - SSF checkout → resolve On the Lot last names for PO/RO dropdown
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
   const DEFAULT_BASE = "http://127.0.0.1:8080";
+
+  // Chromium MV3 service worker: pull shared helpers.
+  if (typeof importScripts === "function") {
+    try {
+      importScripts("config.js", "lot-names.js");
+    } catch {
+      // Firefox loads scripts via manifest background.scripts instead.
+    }
+  }
 
   async function labelsBaseUrl() {
     try {
@@ -56,8 +66,20 @@
   }
 
   runtime.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (!message || message.type !== "print-ro") return false;
-    printRo(message.payload).then(sendResponse);
-    return true;
+    if (!message || typeof message !== "object") return false;
+    if (message.type === "print-ro") {
+      printRo(message.payload).then(sendResponse);
+      return true;
+    }
+    if (message.type === "lot-last-names") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.resolveLotLastNames) {
+        sendResponse({ names: [], source: "error", message: "Lot helper missing." });
+        return false;
+      }
+      api.resolveLotLastNames().then(sendResponse);
+      return true;
+    }
+    return false;
   });
 })();
