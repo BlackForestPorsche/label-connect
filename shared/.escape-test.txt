@@ -1,1 +1,2 @@
-line: /^[A-Za-z]\u005c.?\u005cs+/
+regex: /^[A-Za-z]\.?\s+/
+plain: \s and \/?o
