@@ -206,6 +206,21 @@
     return path;
   }
 
+  function onPointer(event) {
+    const path = eventPath(event);
+    for (const node of path) {
+      if (!node || node.nodeType !== 1) continue;
+      if (typeof api.isForbiddenControl === "function" && api.isForbiddenControl(node)) {
+        disarm();
+        return;
+      }
+      if (typeof api.isCreateControl === "function" && api.isCreateControl(node)) {
+        armFromCreate();
+        return;
+      }
+    }
+  }
+
   document.addEventListener("click", onPointer, true);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
