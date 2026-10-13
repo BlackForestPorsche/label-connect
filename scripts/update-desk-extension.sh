@@ -37,5 +37,5 @@ bash "$ROOT/scripts/install-desk-extension-firefox.sh" --quiet
 mkdir -p "$ROOT/extension/chromium"
 printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) synced" >"$ROOT/extension/chromium/.desk-synced"
 
-VER="$(python3 -c 'import json; print(json.load(open("'$ROOT'/extension/version.json"))["version"])' 2>/dev/null || echo '?')"
+VER="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/extension/version.json"))["version"])' 2>/dev/null || echo '?')"
 notify "Black Forest Desk updated" "v${VER} — restart Firefox; Chromium reload unpacked if needed."
