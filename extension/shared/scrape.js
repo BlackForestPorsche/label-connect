@@ -93,7 +93,7 @@
   }
 
   function labeledValue(doc, labelRe) {
-    const nodes = doc.querySelectorAll("label, span, div, th, dt, strong, b");
+    const nodes = collectMatching(doc, "label, span, div, th, dt, strong, b");
     for (const node of nodes) {
       const label = visibleText(node);
       if (!label || !labelRe.test(label)) continue;
@@ -140,7 +140,7 @@
   }
 
   function findInputByHint(doc, hintRe) {
-    const inputs = doc.querySelectorAll("input, select, textarea");
+    const inputs = collectMatching(doc, "input, select, textarea");
     for (const input of inputs) {
       const hint = controlLabel(input);
       if (/vin/i.test(hint)) continue;
@@ -246,8 +246,29 @@
     );
   }
 
+  const CONTROL_SELECTOR =
+    "button, a, [role='button'], input[type='button'], input[type='submit']";
+
+  /** Light + open shadow roots (Create often lives in a web component). */
+  function collectMatching(root, selector, out = []) {
+    if (!root) return out;
+    if (root.querySelectorAll) {
+      try {
+        out.push(...root.querySelectorAll(selector));
+      } catch {
+        /* ignore bad selector roots */
+      }
+    }
+    const walkRoot = root.querySelectorAll ? root : null;
+    const all = walkRoot ? walkRoot.querySelectorAll("*") : [];
+    for (const el of all) {
+      if (el.shadowRoot) collectMatching(el.shadowRoot, selector, out);
+    }
+    return out;
+  }
+
   function createControlPresent(doc = document) {
-    const nodes = doc.querySelectorAll("button, a, [role='button'], input[type='button'], input[type='submit']");
+    const nodes = collectMatching(doc, CONTROL_SELECTOR);
     for (const node of nodes) {
       if (isCreateControl(node)) return true;
     }
@@ -255,12 +276,103 @@
   }
 
   function updateControlPresent(doc = document) {
-    const nodes = doc.querySelectorAll("button, a, [role='button'], input[type='button'], input[type='submit']");
+    const nodes = collectMatching(doc, CONTROL_SELECTOR);
     for (const node of nodes) {
       const label = controlLabel(node);
       if (label && api.UPDATE_LABEL_RE && api.UPDATE_LABEL_RE.test(label)) return true;
     }
     return false;
+  }
+
+  function isControlDisabled(el) {
+    if (!el) return false;
+    if (el.disabled === true) return true;
+    const ariaDisabled = el.getAttribute?.("aria-disabled");
+    if (ariaDisabled === "true") return true;
+    const ariaBusy = el.getAttribute?.("aria-busy");
+    if (ariaBusy === "true") return true;
+    const cls = String(el.className || "");
+    if (/\b(disabled|is-disabled|btn-disabled)\b/i.test(cls)) return true;
+    return false;
+  }
+
+  /**
+   * State of the specific Create control that was clicked (preferred over a
+   * whole-document Create scan — menus can keep another Create visible).
+   */
+  function inspectArmedCreateControl(el) {
+    if (!el) return { gone: false, disabled: false, relabeled: false };
+    // Prefer isConnected — Node.contains() does not pierce shadow roots, and
+    // Create often lives inside a web component.
+    if (typeof el.isConnected === "boolean" && !el.isConnected) {
+      return { gone: true, disabled: false, relabeled: false };
+    }
+    const disabled = isControlDisabled(el);
+    const stillCreate = isCreateControl(el);
+    if (!stillCreate && controlLabel(el)) {
+      return { gone: false, disabled, relabeled: true };
+    }
+    return { gone: false, disabled, relabeled: false };
+  }
+
+  /**
+   * Generic success copy in alerts / live regions / dialogs — no AllData-only
+   * class names (we have no live HTML sample). Fail closed on vague "ok" text.
+   */
+  function pageShowsCreateSuccess(doc = document) {
+    const SUCCESS_RE =
+      /(?:repair\s*order|r\s*\/?\s*o)\s+(?:was\s+)?(?:created|saved|added)|(?:created|saved|added)\s+(?:repair\s*order|r\s*\/?\s*o)|successfully\s+created|create(?:d)?\s+successful/i;
+    const nodes = collectMatching(
+      doc,
+      "[role='alert'], [role='status'], [role='dialog'], [aria-live], dialog, .toast, .Toast, .notification, .alert, .Alert",
+    );
+    for (const node of nodes) {
+      const text = visibleText(node);
+      if (text && SUCCESS_RE.test(text)) return true;
+    }
+    // Short body scan near the top for SPA banners that are not role=alert.
+    const body = visibleText(doc.body).slice(0, 4000);
+    return Boolean(body && SUCCESS_RE.test(body));
+  }
+
+  /**
+   * Pure success gate used by content.js (unit-tested).
+   * Prefer multiple weak signals over one brittle selector.
+   */
+  function evaluateCreateSuccess(state) {
+    const scraped = state.scraped || {};
+    const hasFields = Boolean(scraped.lastName && scraped.model);
+    const armedEl = state.armedCreateEl;
+    const el = inspectArmedCreateControl(armedEl);
+    const createStillThere = Boolean(state.createStillThere);
+    const updateThere = Boolean(state.updateThere);
+    const armedHadCreate = Boolean(state.armedHadCreate);
+    const armedHadUpdate = Boolean(state.armedHadUpdate);
+    const armedBaselineRo = String(state.armedBaselineRo || "").trim();
+    const scrapedRo = String(scraped.roNumber || "").trim();
+    const roChanged = Boolean(scrapedRo && scrapedRo !== armedBaselineRo);
+    const armedAt = Number(state.armedAt) || 0;
+    const now = Number(state.now) || Date.now();
+    const settled = now - armedAt > 400;
+    const pageSuccess = Boolean(state.pageSuccess);
+
+    const createGone = (armedHadCreate && !createStillThere) || el.gone || el.relabeled;
+    const createDisabled = el.disabled;
+    // Update appearing is only meaningful when Update was NOT already on screen
+    // (open RO already shows Update — prompts must not alone confirm a new Create).
+    const updateAppeared = !armedHadUpdate && updateThere;
+
+    if (createGone && hasFields) return { confirmed: true, reason: "create-gone" };
+    if (createDisabled && hasFields && settled) return { confirmed: true, reason: "create-disabled" };
+    if (updateAppeared && hasFields) return { confirmed: true, reason: "update-appeared" };
+    if (roChanged && hasFields && settled) return { confirmed: true, reason: "ro-changed" };
+    if (pageSuccess && hasFields && settled) return { confirmed: true, reason: "page-success" };
+
+    // UI confirmed but fields missing — caller toasts scrape failure, not timeout.
+    if (createGone || (createDisabled && settled) || updateAppeared || (roChanged && settled) || (pageSuccess && settled)) {
+      return { confirmed: true, reason: "ui-only", missingFields: true };
+    }
+    return { confirmed: false, reason: "" };
   }
 
   api.scrapeWorkScreen = scrapeWorkScreen;
@@ -271,4 +383,8 @@
   api.createControlPresent = createControlPresent;
   api.updateControlPresent = updateControlPresent;
   api.controlLabel = controlLabel;
+  api.inspectArmedCreateControl = inspectArmedCreateControl;
+  api.pageShowsCreateSuccess = pageShowsCreateSuccess;
+  api.evaluateCreateSuccess = evaluateCreateSuccess;
+  api.collectMatching = collectMatching;
 })(globalThis);
