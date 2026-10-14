@@ -46,24 +46,77 @@
     applyBtn.hidden = !show;
   }
 
-  function paintUpdateState({ available, appliedVersion } = {}) {
+  function parseVersionParts(v) {
+    return String(v || "0")
+      .split(/[.+-]/)
+      .map((part) => Number.parseInt(part, 10) || 0);
+  }
+
+  function isNewerVersion(remote, local) {
+    const a = parseVersionParts(remote);
+    const b = parseVersionParts(local);
+    const n = Math.max(a.length, b.length);
+    for (let i = 0; i < n; i += 1) {
+      const x = a[i] || 0;
+      const y = b[i] || 0;
+      if (x > y) return true;
+      if (x < y) return false;
+    }
+    return false;
+  }
+
+  function installedVersion() {
+    try {
+      return String(runtime.runtime.getManifest()?.version || "0");
+    } catch {
+      return "0";
+    }
+  }
+
+  function paintVersionLine({ staged } = {}) {
+    const installed = installedVersion();
+    if (staged?.version && isNewerVersion(staged.version, installed)) {
+      versionEl.textContent = `Installed ${installed} · Staged ${staged.version} (NOT applied)`;
+      return;
+    }
+    versionEl.textContent = `Installed ${installed}`;
+  }
+
+  function paintUpdateState({ available, appliedVersion, staged } = {}) {
+    const installed = installedVersion();
+    paintVersionLine({ staged });
     const version = available?.version;
-    if (!version) {
+    if (!version || !isNewerVersion(version, installed)) {
       showApply(false);
       setUpdate("Desk extension is up to date.", "ok");
+      if (version && !isNewerVersion(version, installed)) {
+        void runtime.storage.local.set({
+          deskUpdateAvailable: null,
+          deskUpdateAppliedVersion: null,
+          deskUpdateStaged: null,
+        });
+      }
       return;
     }
     if (appliedVersion && String(appliedVersion) === String(version)) {
       showApply(false);
-      setUpdate(`Update ${version} installed — Restart Firefox.`, "ok");
+      setUpdate(`Update ${version} downloading/applying — restart Firefox if Desk does not reload.`, "ok");
       return;
     }
     showApply(true);
+    if (available?.staged || staged?.version) {
+      const path = staged?.path || available?.path || `Black.Forest.Desk-${version}.xpi`;
+      setUpdate(
+        `Still Installed ${installed} — ${version} is staged, NOT installed. about:addons → gear → Install Add-on From File… → ${path}`,
+        "warn",
+      );
+      return;
+    }
     const hint =
       typeof available?.message === "string" && available.message.trim()
         ? available.message.trim()
-        : "Hub On your own → Install from File";
-    setUpdate(`Update ${version} ready — ${hint}`, "warn");
+        : "Update applies via Firefox signed feed, or Install from File";
+    setUpdate(`Update ${version} available (still Installed ${installed}) — ${hint}`, "warn");
   }
 
   function looksLikeApiCode(text) {
@@ -134,15 +187,15 @@
 
   async function restore() {
     try {
-      const manifest = runtime.runtime.getManifest();
-      versionEl.textContent = `Installed ${manifest.version}`;
       const stored = await runtime.storage.local.get([
         "shopPerson",
         "shopWidgetTokenExpiresAt",
         "shopWidgetTokenSource",
         "deskUpdateAvailable",
         "deskUpdateAppliedVersion",
+        "deskUpdateStaged",
       ]);
+      paintVersionLine({ staged: stored.deskUpdateStaged });
       fillPersonSelect(stored.shopPerson);
       if (stored.shopWidgetTokenExpiresAt && Number(stored.shopWidgetTokenExpiresAt) > Date.now()) {
         const src = stored.shopWidgetTokenSource;
@@ -163,16 +216,18 @@
           }
         }
       }
-      if (stored.deskUpdateAvailable?.version) {
+      if (stored.deskUpdateAvailable?.version || stored.deskUpdateStaged?.version) {
         paintUpdateState({
           available: stored.deskUpdateAvailable,
           appliedVersion: stored.deskUpdateAppliedVersion,
+          staged: stored.deskUpdateStaged,
         });
       } else {
         showApply(false);
       }
     } catch {
       fillPersonSelect("logan");
+      paintVersionLine({});
     }
   }
 
@@ -244,14 +299,15 @@
     try {
       const response = await runtime.runtime.sendMessage({ type: "check-update", force: true });
       const available = response?.available;
-      const stored = await runtime.storage.local.get(["deskUpdateAppliedVersion"]);
+      const stored = await runtime.storage.local.get(["deskUpdateAppliedVersion", "deskUpdateStaged"]);
       if (available?.version) {
         paintUpdateState({
           available,
           appliedVersion: stored.deskUpdateAppliedVersion,
+          staged: stored.deskUpdateStaged,
         });
       } else {
-        paintUpdateState({});
+        paintUpdateState({ staged: stored.deskUpdateStaged });
       }
     } catch {
       setUpdate("Update check failed.", "err");
@@ -268,10 +324,15 @@
       setUpdate("Updating…", "warn");
       try {
         const response = await runtime.runtime.sendMessage({ type: "apply-update" });
+        const staged = {
+          version: response?.version,
+          path: response?.signedXpiPath || response?.hubUploadPath,
+        };
         if (response?.mode === "firefox_update" && response?.ok) {
           showApply(false);
+          paintVersionLine({});
           setUpdate(
-            response.message || "Firefox is applying the signed update. Restart when prompted.",
+            response.message || "Firefox is applying the signed update. Desk will reload.",
             "ok",
           );
         } else if (
@@ -280,15 +341,18 @@
           response?.mode === "hub_upload" ||
           response?.error === "hub_signed_kept"
         ) {
-          // Signed feed / Install-from-File staging — success UX (not an error toast).
+          // Staged ≠ installed — warn (never green “done”).
+          paintVersionLine({ staged });
           setUpdate(
-            response?.message || "Signed update ready — about:addons → Install Add-on From File.",
-            "ok",
+            response?.message ||
+              `Still Installed ${installedVersion()} — staged update NOT applied. about:addons → Install Add-on From File.`,
+            "warn",
           );
           showApply(true);
         } else if (response?.ok && response?.applied !== false) {
           const version = response.version || "";
           showApply(false);
+          paintVersionLine({});
           setUpdate(
             version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox.",
             "ok",
