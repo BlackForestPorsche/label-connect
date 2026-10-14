@@ -29,6 +29,7 @@ jobs:
               "batch4-lot-shared",
               "batch5-lot-firefox",
               "batch6-lot-chromium",
+              "batch7-tests",
           ]
           for name in order:
               meta_path = root / f"{name}.meta.json"
