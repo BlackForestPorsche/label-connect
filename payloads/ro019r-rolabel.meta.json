@@ -1,0 +1,10 @@
+{
+  "prefix": "payloads/ro019r-rolabel.",
+  "parts": 2,
+  "md5": "7e1d6cda62f713afec3aaae18a3077a3",
+  "item_md5": "58b500e4db2c432b512f9fa0904acb0a",
+  "paths": [
+    "shared/ro-label.mjs"
+  ],
+  "message": "Desk + Labels 0.1.19: exact UTF-8 ro-label.mjs"
+}
