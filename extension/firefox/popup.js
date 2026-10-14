@@ -59,7 +59,11 @@
       return;
     }
     showApply(true);
-    setUpdate(`Update ${version} ready`, "warn");
+    const hint =
+      typeof available?.message === "string" && available.message.trim()
+        ? available.message.trim()
+        : "Hub On your own → Install from File";
+    setUpdate(`Update ${version} ready — ${hint}`, "warn");
   }
 
   function looksLikeApiCode(text) {
@@ -264,19 +268,26 @@
       setUpdate("Updating…", "warn");
       try {
         const response = await runtime.runtime.sendMessage({ type: "apply-update" });
-        if (response?.ok) {
+        if (response?.ok && response?.applied !== false && response?.mode !== "hub_upload") {
           const version = response.version || "";
           showApply(false);
           setUpdate(
             version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox.",
             "ok",
           );
+        } else if (response?.mode === "hub_upload" || response?.error === "hub_signed_kept") {
+          // Actionable Hub path — not a false "Updated" success.
+          setUpdate(response?.message || "Hub On your own → Install from File.", "warn");
+          showApply(true);
         } else {
           setUpdate(response?.message || "Update failed.", "err");
           showApply(true);
         }
       } catch {
-        setUpdate("Update failed — Labels may not be running.", "err");
+        setUpdate(
+          "Update failed — Labels may not be running. Hub On your own → Install from File.",
+          "err",
+        );
         showApply(true);
       } finally {
         applyBtn.disabled = false;
