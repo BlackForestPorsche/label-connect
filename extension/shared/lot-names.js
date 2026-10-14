@@ -1,1 +1,1 @@
-file:///tmp/lot0-content-only.txt
+$file:/tmp/lot0-content-only.txt
