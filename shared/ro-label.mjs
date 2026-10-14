@@ -5,6 +5,8 @@
  * Label layout (Create RO only):
  *   Whatcott - Boxster
  *   Out Mileage _____________
+ *
+ * Never license plate, account #, VIN, or first initial.
  */
 
 import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
@@ -21,7 +23,30 @@ const MAX_LEN = {
 /** Handwriting blank on line 2 — never filled from AllData. */
 export const OUT_MILEAGE_LINE = "Out Mileage _____________";
 
+/**
+ * Extra inset (pt) inside ImageableArea for Create RO PDFs.
+ * Bare PPD safe rect still clipped the top line on LabelWriter 550 — pad further.
+ */
+export const RO_LABEL_SAFE_INSET_PT = 8;
+
 const FORBIDDEN_EVENT_RE = /update|schedule|assign|new[\s_-]*r\/?o/i;
+
+const PORSCHE_MODELS = [
+  "911",
+  "718",
+  "Boxster",
+  "Cayman",
+  "Cayenne",
+  "Macan",
+  "Panamera",
+  "Taycan",
+  "Carrera",
+  "Targa",
+  "Turbo",
+  "GT3",
+  "GT4",
+  "GTS",
+];
 
 function clean(value, max) {
   const text = String(value ?? "")
@@ -45,6 +70,32 @@ export function isVinNoise(value) {
   return false;
 }
 
+function isKnownPorscheModel(value) {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  return PORSCHE_MODELS.some((model) => new RegExp(`^${model}$`, "i").test(text));
+}
+
+/**
+ * License plate / account # values — never print as lastName or model.
+ * Same heuristic as the Desk scrape (0.1.17+).
+ */
+export function isPlateOrAccountNoise(value) {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (/^\s*(license\s*plate|account\s*#?|acct\.?\s*#?)\s*:?\s*$/i.test(text)) return true;
+  if (/^(license\s*plate|account\s*#?|acct\.?\s*#?)\b/i.test(text)) return true;
+  if (isKnownPorscheModel(text)) return false;
+  const compact = text.replace(/[\s-]/g, "");
+  if (/^[A-Z]?\d{4,}$/i.test(compact)) return true;
+  if (/^(?=.*\d)[A-Z0-9]{5,8}$/i.test(compact)) return true;
+  return false;
+}
+
 /**
  * Customer last name only — never first name or first initial.
  * Handles "LAST, FIRST", "J. LAST", "J LAST", "J.LAST", "FIRST LAST",
@@ -54,7 +105,7 @@ export function isVinNoise(value) {
 export function extractLastName(fullName) {
   let text = clean(fullName, MAX_LEN.customerName);
   if (!text) return "";
-  if (isVinNoise(text)) return "";
+  if (isVinNoise(text) || isPlateOrAccountNoise(text)) return "";
   // "LAST, FIRST" / "LAST, F." → LAST
   if (text.includes(",")) {
     text = text.split(",")[0].trim();
@@ -72,19 +123,25 @@ export function extractLastName(fullName) {
     parts.pop();
   }
   const last = parts[parts.length - 1] || "";
-  if (isVinNoise(last) || /^vin:?$/i.test(last)) return "";
+  if (isVinNoise(last) || isPlateOrAccountNoise(last) || /^vin:?$/i.test(last)) return "";
+  if (/\d/.test(last)) return "";
   return last;
 }
 
-/** Drop VIN / empty junk; keep a short vehicle model token. */
+/** Drop VIN / plate / account / empty junk; keep a short vehicle model token. */
 export function cleanModel(value) {
   let model = clean(value, MAX_LEN.model);
   if (!model) return "";
-  if (isVinNoise(model)) return "";
+  if (isVinNoise(model) || isPlateOrAccountNoise(model)) return "";
   if (/^vin:?$/i.test(model)) return "";
   // Strip a leading "VIN:" if a scraper glued it onto the model field.
   model = model.replace(/^vin\s*:\s*/i, "").trim();
-  if (!model || isVinNoise(model)) return "";
+  if (!model || isVinNoise(model) || isPlateOrAccountNoise(model)) return "";
+  // Prefer a known Porsche model token when the scraper's string is messy.
+  for (const known of PORSCHE_MODELS) {
+    if (new RegExp(`\\b${known}\\b`, "i").test(model)) return known;
+  }
+  if (/\d/.test(model) && !isKnownPorscheModel(model)) return "";
   return model.slice(0, MAX_LEN.model);
 }
 
@@ -112,7 +169,7 @@ export function normalizeRoPayload(raw) {
     lastName = extractLastName(customerName);
   }
   lastName = clean(lastName, MAX_LEN.lastName);
-  if (isVinNoise(lastName)) lastName = "";
+  if (isVinNoise(lastName) || isPlateOrAccountNoise(lastName)) lastName = "";
 
   const model = cleanModel(raw.model);
   const roNumber = clean(raw.roNumber ?? raw.ro ?? raw.documentNumber, MAX_LEN.roNumber);
@@ -180,7 +237,8 @@ export function buildRoLabelDoc(fields, mediaList = FALLBACK_MEDIA) {
   const view = viewSize(media, turned);
   const safe = viewSafeRect(media, turned);
   const box = safe.w > 8 && safe.h > 6 ? safe : { x: 0, y: 0, w: view.widthPt, h: view.heightPt };
-  const pad = Math.max(2, Math.min(box.w, box.h) * 0.06);
+  // Extra inset beyond ImageableArea so the top line is not clipped on the 550.
+  const pad = Math.max(RO_LABEL_SAFE_INSET_PT, Math.min(box.w, box.h) * 0.1);
   const x0 = box.x + pad;
   const y0 = box.y + pad;
   const innerW = Math.max(8, box.w - pad * 2);
@@ -258,7 +316,14 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
   // Layout in turned view space (matches buildRoLabelDoc), then map each
   // baseline into page space. Editor CW: view(x,y) = (pageY, pageW - pageX).
   // Inverse: page(x,y) = (pageW - viewY, viewX).
-  const box = viewSafe.w > 8 && viewSafe.h > 6 ? viewSafe : { x: 0, y: 0, w: media.heightPt, h: media.widthPt };
+  const outer = viewSafe.w > 8 && viewSafe.h > 6 ? viewSafe : { x: 0, y: 0, w: media.heightPt, h: media.widthPt };
+  const pad = Math.max(RO_LABEL_SAFE_INSET_PT, Math.min(outer.w, outer.h) * 0.1);
+  const box = {
+    x: outer.x + pad,
+    y: outer.y + pad,
+    w: Math.max(8, outer.w - pad * 2),
+    h: Math.max(6, outer.h - pad * 2),
+  };
   const rowH = box.h / lines.length;
 
   for (let i = 0; i < lines.length; i += 1) {
