@@ -33,7 +33,18 @@ jobs:
           for fp in sorted(glob.glob("payloads/desk-018-*.json")):
               payload = json.loads(pathlib.Path(fp).read_text())
               changed = []
-              if "items" in payload:
+              if "sed" in payload:
+                  for op in payload.get("sed") or []:
+                      path = pathlib.Path(op["path"])
+                      text = path.read_text()
+                      count = text.count(op["old"])
+                      expect = op.get("count", count)
+                      if count != expect:
+                          raise AssertionError(f"{fp} {op['path']} count {count} != {expect}")
+                      path.write_text(text.replace(op["old"], op["new"]))
+                      changed.append(op["path"])
+                      print("sed", op["path"], count)
+              elif "items" in payload:
                   for item in payload["items"]:
                       raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
                       assert hashlib.md5(raw).hexdigest() == item["md5"], item["path"]
@@ -56,7 +67,6 @@ jobs:
                   continue
               subprocess.check_call(["git", "commit", "-m", payload.get("message") or f"Apply {fp}"])
               print("committed", fp)
-          # Push any new commits
           r = subprocess.run(["git", "status", "-sb"], capture_output=True, text=True)
           print(r.stdout)
           subprocess.check_call(["git", "push", "origin", "HEAD"])
