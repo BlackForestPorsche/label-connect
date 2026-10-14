@@ -359,7 +359,7 @@
     const createGone = (armedHadCreate && !createStillThere) || el.gone || el.relabeled;
     const createDisabled = el.disabled;
     // Update appearing is only meaningful when Update was NOT already on screen
-    // (open RO already shows Update — prompts must not alone confirm a new Create).
+    // (open RO already shows Update — that must not alone confirm a new Create).
     const updateAppeared = !armedHadUpdate && updateThere;
 
     if (createGone && hasFields) return { confirmed: true, reason: "create-gone" };
