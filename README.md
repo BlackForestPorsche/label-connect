@@ -2,13 +2,17 @@
 
 ## Merge into Black Forest Tools (in progress)
 
-From **shop-desktop 1.5.8+**, Black Forest Tools **owns** the Labels HTTP server on `:8080` (vendors this tree under `labels/`, spawns `node server.mjs` when nothing is already listening — including adopting a leftover `labels.service`). Desk Create RO keeps calling `http://127.0.0.1:8080/api/print-ro`.
+From **shop-desktop 1.5.9+**, Black Forest Tools **owns** the Labels HTTP server on `:8080` (vendors this tree under `labels/`, spawns `node server.mjs` when nothing is already listening — including adopting a leftover `labels.service`). Desk Create RO keeps calling `http://127.0.0.1:8080/api/print-ro`.
 
 - Prefer Tools autostart over the separate Labels desktop launcher day-to-day.
 - Tools **adopts** an already-healthy `:8080` instead of double-binding.
 - This repo remains source of truth for print code + Desk extension; Tools re-syncs with `npm run sync-labels`.
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
+
+**0.1.18** - Desk popup **Update** uses Firefox `requestUpdateCheck` + signed `updates.json` XPI staging (Install from File). Labels `POST /api/update-desk-extension` stages the signed feed on Desktop with success UX when Hub/AMO signed is kept — no false failure toast. Bump required (0.1.17 already AMO-signed).
+
+**0.1.17** - CI AMO-signed self-dist on `desk-extension` release (`WEB_EXT_*`); `updates.json` points at Mozilla-signed XPI.
 
 **0.1.15** - Black Forest Desk: Create R/O success confirm fixed (armed Create control, shadow DOM, disabled/busy, success banner, arm-time field fallback). Version skips **0.1.14** (Update button draft). Label layout unchanged.
 
