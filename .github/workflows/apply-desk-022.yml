@@ -3,7 +3,7 @@ on:
   push:
     branches: [cursor/desk-022-apply-staged-23bb]
     paths:
-      - "payloads/desk-022-*.json"
+      - "payloads/desk-022-*"
       - ".github/workflows/apply-desk-022.yml"
   workflow_dispatch:
 jobs:
@@ -17,9 +17,26 @@ jobs:
         run: |
           set -euo pipefail
           python3 <<'PY'
-          import gzip, base64, json, hashlib, pathlib, glob, subprocess
+          import gzip, base64, json, hashlib, pathlib, glob, subprocess, re
           subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
           subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+
+          # Assemble split payloads: foo.a.txt + foo.b.txt (+ foo.c.txt...) -> foo.json
+          for a in sorted(glob.glob("payloads/desk-022-*.a.txt")):
+              stem = a[:-6]  # strip .a.txt
+              ordered = []
+              for letter in "abcdefghijklmnopqrstuvwxyz":
+                  p = f"{stem}.{letter}.txt"
+                  if pathlib.Path(p).exists():
+                      ordered.append(p)
+                  else:
+                      break
+              if not ordered:
+                  continue
+              text = "".join(pathlib.Path(p).read_text() for p in ordered)
+              out = pathlib.Path(stem + ".json")
+              out.write_text(text)
+              print("assembled", out, "from", ordered, "len", len(text))
 
           def write_bytes(path_str, raw):
               path = pathlib.Path(path_str)
