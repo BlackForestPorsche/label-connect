@@ -1,0 +1,63 @@
+name: apply-desk-026
+on:
+  push:
+    branches: [cursor/desk-tools-to-site-thrash-39db]
+    paths:
+      - "payloads/desk-026/**"
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode desk-026 payloads and commit
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import gzip, base64, json, hashlib, pathlib, subprocess
+
+          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+
+          root = pathlib.Path("payloads/desk-026")
+          # Apply in batch order
+          order = [
+              "batch2-content-shop",
+              "batch3-background",
+              "batch4-lot-shared",
+              "batch5-lot-firefox",
+              "batch6-lot-chromium",
+          ]
+          for name in order:
+              meta_path = root / f"{name}.meta.json"
+              if not meta_path.exists():
+                  print("skip missing", name)
+                  continue
+              meta = json.loads(meta_path.read_text())
+              b64 = "".join((root / f"{name}.gz.b64.{i:02d}").read_text().strip() for i in range(meta["parts"]))
+              raw = gzip.decompress(base64.b64decode(b64))
+              digest = hashlib.md5(raw).hexdigest()
+              assert digest == meta["md5"], (name, digest, meta["md5"])
+              changed = []
+              for path_str in meta["paths"]:
+                  path = pathlib.Path(path_str)
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  if path.exists() and path.read_bytes() == raw:
+                      print("unchanged", path_str)
+                      continue
+                  path.write_bytes(raw)
+                  changed.append(path_str)
+                  print("wrote", path_str, len(raw))
+              if not changed:
+                  continue
+              subprocess.check_call(["git", "add", "--"] + changed)
+              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
+                  continue
+              subprocess.check_call(["git", "commit", "-m", meta["message"]])
+              print("committed", name)
+          subprocess.check_call(["git", "status", "-sb"])
+          subprocess.check_call(["git", "push", "origin", "HEAD"])
+          print("push done")
+          PY
