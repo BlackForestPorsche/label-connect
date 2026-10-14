@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Black Forest Desk",
-  "version": "0.1.17",
-  "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
+  "version": "0.1.18",
+  "description": "AllData Create R/O → Labels print, plus SSF checkout On-the-Lot last-name helper.",
   "browser_specific_settings": {
     "gecko": {
       "id": "black-forest-desk@blackforestautomotive.com",
@@ -33,7 +33,9 @@
     "http://127.0.0.1:8080/*",
     "http://127.0.0.1/*",
     "http://localhost:8080/*",
-    "http://localhost/*"
+    "http://localhost/*",
+    "https://release-assets.githubusercontent.com/*",
+    "https://objects.githubusercontent.com/*"
   ],
   "background": {
     "scripts": [
