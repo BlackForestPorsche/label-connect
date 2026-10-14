@@ -111,8 +111,8 @@ For a one-shot debug load only:
 
 | Field | Source |
 | --- | --- |
-| Last name | “Last Name” / “Customer” field; last name only (strips `J.` / `LAST, F` / glued `LWhatcott` → `Whatcott` — never first initial on the label). Never VIN. |
-| Model | “Model” field; else Year/Make/Model line; else known Porsche model token on screen. Never VIN / `VIN:`. |
+| Last name | “Last Name” / “Customer” field; last name only (strips `J.` / `LAST, F` / glued `LWhatcott` → `Whatcott` — never first initial on the label). Never VIN, license plate, or account #. |
+| Model | “Model” field; else Year/Make/Model line; else known Porsche model token on screen. Never VIN / `VIN:`, license plate, or account #. |
 | RO number | Optional; AllData repair-order id for server idempotency only — **not printed** on the label |
 
 **Printed label (Create only):**
