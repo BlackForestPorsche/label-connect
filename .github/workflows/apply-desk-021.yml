@@ -12,13 +12,37 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Decode desk-021 payloads and commit
+      - name: Sed-fix payloads then decode gzip and commit targets
         run: |
           set -euo pipefail
           python3 <<'PY'
           import gzip, base64, json, hashlib, pathlib, glob, subprocess
           subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
           subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+
+          # 1) sed-fix payloads (tiny MCP-safe patches)
+          for fp in sorted(glob.glob("payloads/desk-021-sed*.json")):
+              payload = json.loads(pathlib.Path(fp).read_text())
+              changed = []
+              for op in payload.get("sed") or []:
+                  path = pathlib.Path(op["path"])
+                  text = path.read_text()
+                  count = text.count(op["old"])
+                  if count == 0:
+                      if op["new"] in text:
+                          print("sed already applied", op["path"])
+                          continue
+                      raise AssertionError(f"{fp} {op['path']} old not found")
+                  expect = op.get("count", count)
+                  if count != expect:
+                      raise AssertionError(f"{fp} {op['path']} count {count} != {expect}")
+                  path.write_text(text.replace(op["old"], op["new"]))
+                  changed.append(op["path"])
+                  print("sed", op["path"], count)
+              if changed:
+                  subprocess.check_call(["git", "add", "--"] + changed)
+                  if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
+                      subprocess.check_call(["git", "commit", "-m", payload.get("message") or f"Apply {fp}"])
 
           def write_bytes(path_str, raw):
               path = pathlib.Path(path_str)
@@ -30,11 +54,14 @@ jobs:
               print("wrote", path_str, len(raw))
               return True
 
+          # 2) decode gzip payloads (skip sed* and meta*)
           for fp in sorted(glob.glob("payloads/desk-021-*.json")):
-              text = pathlib.Path(fp).read_text()
-              # repair MCP transcription typos in gzipBase64 from initial push
-              text = text.replace("ecAtY8t", "ecMpY8t").replace("64Zyo2A7nDcSxDo", "CCZyo2A7nDcSxDo")
-              payload = json.loads(text)
+              if "sed" in pathlib.Path(fp).name or "meta" in pathlib.Path(fp).name:
+                  continue
+              payload = json.loads(pathlib.Path(fp).read_text())
+              if "gzipBase64" not in payload:
+                  print("skip", fp)
+                  continue
               raw = gzip.decompress(base64.b64decode(payload["gzipBase64"]))
               assert hashlib.md5(raw).hexdigest() == payload["md5"], fp
               changed = []
