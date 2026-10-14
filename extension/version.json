@@ -1,5 +1,5 @@
 {
-  "version": "0.1.18",
-  "message": "Tools unlock \u2192 Firefox shop website cookie (exchange). Hub On your own \u2192 Upload New Version, then Install Add-on From File (Hub-signed). Unsigned GitHub XPIs cannot auto-update a Hub-signed install.",
+  "version": "0.1.19",
+  "message": "Update says up to date when feed matches installed (no false Desk update failed). Hub On your own \u2192 Upload New Version, then about:addons \u2192 Install Add-on From File when a newer Hub build is needed.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
