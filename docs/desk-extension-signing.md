@@ -1,23 +1,40 @@
 # Black Forest Desk — Firefox signing & auto-update
 
-Temporary add-ons (`about:debugging`) **cannot** auto-update. Do **not** create a new Firefox profile. Do **not** ask Logan to create a personal Firefox Add-on Developer account — use the shop/org Hub add-on.
+Temporary add-ons (`about:debugging`) **cannot** auto-update. Do **not** create a new Firefox profile.
+
+Shop preference: **On your own** + `gecko.update_url` self-dist (GitHub Release `updates.json`). Path A (AMO-hosted “On this site”) remains available but is not the current desk default.
+
+**Never share a Mozilla password. Never paste AMO JWT issuer/secret into chat.** Use Developer Hub **API Keys** only, and store them as GitHub Actions secrets.
 
 ---
 
-## Three update paths (pick one durable)
+## If a JWT was pasted in chat
+
+Treat it as **compromised**:
+
+1. [Hub → API Keys](https://addons.mozilla.org/developers/addon/api/key/) → **revoke** the exposed credential.
+2. Create a **new** JWT pair.
+3. Add the new values only under GitHub → Settings → Secrets and variables → Actions (names below).
+4. Tell the team secrets are set — **do not paste** values again.
+
+---
+
+## Two durable update paths
 
 | Path | What it is | Durable auto-update? |
 | --- | --- | --- |
-| **A. AMO-hosted (preferred now)** | Developer Hub → **On this site** with `Black.Forest.Desk-<ver>-amo-hosted.xpi` (**no** `gecko.update_url`) | **Yes** — Firefox updates from AMO when you upload a newer version to the **same** add-on |
-| **B. Self-dist + GitHub `update_url`** | Main pack keeps `update_url` → release `updates.json` + versioned XPI; needs a **Mozilla-signed** install once | **Yes** — after signed Install from File (Hub “On your own” or CI `web-ext sign`) |
-| **C. Local script** | `bash scripts/update-desk-extension.sh` (also from `update-labels.sh`) | **No** — packs + optional unsigned sideload; **skips** when a Mozilla-signed Hub/AMO Desk is already in the default profile (avoids clobber → vanish-on-restart). Fallback / Dev Edition only; `--force-sideload` overrides |
+| **B. Self-dist + GitHub `update_url` (preferred)** | Main pack keeps `update_url` → release `updates.json` + versioned XPI; needs a **Mozilla-signed** install once | **Yes** — after signed Install from File (Hub “On your own” or CI `web-ext sign`) |
+| **A. AMO-hosted** | Developer Hub → **On this site** with `Black.Forest.Desk-<ver>-amo-hosted.xpi` (**no** `gecko.update_url`) | **Yes** — Firefox updates from AMO when you upload a newer version to the **same** add-on |
+| **C. Local script** | `bash scripts/update-desk-extension.sh` | **No** — packs + optional unsigned sideload; **skips** when a Mozilla-signed Hub/AMO Desk is already in the default profile |
 
-### Preferred for Logan (extensions approved)
+### Preferred (On your own)
 
-1. Pack or download **`Black.Forest.Desk-<ver>-amo-hosted.xpi`** from the `desk-extension` release (or `bash scripts/pack-desk-extension.sh` → `extension/dist/`).
-2. Hub → same **Black Forest Desk** add-on → **Upload New Version** → **On this site**.
-3. Install the Hub-signed build once on the normal profile; remove any Temporary Desk add-on.
-4. Later bumps: upload a higher version the same way — Firefox auto-updates. No `about:debugging`, no per-release desk script.
+1. Ship / download the **self-dist** XPI (`Black.Forest.Desk-<ver>.xpi` or `.zip` hub-upload) that **includes** `gecko.update_url` — not `*-amo-hosted.xpi`.
+2. Either:
+   - Hub → **Upload New Version** → **On your own**, then install the Hub-signed file once; or
+   - Set AMO JWT secrets (below) so CI signs on every main Desk publish.
+3. Install the **Mozilla-signed** XPI on the normal profile (`about:addons` → Install from File). Remove Temporary Desk add-ons.
+4. Later bumps: CI signed release + `updates.json`, or another Hub “On your own” upload with a **new** version number.
 
 ### Self-dist wiring (already on main)
 
@@ -26,24 +43,30 @@ Temporary add-ons (`about:debugging`) **cannot** auto-update. Do **not** create 
 - Release tag `desk-extension` holds `updates.json`, `Black.Forest.Desk.xpi`, `Black.Forest.Desk-<ver>.xpi`, `Black.Forest.Desk-<ver>-amo-hosted.xpi`, chromium zip.
 - Publish workflow: **main** only (+ `workflow_dispatch`). Feature-branch publish races fixed (PR #11).
 
-Stock Firefox will not Install-from-File or auto-update an **unsigned** GitHub XPI. Until org AMO JWT secrets exist in CI, use Hub signing (path A or Hub “On your own” for path B).
+Stock Firefox will not Install-from-File or auto-update an **unsigned** GitHub XPI. Until org AMO JWT secrets exist in CI, use Hub “On your own” for path B.
 
 ---
 
-## CI secrets (optional — self-dist signing)
+## CI secrets (required for auto Hub/API sign)
 
-Add **one** of these pairs on `BlackForestPorsche/label-connect` → Settings → Secrets and variables → Actions:
+Workflow: `.github/workflows/publish-desk-extension.yml`  
+Signing script: `scripts/sign-desk-extension.sh` (`web-ext sign --channel unlisted`)
+
+Add **one** of these pairs on  
+[Settings → Secrets and variables → Actions](https://github.com/BlackForestPorsche/label-connect/settings/secrets/actions):
 
 | Preferred | Equivalent |
 | --- | --- |
 | `WEB_EXT_API_KEY` | `AMO_JWT_ISSUER` |
 | `WEB_EXT_API_SECRET` | `AMO_JWT_SECRET` |
 
-Create the JWT pair under a **Black Forest / org** [Firefox Add-on Developer](https://addons.mozilla.org/developers/) account (shop infrastructure).
+Create the JWT under the shop/org [Firefox Add-on Developer API Keys](https://addons.mozilla.org/developers/addon/api/key/) page (same account that owns Black Forest Desk).
 
-When secrets are **missing**, `publish-desk-extension` stays **green**: packs unsigned XPI + `updates.json` (+ amo-hosted pack), prints a notice, skips `web-ext sign`. Prefer Hub upload of the amo-hosted XPI for stock Firefox.
+When secrets are **missing**, `publish-desk-extension` stays **green**: packs unsigned XPI + `updates.json` (+ amo-hosted pack), prints a notice, skips `web-ext sign`.
 
-When secrets are **present**, CI runs `scripts/sign-desk-extension.sh` (AMO **unlisted** channel) and publishes the signed artifact as `Black.Forest.Desk.xpi` (+ versioned copy) for path B.
+When secrets are **present**, CI signs (AMO **unlisted** / self-dist) and publishes the signed artifact as `Black.Forest.Desk.xpi` (+ versioned copy) for path B.
+
+Indirect check (no secret values): latest workflow run → step “Sign Firefox XPI” — notice “secrets missing” means not set; `signed=true` means working.
 
 ---
 
