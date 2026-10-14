@@ -55,9 +55,16 @@
         margin-top: 8px;
         background: #4a4538;
       }
+      button.accent {
+        margin-top: 8px;
+        background: #8a5a12;
+      }
       button:disabled {
         opacity: 0.55;
         cursor: default;
+      }
+      button[hidden] {
+        display: none;
       }
       #status,
       #update {
@@ -90,6 +97,7 @@
     <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4–12 digits" />
     <button id="unlock" class="secondary" type="button">Unlock with desk PIN</button>
     <button id="checkUpdate" class="secondary" type="button">Check for extension update</button>
+    <button id="applyUpdate" class="accent" type="button" hidden>Update</button>
     <div id="status" role="status"></div>
     <div id="update" role="status"></div>
     <div id="version" class="meta"></div>

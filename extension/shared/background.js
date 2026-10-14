@@ -70,8 +70,6 @@
     if (!response.ok) {
       const code = data && data.error;
       if (response.status === 401 || response.status === 403) {
-        // Local Labels /api/print-ro has no shop PIN — this is almost always a misconfigured
-        // bridge/proxy. Do not echo cryptic "unauthorized".
         return {
           error:
             "Labels rejected the print request. Confirm Labels is running at 127.0.0.1:8080 (Create RO does not use the desk PIN).",
@@ -125,15 +123,16 @@
         ? {
             version: remoteVersion,
             local,
-            message: remote.message || "Firefox signed installs auto-update from GitHub Releases; Chromium: reload Load unpacked or run update-desk-extension.sh.",
+            message: remote.message || "Use Update in the Desk popup (Labels applies it on this machine).",
             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
-      await runtime.storage.local.set({
+      const patch = {
         deskUpdateCheckedAt: Date.now(),
         deskUpdateAvailable: available,
-      });
-      // Preserve PIN / unlocked badge state; only force ↑ when an update is ready.
+      };
+      if (!available) patch.deskUpdateAppliedVersion = null;
+      await runtime.storage.local.set(patch);
       const api = globalThis.AllDataRoLabels;
       if (available && runtime.action?.setBadgeText) {
         await runtime.action.setBadgeText({ text: "↑" });
@@ -148,6 +147,68 @@
     } catch {
       return null;
     }
+  }
+
+  async function applyDeskUpdate() {
+    const base = await labelsBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/api/update-desk-extension`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: "{}",
+      });
+    } catch {
+      return {
+        ok: false,
+        error: "labels_unreachable",
+        message: "Labels isn’t running. Open Labels (or Black Forest Tools), then try Update again.",
+      };
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    if (!response.ok || !data?.ok) {
+      const code = data?.error || `http_${response.status}`;
+      if (response.status === 403 || code === "localhost_only") {
+        return { ok: false, error: code, message: "Desk update refused — Labels only accepts updates from this machine." };
+      }
+      return {
+        ok: false,
+        error: code,
+        message: data?.message || "Desk update failed.",
+      };
+    }
+    const version = String(data.version || "");
+    await runtime.storage.local.set({
+      deskUpdateAppliedVersion: version || true,
+      deskUpdateAvailable: version
+        ? {
+            version,
+            local: localVersion(),
+            message: "Restart Firefox to finish.",
+            applied: true,
+          }
+        : null,
+    });
+    if (runtime.action?.setBadgeText) {
+      await runtime.action.setBadgeText({ text: "↻" });
+      await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+      await runtime.action.setTitle?.({
+        title: version
+          ? `Black Forest Desk — v${version} ready; restart Firefox`
+          : "Black Forest Desk — restart Firefox to finish update",
+      });
+    }
+    return {
+      ok: true,
+      version,
+      restartRequired: true,
+      message: data.message || (version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox."),
+    };
   }
 
   function tryAutoUnlock(reason, force) {
@@ -170,7 +231,7 @@
       const api = globalThis.AllDataRoLabels;
       if (!api?.resolveLotLastNames) {
         sendResponse({ names: [], source: "error", message: "Lot helper missing." });
-        return false;
+      return false;
       }
       api.resolveLotLastNames().then(sendResponse);
       return true;
@@ -223,6 +284,10 @@
       checkForUpdate(Boolean(message.force)).then((available) => sendResponse({ available }));
       return true;
     }
+    if (message.type === "apply-update") {
+      applyDeskUpdate().then(sendResponse);
+      return true;
+    }
     if (message.type === "auto-unlock") {
       const api = globalThis.AllDataRoLabels;
       if (!api?.tryAutoUnlock) {
@@ -235,9 +300,7 @@
     return false;
   });
 
-  // Soft update check on worker start + daily-ish alarm when available.
   void checkForUpdate(false);
-  // Happy path: mint widget token without opening the popup / pressing Sync.
   tryAutoUnlock("startup", true);
 
   if (runtime.alarms?.create) {
@@ -249,22 +312,18 @@
         if (alarm?.name === AUTO_UNLOCK_ALARM) tryAutoUnlock("alarm", false);
       });
     } catch {
-      // alarms permission optional
     }
   }
 
-  // After idle / lock, retry from-gate + Tools when the user is back.
   if (runtime.idle?.onStateChanged?.addListener) {
     try {
       runtime.idle.onStateChanged.addListener((state) => {
         if (state === "active") tryAutoUnlock("idle-active", false);
       });
     } catch {
-      // idle permission optional
     }
   }
 
-  // Shop tab finished loading → from-gate (cookie present) then Tools fallback.
   if (runtime.tabs?.onUpdated?.addListener) {
     try {
       runtime.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
@@ -274,7 +333,6 @@
         tryAutoUnlock("shop-tab-complete", false);
       });
     } catch {
-      // tabs permission optional
     }
   }
 })();

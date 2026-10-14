@@ -8,6 +8,12 @@ import { sendPdfToQueue, sendToQueue } from "./shared/print.mjs";
 import { safePageKey } from "./shared/media.mjs";
 import { createRoPrintStore } from "./shared/ro-idempotency.mjs";
 import { normalizeRoPayload, planRoPrint, renderRoLabelPdf, roLabelLines } from "./shared/ro-label.mjs";
+import {
+  applyDeskExtensionUpdate,
+  isLocalClient,
+  readDeskVersion,
+  resolveLabelConnectRoot,
+} from "./shared/desk-update.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -142,6 +148,31 @@ const server = createServer(async (req, res) => {
       }
       const result = await exclusive(() => sendToQueue(png, { pageKey, widthPt, heightPt, copies }));
       send(res, 200, result);
+      return;
+    }
+    // Desk extension one-click update (localhost only — never expose shell to LAN).
+    if (req.method === "GET" && url.pathname === "/api/desk-extension") {
+      if (!isLocalClient(req)) {
+        send(res, 403, { error: "localhost_only", message: "Desk updates are only available from this machine." });
+        return;
+      }
+      const connectRoot = await resolveLabelConnectRoot(root);
+      const version = await readDeskVersion(connectRoot);
+      send(res, 200, {
+        ok: true,
+        version,
+        root: connectRoot,
+        updateEndpoint: "/api/update-desk-extension",
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/update-desk-extension") {
+      if (!isLocalClient(req)) {
+        send(res, 403, { error: "localhost_only", message: "Desk updates are only available from this machine." });
+        return;
+      }
+      const result = await exclusive(() => applyDeskExtensionUpdate(root));
+      send(res, result.ok ? 200 : 500, result);
       return;
     }
     // AllData Create RO → real LabelWriter print (last name + model only).
