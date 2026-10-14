@@ -1,5 +1,5 @@
 {
-  "version": "0.1.22",
-  "message": "Unlock sync: Sync Tools→website actually exchanges; site-lock quiet no longer re-locks Tools; website unlock POSTs to :8788. Hub On your own → Install from File.",
+  "version": "0.1.25",
+  "message": "Instant :8788 lock/unlock + fun on/off (~400ms). Locked /unlock never remints Tools. Fold with Update-apply into one Hub ship. Install from File.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
