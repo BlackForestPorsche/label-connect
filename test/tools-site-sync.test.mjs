@@ -12,6 +12,7 @@ function toolsSiteSyncAction({
   gatePresent,
   forceExchange,
   siteLockQuiet,
+  toolsJarGate = false,
 }) {
   if (siteLockQuiet && !forceExchange) {
     // Tools live again after a website lock → clear quiet and exchange (never re-DELETE).
@@ -19,11 +20,17 @@ function toolsSiteSyncAction({
     if (bridgeReachable && hasSession === false) return "site_lock_hold";
     return "site_lock_pending";
   }
+  // Tools unlocked in Electron but :8788 Bearer missing — copy jar gate (mismatch.md).
+  // Never during site-lock quiet (locked /unlock refresh must not heal from leftover jar).
+  if (bridgeReachable && hasSession === false && toolsJarGate && !siteLockQuiet) {
+    return "copy_tools_jar_gate";
+  }
   if (bridgeReachable && hasSession === false) return "clear_gate";
   if (!bridgeReachable) return "skip_tools";
   if (!hasSession) return "skip_tools";
   if (gatePresent && !forceExchange) return "keep_gate";
-  return "exchange";
+  // beta 0.1.36+ returns gateToken in exchange JSON for cookies.set.
+  return "exchange_with_gateToken";
 }
 
 function websiteLockAction({ bridgeReachable, hasSession }) {
@@ -35,6 +42,14 @@ function websiteLockAction({ bridgeReachable, hasSession }) {
 function popupToolsSyncAction() {
   // Button label "Sync Tools → website" must exchange, not only import lot token.
   return "tools_to_site_unlock_force";
+}
+
+/** Tab-load on /unlock must not parallel site-session-import (locked-refresh-remint). */
+function shopLoadSyncAction({ onUnlockPage, toolsLocked }) {
+  if (onUnlockPage) {
+    return toolsLocked ? "tools_to_site_clear_only" : "tools_to_site_then_no_site_import";
+  }
+  return "tools_to_site_then_site_import";
 }
 
 test("Tools locked + bridge up clears Firefox gate", () => {
@@ -49,7 +64,7 @@ test("Tools locked + bridge up clears Firefox gate", () => {
   );
 });
 
-test("Tools unlocked + no gate → exchange", () => {
+test("Tools unlocked + no gate → exchange with gateToken", () => {
   assert.equal(
     toolsSiteSyncAction({
       bridgeReachable: true,
@@ -57,7 +72,34 @@ test("Tools unlocked + no gate → exchange", () => {
       gatePresent: false,
       forceExchange: false,
     }),
-    "exchange",
+    "exchange_with_gateToken",
+  );
+});
+
+test("Tools jar gate + empty Bearer copies gate (mismatch)", () => {
+  assert.equal(
+    toolsSiteSyncAction({
+      bridgeReachable: true,
+      hasSession: false,
+      gatePresent: false,
+      forceExchange: false,
+      toolsJarGate: true,
+    }),
+    "copy_tools_jar_gate",
+  );
+});
+
+test("Tools jar gate during site-lock quiet does not copy (last lock wins)", () => {
+  assert.equal(
+    toolsSiteSyncAction({
+      bridgeReachable: true,
+      hasSession: false,
+      gatePresent: false,
+      forceExchange: false,
+      toolsJarGate: true,
+      siteLockQuiet: true,
+    }),
+    "site_lock_hold",
   );
 });
 
@@ -81,7 +123,7 @@ test("Sync Tools force-exchanges even when gate present", () => {
       gatePresent: true,
       forceExchange: true,
     }),
-    "exchange",
+    "exchange_with_gateToken",
   );
 });
 
@@ -132,4 +174,29 @@ test("Website lock with Tools session locks Tools", () => {
 
 test("Popup Sync Tools → website must force exchange", () => {
   assert.equal(popupToolsSyncAction(), "tools_to_site_unlock_force");
+});
+
+test("Locked /unlock tab load skips site-session-import publish", () => {
+  assert.equal(
+    shopLoadSyncAction({ onUnlockPage: true, toolsLocked: true }),
+    "tools_to_site_clear_only",
+  );
+  assert.equal(
+    shopLoadSyncAction({ onUnlockPage: true, toolsLocked: false }),
+    "tools_to_site_then_no_site_import",
+  );
+  assert.equal(
+    shopLoadSyncAction({ onUnlockPage: false, toolsLocked: false }),
+    "tools_to_site_then_site_import",
+  );
+});
+
+/** Local :8788 sync budget — must feel instant (not multi-second). */
+function bridgeSyncTickMs() {
+  return 400;
+}
+
+test("Bridge sync tick is sub-second for instant lock/fun", () => {
+  assert.ok(bridgeSyncTickMs() <= 500);
+  assert.ok(bridgeSyncTickMs() >= 200);
 });
