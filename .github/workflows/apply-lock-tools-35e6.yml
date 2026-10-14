@@ -2,8 +2,8 @@ name: apply-lock-tools-35e6
 on:
   push:
     paths:
-      - 'tmp/lock-tools-35e6/**'
-      - '.github/workflows/apply-lock-tools-35e6.yml'
+      - tmp/lock-tools-35e6/**
+      - .github/workflows/apply-lock-tools-35e6.yml
   workflow_dispatch:
 permissions:
   contents: write
@@ -14,28 +14,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref_name }}
-      - name: Decode and commit real sources
+      - name: Apply payload
+        shell: bash
         run: |
           set -euo pipefail
           cat tmp/lock-tools-35e6/bundle.gz.b64.* | tr -d '\n' | base64 -d | gzip -dc > /tmp/bundle.json
-          python3 << 'PY'
-          import json, pathlib
-          bundle = json.load(open('/tmp/bundle.json'))
-          for path, content in bundle.items():
-              p = pathlib.Path(path)
-              p.parent.mkdir(parents=True, exist_ok=True)
-              p.write_text(content, encoding='utf-8')
-              print('wrote', path, len(content))
-          PY
-          git config user.name "cursor[bot]"
-          git config user.email "cursor[bot]@users.noreply.github.com"
+          python3 scripts/apply-lock-tools-bundle.py /tmp/bundle.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add extension/shared/content-shop.js extension/chromium/content-shop.js extension/firefox/content-shop.js test/tools-site-sync.test.mjs
-          git status
           if git diff --cached --quiet; then
             echo "No changes"
             exit 0
           fi
-          git commit -m "fix(desk): website Lock -> Tools when shop uses hashed serverFn
-
-Live beta posts Lock to /_serverFn/<hash> with no lockShop string, so content-shop never sent site-lock and Tools stayed logged in. Match the known lock hash, and treat recent serverFn POST -> /unlock (or gate sessionStorage clear) as Lock so redeploys still sync."
+          git commit -m "fix(desk): website Lock -> Tools when shop uses hashed serverFn" -m "Live beta posts Lock to /_serverFn/<hash> with no lockShop string, so content-shop never sent site-lock and Tools stayed logged in. Match the known lock hash, and treat recent serverFn POST -> /unlock (or gate sessionStorage clear) as Lock so redeploys still sync."
           git push
