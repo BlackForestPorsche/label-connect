@@ -1,7 +1,7 @@
 {
   "name": "label-connect",
   "private": true,
-  "version": "0.1.22",
+  "version": "0.1.23",
   "type": "module",
   "description": "Label bench for the LabelWriter 550. Its own build. Prints to the CUPS queue LabelWriter550.",
   "scripts": {
@@ -12,5 +12,8 @@
   "dependencies": {
     "pdf-lib": "^1.17.1",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.9"
   }
 }
