@@ -4,8 +4,7 @@
  * - AllData Create RO → POST local Labels /api/print-ro
  * - SSF → On the Lot last names (widget lot API, never book-today)
  * - Soft auto-update check against label-connect extension/version.json
- * - Auto unlock: Tools :8788 → exchange into Firefox bf_shop_gate; from-gate fallback
- * - Tools lock (bridge up, no session) clears stale site gate in this browser
+ * - Auto unlock: shop from-gate (preferred) then Tools :8788 — no popup / Sync click
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
@@ -189,18 +188,38 @@
   }
 
   async function applyDeskUpdate() {
+    const installed = localVersion();
+    // Feed / storage may still advertise the version we just Hub-installed — don't POST a fake fail.
+    const available = await checkForUpdate(true);
+    if (!available?.version || !isNewer(available.version, installed)) {
+      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+      if (runtime.action?.setBadgeText) {
+        const api = globalThis.AllDataRoLabels;
+        if (api?.refreshUnlockBadge) await api.refreshUnlockBadge();
+        else await runtime.action.setBadgeText({ text: "" });
+      }
+      return {
+        ok: true,
+        upToDate: true,
+        mode: "up_to_date",
+        version: installed,
+        applied: false,
+        restartRequired: false,
+        message: `Desk ${installed} is up to date.`,
+      };
+    }
+
     const base = await labelsBaseUrl();
     let response;
     try {
       response = await fetch(`${base}/api/update-desk-extension`, {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
-        body: "{}",
+        body: JSON.stringify({ localVersion: installed }),
       });
     } catch {
       // Labels down — still offer Hub path via browser download (no unsigned sideload).
-      const remote = await checkForUpdate(true);
-      const version = remote?.version || "";
+      const version = available?.version || "";
       const dl = version ? await downloadHubUploadZip(version) : null;
       await openAboutAddons();
       return {
@@ -225,9 +244,27 @@
     const code = data?.error || `http_${response.status}`;
     const mode = data?.mode || "";
 
-    // Hub-signed kept / staged upload — never claim sideload success.
+    if (data?.upToDate || mode === "up_to_date") {
+      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+      if (runtime.action?.setBadgeText) {
+        const api = globalThis.AllDataRoLabels;
+        if (api?.refreshUnlockBadge) await api.refreshUnlockBadge();
+        else await runtime.action.setBadgeText({ text: "" });
+      }
+      return {
+        ok: true,
+        upToDate: true,
+        mode: "up_to_date",
+        version: String(data?.version || installed),
+        applied: false,
+        restartRequired: false,
+        message: data?.message || `Desk ${installed} is up to date.`,
+      };
+    }
+
+    // Hub-signed kept / staged upload — never claim sideload success / never paint as hard "failed".
     if (mode === "hub_upload" || code === "hub_signed_kept" || code === "update_outcome_unclear") {
-      const version = String(data?.version || "");
+      const version = String(data?.version || available?.version || "");
       if (!data?.hubUploadPath && version) {
         await downloadHubUploadZip(version);
       }
@@ -344,18 +381,13 @@
       api.importSiteGateSession().then(sendResponse);
       return true;
     }
-    if (message.type === "tools-session-import" || message.type === "tools-to-site-unlock") {
+    if (message.type === "tools-session-import") {
       const api = globalThis.AllDataRoLabels;
-      if (!api?.syncToolsSessionToSite) {
+      if (!api?.importToolsWidgetSession) {
         sendResponse({ error: "Lot helper missing." });
         return false;
       }
-      // Sync Tools / shop-tab: deposit bf_shop_gate into this browser (website unlock).
-      // Popup Sync Tools uses tools-session-import → force exchange to heal stale gates.
-      const forceExchange = message.type === "tools-session-import" || Boolean(message.force);
-      api
-        .syncToolsSessionToSite({ reloadUnlockTabs: true, forceExchange })
-        .then(sendResponse);
+      api.importToolsWidgetSession().then(sendResponse);
       return true;
     }
     if (message.type === "shop-site-session") {
