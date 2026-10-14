@@ -148,8 +148,8 @@
       markPrintedThisCreate(armId);
       toast(
         response.dryRun
-          ? `Dry run: ${fields.lastName} / ${fields.model}`
-          : `Printed ${fields.lastName} / ${fields.model}`,
+          ? `Dry run: ${fields.lastName} - ${fields.model}`
+          : `Printed ${fields.lastName} - ${fields.model}`,
         "ok",
       );
       return;
