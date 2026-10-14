@@ -1,76 +1,8 @@
-name: Apply desk 0.1.25 large sources
+name: MUTED — apply-desk-0125
 on:
-  push:
-    branches: [cursor/desk-tools-to-site-thrash-39db]
-    paths:
-      - payloads/desk-0125/**
-      - .github/workflows/apply-desk-0125.yml
   workflow_dispatch:
-permissions:
-  contents: write
 jobs:
-  apply:
+  muted:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: cursor/desk-tools-to-site-thrash-39db
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Decode desk-0125 payloads into extension sources
-        run: |
-          python3 <<'PY'
-          import gzip, base64, hashlib, json, pathlib, subprocess
-          root = pathlib.Path("payloads/desk-0125")
-          man = json.loads((root / "manifest.json").read_text())
-          by_prefix = {item["prefix"]: item for item in man}
-
-          def decode(item):
-              chunks = [(root / f"{item['prefix']}.{i:02d}").read_text().strip() for i in range(item["chunks"])]
-              raw = gzip.decompress(base64.b64decode("".join(chunks)))
-              digest = hashlib.sha256(raw).hexdigest()
-              assert digest == item["sha256"], (item["prefix"], digest, item["sha256"])
-              return raw
-
-          def write_paths(paths, raw):
-              changed = []
-              for path_str in paths:
-                  path = pathlib.Path(path_str)
-                  path.parent.mkdir(parents=True, exist_ok=True)
-                  if path.exists() and path.read_bytes() == raw:
-                      print("unchanged", path_str)
-                      continue
-                  path.write_bytes(raw)
-                  changed.append(path_str)
-                  print("wrote", path_str, len(raw))
-              return changed
-
-          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
-          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
-
-          def commit_push(paths, message):
-              if not paths:
-                  print("skip commit", message)
-                  return
-              subprocess.check_call(["git", "add", *paths])
-              st = subprocess.call(["git", "diff", "--cached", "--quiet"])
-              if st == 0:
-                  print("no staged changes", message)
-                  return
-              subprocess.check_call(["git", "commit", "-m", message])
-              subprocess.check_call(["git", "push"])
-
-          bg = decode(by_prefix["background.gz.b64"])
-          # batch 3: all three background copies
-          changed = write_paths(by_prefix["background.gz.b64"]["paths"], bg)
-          commit_push(changed, "fix(desk): 0.1.25 instant :8788 + remint (batch 3)")
-
-          ln = decode(by_prefix["lot-names.gz.b64"])
-          # batches 4/5/6: one path each
-          for path_str, batch in [
-              ("extension/shared/lot-names.js", 4),
-              ("extension/firefox/lot-names.js", 5),
-              ("extension/chromium/lot-names.js", 6),
-          ]:
-              changed = write_paths([path_str], ln)
-              commit_push(changed, f"fix(desk): 0.1.25 instant :8788 + remint (batch {batch})")
-          PY
+      - run: echo "Muted. Use main apply-payload.yml (soft-skip)."
