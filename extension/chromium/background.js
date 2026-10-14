@@ -153,6 +153,8 @@
 
   const RELEASE_XPI_BASE =
     "https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension";
+  const UPDATES_JSON_URL = `${RELEASE_XPI_BASE}/updates.json`;
+  const DESK_ADDON_ID = "black-forest-desk@blackforestautomotive.com";
 
   async function openAboutAddons() {
     try {
@@ -164,49 +166,147 @@
     }
   }
 
-  async function downloadHubUploadZip(version) {
-    const ver = String(version || "").trim();
-    if (!ver || !runtime.downloads?.download) return null;
-    const url = `${RELEASE_XPI_BASE}/Black.Forest.Desk-${ver}.xpi`;
+  async function fetchSignedFeedUpdate() {
     try {
-      const downloadId = await runtime.downloads.download({
-        url,
-        filename: `Black.Forest.Desk-${ver}-hub-upload.zip`,
-        saveAs: false,
-        conflictAction: "overwrite",
-      });
-      return { downloadId, filename: `Black.Forest.Desk-${ver}-hub-upload.zip`, url };
+      const response = await fetch(`${UPDATES_JSON_URL}?t=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) return null;
+      const data = await response.json();
+      const updates = data?.addons?.[DESK_ADDON_ID]?.updates;
+      if (!Array.isArray(updates) || !updates.length) return null;
+      let best = updates[0];
+      for (const entry of updates) {
+        if (entry?.version && isNewer(entry.version, best.version)) best = entry;
+      }
+      const version = String(best.version || "");
+      const updateLink = String(best.update_link || "");
+      if (!version || !updateLink) return null;
+      return { version, updateLink, updateHash: best.update_hash ? String(best.update_hash) : null };
     } catch {
       return null;
     }
   }
 
-  function hubUploadMessage(version, pathHint) {
+  async function downloadSignedXpi(version, updateLink) {
+    const ver = String(version || "").trim();
+    const url = String(updateLink || "").trim() || `${RELEASE_XPI_BASE}/Black.Forest.Desk-${ver}.xpi`;
+    if (!ver || !runtime.downloads?.download) return null;
+    try {
+      const downloadId = await runtime.downloads.download({
+        url,
+        filename: `Black.Forest.Desk-${ver}.xpi`,
+        saveAs: false,
+        conflictAction: "overwrite",
+      });
+      return { downloadId, filename: `Black.Forest.Desk-${ver}.xpi`, url };
+    } catch {
+      return null;
+    }
+  }
+
+  /** @deprecated name kept for older call sites — downloads the signed feed XPI. */
+  async function downloadHubUploadZip(version) {
+    return downloadSignedXpi(version, `${RELEASE_XPI_BASE}/Black.Forest.Desk-${version}.xpi`);
+  }
+
+  function signedStagedMessage(version, pathHint) {
     const ver = version ? ` ${version}` : "";
     const where = pathHint ? ` Saved: ${pathHint}.` : " Check Downloads / Desktop.";
-    return `Update${ver}: Hub On your own → Upload New Version, then about:addons → Install Add-on From File (Hub-signed XPI).${where} Unsigned GitHub XPIs cannot overwrite a Hub-signed install.`;
+    return `Signed Desk${ver} ready.${where} about:addons → gear → Install Add-on From File… (or Check for Updates). Not a failure.`;
+  }
+
+  async function requestFirefoxSignedUpdate() {
+    if (typeof runtime.runtime.requestUpdateCheck !== "function") return null;
+    try {
+      const result = await runtime.runtime.requestUpdateCheck();
+      if (typeof result === "string") return result;
+      if (result && typeof result.status === "string") return result.status;
+      return result == null ? null : String(result);
+    } catch {
+      return null;
+    }
+  }
+
+  async function stageSignedFeedSuccess(detail) {
+    const feed = await fetchSignedFeedUpdate();
+    const version = feed?.version || "";
+    const dl = version ? await downloadSignedXpi(version, feed?.updateLink) : null;
+    await openAboutAddons();
+    return {
+      ok: true,
+      error: null,
+      mode: "signed_staged",
+      version,
+      staged: true,
+      applied: false,
+      restartRequired: false,
+      message: dl
+        ? `${signedStagedMessage(version, dl.filename)}${detail ? ` ${detail}` : ""}`
+        : detail ||
+          "Open about:addons → Check for Updates, or Install Add-on From File from the desk-extension release.",
+    };
+  }
+
+  async function clearUpdateAvailable() {
+    await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+    if (runtime.action?.setBadgeText) {
+      const api = globalThis.AllDataRoLabels;
+      if (api?.refreshUnlockBadge) await api.refreshUnlockBadge();
+      else await runtime.action.setBadgeText({ text: "" });
+    }
   }
 
   async function applyDeskUpdate() {
-    const installed = localVersion();
-    // Feed / storage may still advertise the version we just Hub-installed — don't POST a fake fail.
+    const local = localVersion();
+    const feed = await fetchSignedFeedUpdate();
+    // Also refresh version.json soft-check so stale storage can't force a fake Update.
     const available = await checkForUpdate(true);
-    if (!available?.version || !isNewer(available.version, installed)) {
-      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
-      if (runtime.action?.setBadgeText) {
-        const api = globalThis.AllDataRoLabels;
-        if (api?.refreshUnlockBadge) await api.refreshUnlockBadge();
-        else await runtime.action.setBadgeText({ text: "" });
-      }
+    const newestRemote =
+      feed?.version && available?.version
+        ? isNewer(feed.version, available.version)
+          ? feed.version
+          : available.version
+        : feed?.version || available?.version || "";
+
+    // Feed / storage may still advertise the version we already have — don't POST a fake fail.
+    if (!newestRemote || !isNewer(newestRemote, local)) {
+      await clearUpdateAvailable();
       return {
         ok: true,
         upToDate: true,
         mode: "up_to_date",
-        version: installed,
+        version: local,
         applied: false,
         restartRequired: false,
-        message: `Desk ${installed} is up to date.`,
+        message: `Desk ${local} is up to date.`,
       };
+    }
+
+    // Prefer Firefox-native apply when the signed feed is newer than this install.
+    if (feed?.version && isNewer(feed.version, local)) {
+      const ffStatus = await requestFirefoxSignedUpdate();
+      if (ffStatus === "update_available") {
+        await runtime.storage.local.set({
+          deskUpdateAppliedVersion: feed.version,
+          deskUpdateAvailable: {
+            version: feed.version,
+            local,
+            message: "Restart Firefox to finish the signed update.",
+            applied: true,
+          },
+        });
+        if (runtime.action?.setBadgeText) {
+          await runtime.action.setBadgeText({ text: "↻" });
+          await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+        }
+        return {
+          ok: true,
+          mode: "firefox_update",
+          version: feed.version,
+          applied: true,
+          restartRequired: true,
+          message: `Firefox is applying signed Desk ${feed.version}. Restart when prompted.`,
+        };
+      }
     }
 
     const base = await labelsBaseUrl();
@@ -215,25 +315,26 @@
       response = await fetch(`${base}/api/update-desk-extension`, {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify({ localVersion: installed }),
+        body: JSON.stringify({ localVersion: local }),
       });
     } catch {
-      // Labels down — still offer Hub path via browser download (no unsigned sideload).
-      const version = available?.version || "";
-      const dl = version ? await downloadHubUploadZip(version) : null;
-      await openAboutAddons();
-      return {
-        ok: false,
-        error: "labels_unreachable",
-        mode: "hub_upload",
-        version,
-        applied: false,
-        restartRequired: false,
-        message: dl
-          ? hubUploadMessage(version, dl.filename)
-          : "Labels isn’t running. Open Labels/Tools, or Hub On your own → Install from File with the self-dist pack.",
-      };
+      // Labels down — stage signed feed / Firefox path (never bare "failed").
+      if (feed?.version && isNewer(feed.version, local)) {
+        const ffStatus = await requestFirefoxSignedUpdate();
+        if (ffStatus === "update_available") {
+          return {
+            ok: true,
+            mode: "firefox_update",
+            version: feed.version,
+            applied: true,
+            restartRequired: true,
+            message: `Firefox is applying signed Desk ${feed.version}. Restart when prompted.`,
+          };
+        }
+      }
+      return stageSignedFeedSuccess("(Labels wasn’t reachable.)");
     }
+
     let data = null;
     try {
       data = await response.json();
@@ -245,39 +346,56 @@
     const mode = data?.mode || "";
 
     if (data?.upToDate || mode === "up_to_date") {
-      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
-      if (runtime.action?.setBadgeText) {
-        const api = globalThis.AllDataRoLabels;
-        if (api?.refreshUnlockBadge) await api.refreshUnlockBadge();
-        else await runtime.action.setBadgeText({ text: "" });
-      }
+      await clearUpdateAvailable();
       return {
         ok: true,
         upToDate: true,
         mode: "up_to_date",
-        version: String(data?.version || installed),
+        version: String(data?.version || local),
         applied: false,
         restartRequired: false,
-        message: data?.message || `Desk ${installed} is up to date.`,
+        message: data?.message || `Desk ${local} is up to date.`,
       };
     }
 
-    // Hub-signed kept / staged upload — never claim sideload success / never paint as hard "failed".
-    if (mode === "hub_upload" || code === "hub_signed_kept" || code === "update_outcome_unclear") {
-      const version = String(data?.version || available?.version || "");
-      if (!data?.hubUploadPath && version) {
-        await downloadHubUploadZip(version);
+    // Labels staged signed feed / Hub pack — success UX (not an error toast).
+    if (mode === "signed_staged" || data?.staged === true) {
+      const version = String(data?.version || feed?.version || "");
+      if (!data?.signedXpiPath && !data?.hubUploadPath && version) {
+        await downloadSignedXpi(version, feed?.updateLink);
       }
       await openAboutAddons();
       return {
-        ok: false,
-        error: code,
-        mode: "hub_upload",
+        ok: true,
+        error: null,
+        mode: "signed_staged",
         version,
+        signedXpiPath: data?.signedXpiPath || null,
         hubUploadPath: data?.hubUploadPath || null,
+        staged: true,
         applied: false,
         restartRequired: false,
-        message: data?.message || hubUploadMessage(version, data?.hubUploadPath),
+        message: data?.message || signedStagedMessage(version, data?.signedXpiPath || data?.hubUploadPath),
+      };
+    }
+
+    // Legacy hub_upload / hub_signed_kept — still actionable, not a hard fail toast.
+    if (mode === "hub_upload" || code === "hub_signed_kept" || code === "update_outcome_unclear") {
+      const version = String(data?.version || feed?.version || "");
+      if (!data?.hubUploadPath && version) {
+        await downloadSignedXpi(version, feed?.updateLink);
+      }
+      await openAboutAddons();
+      return {
+        ok: true,
+        error: null,
+        mode: "signed_staged",
+        version,
+        hubUploadPath: data?.hubUploadPath || null,
+        staged: true,
+        applied: false,
+        restartRequired: false,
+        message: data?.message || signedStagedMessage(version, data?.hubUploadPath),
       };
     }
 
@@ -285,25 +403,30 @@
       if (response.status === 403 || code === "localhost_only") {
         return { ok: false, error: code, message: "Desk update refused — Labels only accepts updates from this machine." };
       }
-      return {
-        ok: false,
-        error: code,
-        message: data?.message || "Desk update failed.",
-        applied: false,
-      };
+      // Old Labels without the endpoint (404) or script failure — stage signed feed.
+      if (response.status === 404 || code === "update_failed" || code.startsWith("http_")) {
+        return stageSignedFeedSuccess(
+          response.status === 404
+            ? "(Labels has no update endpoint yet — pull label-connect / restart Labels.)"
+            : "(Labels apply failed; staged signed feed instead.)",
+        );
+      }
+      return stageSignedFeedSuccess(data?.message || "(Labels returned an error; staged signed feed.)");
     }
 
     // Only mark applied when Labels truly sideloaded (unsigned path).
     if (data.applied === false || data.mode === "hub_upload") {
+      const version = String(data.version || feed?.version || "");
       await openAboutAddons();
       return {
-        ok: false,
-        error: data.error || "hub_upload",
-        mode: "hub_upload",
-        version: String(data.version || ""),
+        ok: true,
+        error: null,
+        mode: "signed_staged",
+        version,
+        staged: true,
         applied: false,
         restartRequired: false,
-        message: data.message || hubUploadMessage(data.version, data.hubUploadPath),
+        message: data.message || signedStagedMessage(version, data.hubUploadPath),
       };
     }
 
