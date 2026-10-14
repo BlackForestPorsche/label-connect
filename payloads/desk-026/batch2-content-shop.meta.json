@@ -1,12 +1,12 @@
 {
-  "message": "fix(desk): 0.1.26 unlock-hold + instant sync (batch 2)",
+  "message": "fix(desk): 0.1.26 website\u2192Tools unlock order + extract (batch 2)",
   "paths": [
     "extension/shared/content-shop.js",
     "extension/firefox/content-shop.js",
     "extension/chromium/content-shop.js"
   ],
-  "md5": "2f56bf05c27a72cf67d56aedd807a609",
-  "sha256": "2fdcdb3e416bfd8c30fc5172e071f686c592cbe2931a0132a0dfcb783be14adf",
-  "bytes": 11745,
+  "md5": "431adf1c49f4f8b08ff2414993632a57",
+  "sha256": "54dedf08fc766f68892b4fe364a89f445ab1a68710b4475d4c23c31d24d87d6b",
+  "bytes": 12201,
   "parts": 1
 }
