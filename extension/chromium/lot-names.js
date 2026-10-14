@@ -169,8 +169,16 @@
       : 8 * 60 * 60 * 1000;
     const normalized = normalizePerson(person);
     const src = source || "pin";
+    // After an intentional website lock, do not clear quiet or remint Tools via
+    // from-gate / stale gate cookie (locked-site refresh must stay locked).
+    const quiet = siteLockQuietActive();
+    const allowPublish =
+      publishToTools &&
+      !quiet &&
+      token &&
+      (src === "shop-site" || src === "site-gate" || src === "pin");
     // Website unlock wins — clear the quiet window so Tools may unlock again.
-    if (src === "shop-site" || src === "site-gate" || src === "pin") {
+    if (!quiet && (src === "shop-site" || src === "site-gate" || src === "pin")) {
       siteLockQuietUntil = 0;
     }
     await storageSet({
@@ -181,11 +189,7 @@
     });
     await setPinBadge(false);
     // Website → Tools unlock: push Bearer into :8788 so Tools SPA leaves /unlock.
-    if (
-      publishToTools &&
-      token &&
-      (src === "shop-site" || src === "site-gate" || src === "pin")
-    ) {
+    if (allowPublish) {
       const expiresIso = Number.isFinite(parsedExpiry)
         ? new Date(parsedExpiry).toISOString()
         : new Date(Date.now() + ttlMs).toISOString();
@@ -195,7 +199,7 @@
         person: normalized,
       });
     }
-    return { ok: true, person: normalized, source: src };
+    return { ok: true, person: normalized, source: src, publishedToTools: Boolean(allowPublish) };
   }
 
   /**
@@ -465,15 +469,24 @@
         reason: "exchange_failed",
       };
     }
+    // gateToken (shop beta 0.1.36+) is required for Firefox — fetch rarely exposes Set-Cookie.
     const gateToken = data.gateToken || data.gate || data.cookieValue || "";
     if (gateToken) {
-      await applyGateCookie(gateToken, data.expiresAt);
+      const applied = await applyGateCookie(gateToken, data.expiresAt);
+      if (!applied.ok) {
+        return {
+          error: "Could not write bf_shop_gate from gateToken into this browser.",
+          reason: applied.reason || "set_failed",
+          person: data.person ? String(data.person) : "",
+        };
+      }
     }
     const gate = await readShopGateCookie();
     if (!gate.present) {
       return {
-        error:
-          "Exchange succeeded but bf_shop_gate is missing in this browser. Paste grok-exchange-gate-token so exchange returns gateToken.",
+        error: gateToken
+          ? "Exchange returned gateToken but bf_shop_gate is still missing after cookies.set."
+          : "Exchange succeeded but no gateToken in JSON and bf_shop_gate missing (needs shop beta 0.1.36+).",
         reason: "cookie_missing",
         person: data.person ? String(data.person) : "",
       };
@@ -632,7 +645,15 @@
    * Website shop session → Desk Bearer via POST /api/widget/session/from-gate.
    * Degrades cleanly when the route is missing (404/406): falls back to Tools/PIN.
    */
-  async function importSiteGateSession() {
+  async function importSiteGateSession({ publishToTools = true } = {}) {
+    // Intentional website lock: never from-gate → Tools (locked refresh remint).
+    if (siteLockQuietActive()) {
+      return {
+        error: "Website locked — not importing shop gate into Tools.",
+        reason: "site_lock_quiet",
+        locked: true,
+      };
+    }
     const gate = await readShopGateCookie();
     if (!gate.present) {
       return {
@@ -692,6 +713,7 @@
       expiresAt,
       person: data.person,
       source: "site-gate",
+      publishToTools,
     });
   }
 
@@ -850,12 +872,30 @@
           if (synced.locked) {
             return { ...synced, reason: reason || synced.reason };
           }
-          // Tools had no session / exchange failed — fall through to site from-gate.
+          // Tools had no session / exchange failed — fall through to site from-gate
+          // only when we are not holding a website-lock quiet window.
+          if (siteLockQuietActive()) {
+            return {
+              ok: false,
+              locked: true,
+              reason: "site_lock_quiet",
+              error: "Website locked — not reminting Tools from site gate.",
+            };
+          }
         }
 
         if (!force && (await hasFreshWidgetToken()) && (await readShopGateCookie()).present) {
           await setPinBadge(false);
           return { ok: true, skipped: "already_fresh", reason };
+        }
+
+        if (siteLockQuietActive()) {
+          return {
+            ok: false,
+            locked: true,
+            reason: "site_lock_quiet",
+            error: "Website locked — skipping from-gate auto unlock.",
+          };
         }
 
         const auth = await ensureWidgetToken({ trySite: true, tryTools: true });
