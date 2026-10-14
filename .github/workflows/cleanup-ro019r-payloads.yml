@@ -1,0 +1,29 @@
+name: cleanup-ro019r-payloads
+on:
+  push:
+    branches: [cursor/create-ro-label-format-019-rebased-ed90]
+    paths:
+      - ".github/workflows/cleanup-ro019r-payloads.yml"
+  workflow_dispatch:
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove ro019r payloads and apply workflow
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/apply-ro019-rebased-payload.yml
+          rm -f payloads/ro019r-*
+          rm -f .github/workflows/cleanup-ro019r-payloads.yml
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing to clean"
+            exit 0
+          fi
+          git commit -m "chore: remove ro019r apply payloads (exact bytes already on branch)"
+          git push
