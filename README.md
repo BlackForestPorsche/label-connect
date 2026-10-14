@@ -2,7 +2,7 @@
 
 ## Merge into Black Forest Tools (in progress)
 
-From **shop-desktop 1.5.8+**, Black Forest Tools **owns** the Labels HTTP server on `:8080` (vendors this tree under `labels/`, spawns `node server.mjs` when nothing is already listening — including adopting a leftover `labels.service`). Desk Create RO keeps calling `http://127.0.0.1:8080/api/print-ro`.
+From **shop-desktop 1.5.11+**, Black Forest Tools **owns** the Labels HTTP server on `:8080` (vendors this tree under `labels/`, spawns `node server.mjs` when nothing is already listening — including adopting a leftover `labels.service`). Desk Create RO keeps calling `http://127.0.0.1:8080/api/print-ro`.
 
 - Prefer Tools autostart over the separate Labels desktop launcher day-to-day.
 - Tools **adopts** an already-healthy `:8080` instead of double-binding.
@@ -10,7 +10,7 @@ From **shop-desktop 1.5.8+**, Black Forest Tools **owns** the Labels HTTP server
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
-**0.1.20** - Create RO label restore (same as 0.1.19 product fix): reject plate/account; `{LastName} - {Model}` + Out Mileage blank; safe top inset. Version bump for AMO Hub sign (0.1.19 already taken).
+**0.1.20** - Bidirectional website↔Tools lock/unlock (site lock clears Tools jar via `:8788` DELETE; unlock publishes Bearer; `tools-to-site-unlock` / `syncSiteLockToTools`) + Create RO label restore: reject plate/account; `{LastName} - {Model}` + Out Mileage blank; safe top inset.
 
 **0.1.19** - Create RO label restore: reject **license plate** / **account #** (and VIN) in Desk scrape + Labels normalize; print only `{LastName} - {Model}` then `Out Mileage _____________`; extra top safe inset so the LabelWriter 550 does not clip line 1.
 
