@@ -1,0 +1,12 @@
+{
+  "prefix": "payloads/ro019-scrape-all.",
+  "parts": 2,
+  "md5": "PLACEHOLDER_MD5",
+  "item_md5": "c6d3b51afec4fd4c0ed0fd1fcbb44f44",
+  "paths": [
+    "extension/shared/scrape.js",
+    "extension/chromium/scrape.js",
+    "extension/firefox/scrape.js"
+  ],
+  "message": "Desk + Labels 0.1.19: scrape plate/account noise filter (shared+chromium+firefox)"
+}
