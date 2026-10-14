@@ -1,0 +1,12 @@
+{
+  "message": "fix(desk): 0.1.26 unlock-hold + instant sync (batch 3)",
+  "paths": [
+    "extension/shared/background.js",
+    "extension/firefox/background.js",
+    "extension/chromium/background.js"
+  ],
+  "md5": "0b51b48478a2fb0d0144ffb9eef2bedd",
+  "sha256": "fb20b61e253a772ff93a34c61a3a57c70619ac1c57bf92af939559f46d3d52cc",
+  "bytes": 22956,
+  "parts": 2
+}
