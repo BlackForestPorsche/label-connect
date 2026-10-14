@@ -119,10 +119,16 @@
         if (response.person) fillPersonSelect(response.person);
         const label =
           response.source === "tools-bridge" || type === "tools-session-import"
-            ? "Lot names unlocked from Black Forest Tools."
+            ? response.siteGate
+              ? "Shop website + lot names unlocked from Tools. Refresh the shop tab if it still shows lock."
+              : "Lot names unlocked from Black Forest Tools."
             : "Lot names unlocked from the shop site session.";
         setStatus(label, "ok");
         return true;
+      }
+      if (response?.locked) {
+        if (!quiet) setStatus(response.error || "Tools is locked — shop website cookie cleared.", "err");
+        return false;
       }
       if (!quiet) setStatus(humanizeUnlockError(response?.error), "err");
       return false;
