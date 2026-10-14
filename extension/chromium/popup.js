@@ -7,6 +7,7 @@
   const siteBtn = document.getElementById("useShopSession");
   const toolsBtn = document.getElementById("useTools");
   const checkBtn = document.getElementById("checkUpdate");
+  const applyBtn = document.getElementById("applyUpdate");
   const status = document.getElementById("status");
   const updateEl = document.getElementById("update");
   const versionEl = document.getElementById("version");
@@ -38,6 +39,27 @@
   function setUpdate(text, kind) {
     updateEl.textContent = text;
     updateEl.className = kind === "ok" ? "ok" : kind === "warn" ? "warn" : kind === "err" ? "err" : "";
+  }
+
+  function showApply(show) {
+    if (!applyBtn) return;
+    applyBtn.hidden = !show;
+  }
+
+  function paintUpdateState({ available, appliedVersion } = {}) {
+    const version = available?.version;
+    if (!version) {
+      showApply(false);
+      setUpdate("Desk extension is up to date.", "ok");
+      return;
+    }
+    if (appliedVersion && String(appliedVersion) === String(version)) {
+      showApply(false);
+      setUpdate(`Update ${version} installed — Restart Firefox.`, "ok");
+      return;
+    }
+    showApply(true);
+    setUpdate(`Update ${version} ready`, "warn");
   }
 
   function looksLikeApiCode(text) {
@@ -109,12 +131,13 @@
   async function restore() {
     try {
       const manifest = runtime.runtime.getManifest();
-      versionEl.textContent = `Installed ${manifest.version} · Firefox auto-update via releases when signed XPI is installed`;
+      versionEl.textContent = `Installed ${manifest.version}`;
       const stored = await runtime.storage.local.get([
         "shopPerson",
         "shopWidgetTokenExpiresAt",
         "shopWidgetTokenSource",
         "deskUpdateAvailable",
+        "deskUpdateAppliedVersion",
       ]);
       fillPersonSelect(stored.shopPerson);
       if (stored.shopWidgetTokenExpiresAt && Number(stored.shopWidgetTokenExpiresAt) > Date.now()) {
@@ -137,10 +160,12 @@
         }
       }
       if (stored.deskUpdateAvailable?.version) {
-        setUpdate(
-          `Update ${stored.deskUpdateAvailable.version} ready — run bash scripts/update-desk-extension.sh on the desk.`,
-          "warn",
-        );
+        paintUpdateState({
+          available: stored.deskUpdateAvailable,
+          appliedVersion: stored.deskUpdateAppliedVersion,
+        });
+      } else {
+        showApply(false);
       }
     } catch {
       fillPersonSelect("logan");
@@ -211,23 +236,54 @@
   checkBtn.addEventListener("click", async () => {
     checkBtn.disabled = true;
     setUpdate("Checking…");
+    showApply(false);
     try {
       const response = await runtime.runtime.sendMessage({ type: "check-update", force: true });
       const available = response?.available;
+      const stored = await runtime.storage.local.get(["deskUpdateAppliedVersion"]);
       if (available?.version) {
-        setUpdate(
-          `Update ${available.version} ready — on the desk run: bash ~/label-connect/scripts/update-desk-extension.sh`,
-          "warn",
-        );
+        paintUpdateState({
+          available,
+          appliedVersion: stored.deskUpdateAppliedVersion,
+        });
       } else {
-        setUpdate("Desk extension is up to date.", "ok");
+        paintUpdateState({});
       }
     } catch {
       setUpdate("Update check failed.", "err");
+      showApply(false);
     } finally {
       checkBtn.disabled = false;
     }
   });
+
+  if (applyBtn) {
+    applyBtn.addEventListener("click", async () => {
+      applyBtn.disabled = true;
+      checkBtn.disabled = true;
+      setUpdate("Updating…", "warn");
+      try {
+        const response = await runtime.runtime.sendMessage({ type: "apply-update" });
+        if (response?.ok) {
+          const version = response.version || "";
+          showApply(false);
+          setUpdate(
+            version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox.",
+            "ok",
+          );
+        } else {
+          setUpdate(response?.message || "Update failed.", "err");
+          showApply(true);
+        }
+      } catch {
+        setUpdate("Update failed — Labels may not be running.", "err");
+        showApply(true);
+      } finally {
+        applyBtn.disabled = false;
+        checkBtn.disabled = false;
+      }
+    });
+  }
 
   fillPersonSelect("logan");
   restore();
