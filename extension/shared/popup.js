@@ -193,7 +193,7 @@
       return;
     }
     button.disabled = true;
-    setStatus(`Signing in as \u201c${person}\u201d with desk PIN\u2026`);
+    setStatus(`Signing in as “${person}” with desk PIN…`);
     try {
       await runtime.storage.local.set({ shopPerson: person });
       const response = await runtime.runtime.sendMessage({
@@ -205,7 +205,7 @@
         setStatus(humanizeUnlockError(response?.error), "err");
         return;
       }
-      setStatus(`Lot names unlocked as \u201c${person}\u201d. Open SSF checkout and Refresh if needed.`, "ok");
+      setStatus(`Lot names unlocked as “${person}”. Open SSF checkout and Refresh if needed.`, "ok");
     } catch {
       setStatus("Extension background unavailable. Reload the add-on, then enter your desk PIN.", "err");
     } finally {
@@ -216,7 +216,7 @@
   if (siteBtn) {
     siteBtn.addEventListener("click", async () => {
       siteBtn.disabled = true;
-      setStatus("Using shop site session\u2026");
+      setStatus("Using shop site session…");
       try {
         await tryImport("site-session-import", { quiet: false });
       } finally {
@@ -228,7 +228,7 @@
   if (toolsBtn) {
     toolsBtn.addEventListener("click", async () => {
       toolsBtn.disabled = true;
-      setStatus("Asking Black Forest Tools\u2026");
+      setStatus("Asking Black Forest Tools…");
       try {
         await tryImport("tools-session-import", { quiet: false });
       } finally {
@@ -239,7 +239,7 @@
 
   checkBtn.addEventListener("click", async () => {
     checkBtn.disabled = true;
-    setUpdate("Checking\u2026");
+    setUpdate("Checking…");
     showApply(false);
     try {
       const response = await runtime.runtime.sendMessage({ type: "check-update", force: true });
@@ -265,7 +265,7 @@
     applyBtn.addEventListener("click", async () => {
       applyBtn.disabled = true;
       checkBtn.disabled = true;
-      setUpdate("Updating\u2026", "warn");
+      setUpdate("Updating…", "warn");
       try {
         const response = await runtime.runtime.sendMessage({ type: "apply-update" });
         if (response?.ok && response?.applied !== false && response?.mode !== "hub_upload") {
@@ -277,7 +277,7 @@
           );
         } else if (response?.mode === "hub_upload" || response?.error === "hub_signed_kept") {
           // Actionable Hub path — not a false "Updated" success.
-          setUpdate(response?.message || "Hub On your own \u2192 Install from File.", "warn");
+          setUpdate(response?.message || "Hub On your own → Install from File.", "warn");
           showApply(true);
         } else {
           setUpdate(response?.message || "Update failed.", "err");
@@ -285,7 +285,7 @@
         }
       } catch {
         setUpdate(
-          "Update failed — Labels may not be running. Hub On your own \u2192 Install from File.",
+          "Update failed — Labels may not be running. Hub On your own → Install from File.",
           "err",
         );
         showApply(true);
