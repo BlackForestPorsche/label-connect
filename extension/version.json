@@ -1,5 +1,5 @@
 {
-  "version": "0.1.13",
-  "message": "Desk 0.1.13 Hub re-upload (0.1.12 was uploaded then deleted on AMO). Same Create RO layout + auto unlock; self-dist keeps gecko.update_url \u2192 GitHub updates.json.",
+  "version": "0.1.14",
+  "message": "One-click Update in the Desk popup \u2014 Labels applies the sideload on this machine. No shell commands. Restart Firefox when prompted.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
