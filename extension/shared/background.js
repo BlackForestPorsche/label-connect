@@ -125,14 +125,17 @@
         ? {
             version: remoteVersion,
             local,
-            message: remote.message || "Firefox signed installs auto-update from GitHub Releases; Chromium: reload Load unpacked or run update-desk-extension.sh.",
+            message: remote.message || "Use Update in the Desk popup (Labels applies it on this machine).",
             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
-      await runtime.storage.local.set({
+      const patch = {
         deskUpdateCheckedAt: Date.now(),
         deskUpdateAvailable: available,
-      });
+      };
+      // Clear applied marker when remote no longer reports newer (after Firefox restart).
+      if (!available) patch.deskUpdateAppliedVersion = null;
+      await runtime.storage.local.set(patch);
       // Preserve PIN / unlocked badge state; only force ↑ when an update is ready.
       const api = globalThis.AllDataRoLabels;
       if (available && runtime.action?.setBadgeText) {
@@ -148,6 +151,69 @@
     } catch {
       return null;
     }
+  }
+
+  /** One-click apply via local Labels (localhost-only shell helper). */
+  async function applyDeskUpdate() {
+    const base = await labelsBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/api/update-desk-extension`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: "{}",
+      });
+    } catch {
+      return {
+        ok: false,
+        error: "labels_unreachable",
+        message: "Labels isn’t running. Open Labels (or Black Forest Tools), then try Update again.",
+      };
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    if (!response.ok || !data?.ok) {
+      const code = data?.error || `http_${response.status}`;
+      if (response.status === 403 || code === "localhost_only") {
+        return { ok: false, error: code, message: "Desk update refused — Labels only accepts updates from this machine." };
+      }
+      return {
+        ok: false,
+        error: code,
+        message: data?.message || "Desk update failed.",
+      };
+    }
+    const version = String(data.version || "");
+    await runtime.storage.local.set({
+      deskUpdateAppliedVersion: version || true,
+      deskUpdateAvailable: version
+        ? {
+            version,
+            local: localVersion(),
+            message: "Restart Firefox to finish.",
+            applied: true,
+          }
+        : null,
+    });
+    if (runtime.action?.setBadgeText) {
+      await runtime.action.setBadgeText({ text: "↻" });
+      await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+      await runtime.action.setTitle?.({
+        title: version
+          ? `Black Forest Desk — v${version} ready; restart Firefox`
+          : "Black Forest Desk — restart Firefox to finish update",
+      });
+    }
+    return {
+      ok: true,
+      version,
+      restartRequired: true,
+      message: data.message || (version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox."),
+    };
   }
 
   function tryAutoUnlock(reason, force) {
@@ -170,7 +236,7 @@
       const api = globalThis.AllDataRoLabels;
       if (!api?.resolveLotLastNames) {
         sendResponse({ names: [], source: "error", message: "Lot helper missing." });
-        return false;
+      return false;
       }
       api.resolveLotLastNames().then(sendResponse);
       return true;
@@ -221,6 +287,10 @@
     }
     if (message.type === "check-update") {
       checkForUpdate(Boolean(message.force)).then((available) => sendResponse({ available }));
+      return true;
+    }
+    if (message.type === "apply-update") {
+      applyDeskUpdate().then(sendResponse);
       return true;
     }
     if (message.type === "auto-unlock") {
