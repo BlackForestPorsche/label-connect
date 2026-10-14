@@ -81,6 +81,8 @@
   function onShopLoadSync() {
     if (!runtime?.runtime?.sendMessage) return;
     try {
+      // Tools unlock → Firefox jar (exchange). Force when already on /unlock so a
+      // stale gate / post-lock quiet cannot leave the SPA stuck.
       const onUnlock = /\/unlock\b/i.test(location.pathname || "");
       runtime.runtime
         .sendMessage({ type: "tools-to-site-unlock", forceExchange: onUnlock })
@@ -182,6 +184,7 @@
     }
   }
 
+  // Firefox funMode / prefs → Tools :8788 (push on change).
   let lastSettingsJson = "";
   try {
     const initial = readLocalPersonSettings();
@@ -201,6 +204,7 @@
         // ignore
       }
     });
+    // Same-tab writes do not fire `storage` — poll localStorage briefly.
     setInterval(() => {
       const next = readLocalPersonSettings();
       if (!next) return;
