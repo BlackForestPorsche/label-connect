@@ -1,8 +1,47 @@
-name: MUTED — assemble-desk-024-hex
+name: Assemble Desk 0.1.24 hex parts
 on:
+  push:
+    branches: [cursor/desk-024-update-apply-sync-b196]
+    paths:
+      - tmp/desk-024-hex/**
+      - .github/workflows/assemble-desk-024-hex.yml
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
-  muted:
+  assemble:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Muted. Use main apply-payload.yml (soft-skip)."
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/desk-024-update-apply-sync-b196
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assemble hex parts into apply chunks
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import hashlib, json, pathlib, subprocess
+          root = pathlib.Path("tmp/desk-024-hex")
+          man = json.loads((root / "manifest.json").read_text())
+          for key, meta in man.items():
+              parts = []
+              for i in range(meta["n"]):
+                  parts.append((root / f"{key}.{i:02d}.hex").read_text().strip())
+              text = bytes.fromhex("".join(parts)).decode("ascii")
+              digest = hashlib.sha256(text.encode()).hexdigest()
+              assert digest == meta["sha256"], (key, digest, meta["sha256"])
+              assert len(text) == meta["len"], (key, len(text), meta["len"])
+              for target in meta["targets"]:
+                  path = pathlib.Path(target)
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  path.write_text(text)
+                  print("wrote", path, len(text), digest[:12])
+          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+          subprocess.check_call(["git", "add", "-A"])
+          if subprocess.call(["git", "diff", "--cached", "--quiet"]) != 0:
+              subprocess.check_call(["git", "commit", "-m", "ci(desk): assemble 0.1.24 apply chunks from hex parts"])
+              subprocess.check_call(["git", "push"])
+          else:
+              print("no changes")
+          PY
