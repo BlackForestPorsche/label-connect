@@ -1,0 +1,64 @@
+name: Apply payload (soft-skip incomplete)
+# Canonical agent chunk-apply template. Incomplete uploads exit green so
+# mid-push does not spam Actions failure email. Prefer workflow_dispatch
+# after all parts land. Do not add push triggers on cursor/* branches.
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: apply-payload-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - name: Decode payload chunks (soft-skip if incomplete)
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import pathlib, gzip, base64, hashlib, json, sys, subprocess
+          root = pathlib.Path("tmp/apply-payload")
+          manifest_path = root / "manifest.json"
+          if not manifest_path.exists():
+              print("No manifest — nothing to apply (green).")
+              sys.exit(0)
+          manifest = json.loads(manifest_path.read_text())
+          changed = []
+          for item in manifest:
+              parts = []
+              missing = False
+              for i in range(item["chunks"]):
+                  p = root / f"{item['prefix']}.{i:02d}"
+                  if not p.exists():
+                      print(f"incomplete payload, waiting for {p} (green)")
+                      missing = True
+                      break
+                  parts.append(p.read_text().strip())
+              if missing:
+                  sys.exit(0)
+              data = gzip.decompress(base64.b64decode("".join(parts)))
+              if item.get("sha256") and hashlib.sha256(data).hexdigest() != item["sha256"]:
+                  print(f"sha mismatch {item['path']}", file=sys.stderr)
+                  sys.exit(1)
+              path = pathlib.Path(item["path"])
+              path.parent.mkdir(parents=True, exist_ok=True)
+              if path.exists() and path.read_bytes() == data:
+                  print(f"unchanged {item['path']}")
+                  continue
+              path.write_bytes(data)
+              changed.append(item["path"])
+              print(f"wrote {item['path']} {len(data)} bytes")
+          if not changed:
+              print("No changes")
+              sys.exit(0)
+          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+          subprocess.check_call(["git", "add", "--"] + changed)
+          subprocess.check_call(["git", "commit", "-m", "fix: apply payload sources from chunks"])
+          subprocess.check_call(["git", "push", "origin", "HEAD"])
+          PY
