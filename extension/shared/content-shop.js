@@ -2,6 +2,7 @@
 /**
  * Shop site ↔ Desk:
  * - Capture unlock JSON widgetToken when present
+ * - Capture lockShop / clearGateSession → lock Tools via :8788 DELETE
  * - On shop page load: Tools→website unlock (Bearer :8788 → exchange → bf_shop_gate)
  *   and from-gate nudge when the jar already has a gate (Desk lot names)
  */
@@ -31,10 +32,47 @@
     return null;
   }
 
+  function looksLikeLock(url, method, body) {
+    if (String(method || "GET").toUpperCase() !== "POST") return false;
+    const hay = `${url || ""}\n${body == null ? "" : String(body)}`;
+    if (/unlockShop|widgetToken|widgetExpiresAt/i.test(hay)) return false;
+    if (/widget\/logout/i.test(hay)) return true;
+    if (/\/api\/widget\/session/i.test(hay)) return false;
+    return /lockShop|clearGateSession/i.test(hay);
+  }
+
+  function requestUrl(input) {
+    if (typeof input === "string") return input;
+    if (input && typeof input.url === "string") return input.url;
+    try {
+      return String(input);
+    } catch {
+      return "";
+    }
+  }
+
+  function bodyText(body) {
+    if (body == null) return "";
+    if (typeof body === "string") return body;
+    if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+      return body.toString();
+    }
+    return "";
+  }
+
   function publish(session) {
     if (!session || !runtime?.runtime?.sendMessage) return;
     try {
       runtime.runtime.sendMessage({ type: "shop-site-session", payload: session });
+    } catch {
+      // ignore
+    }
+  }
+
+  function reportSiteLock() {
+    if (!runtime?.runtime?.sendMessage) return;
+    try {
+      runtime.runtime.sendMessage({ type: "site-lock" }).catch(() => {});
     } catch {
       // ignore
     }
@@ -70,6 +108,17 @@
 
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (...args) => {
+    const input = args[0];
+    const init = args[1] || {};
+    const url = requestUrl(input);
+    const method = init.method || (input && input.method) || "GET";
+    try {
+      if (looksLikeLock(url, method, bodyText(init.body))) {
+        reportSiteLock();
+      }
+    } catch {
+      // ignore
+    }
     const response = await originalFetch(...args);
     try {
       const clone = response.clone();
@@ -89,8 +138,21 @@
     return response;
   };
 
+  const xhrOpen = XMLHttpRequest.prototype.open;
   const xhrSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function openPatched(method, url, ...rest) {
+    this.__bfMethod = method;
+    this.__bfUrl = url;
+    return xhrOpen.call(this, method, url, ...rest);
+  };
   XMLHttpRequest.prototype.send = function sendPatched(...args) {
+    try {
+      if (looksLikeLock(this.__bfUrl, this.__bfMethod, args[0])) {
+        reportSiteLock();
+      }
+    } catch {
+      // ignore
+    }
     this.addEventListener("load", function onLoad() {
       try {
         const session = extractUnlock(this.responseText);
