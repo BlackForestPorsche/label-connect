@@ -82,6 +82,23 @@ jobs:
               subprocess.check_call(["git", "commit", "-m", payload.get("message") or f"Apply {fp}"])
               print("committed", fp, changed)
               any_commit = True
+          # Keep firefox/chromium background.js identical to shared after applies.
+          shared_bg = pathlib.Path("extension/shared/background.js")
+          if shared_bg.exists():
+              synced = []
+              for dest in ("extension/firefox/background.js", "extension/chromium/background.js"):
+                  if write_bytes(dest, shared_bg.read_bytes()):
+                      synced.append(dest)
+              if synced:
+                  subprocess.check_call(["git", "add", "--"] + synced)
+                  if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
+                      subprocess.check_call([
+                          "git", "commit", "-m",
+                          "fix(desk): sync shared background.js to firefox+chromium",
+                      ])
+                      print("committed sync", synced)
+                      any_commit = True
+
           if any_commit:
               subprocess.check_call(["git", "push", "origin", "HEAD"])
               print("push done")
