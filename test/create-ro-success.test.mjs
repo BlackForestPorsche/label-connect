@@ -199,3 +199,14 @@ test("isCreateControl matches Create R/O label", () => {
   assert.equal(api.isCreateControl(update), false);
   assert.equal(api.isForbiddenControl(update), true);
 });
+
+test("scrape rejects plate / account as lastName", () => {
+  assert.equal(api.lastNameFromFull("ABC1234"), "");
+  assert.equal(api.lastNameFromFull("A12345"), "");
+  assert.equal(api.lastNameFromFull("Whatcott"), "Whatcott");
+  assert.equal(api.isPlateOrAccountNoise("ABC1234"), true);
+  assert.equal(api.isPlateOrAccountNoise("12345"), true);
+  assert.equal(api.isPlateOrAccountNoise("License plate"), true);
+  assert.equal(api.isPlateOrAccountNoise("Account #"), true);
+  assert.equal(api.isPlateOrAccountNoise("Boxster"), false);
+});
