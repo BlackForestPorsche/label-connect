@@ -1,9 +1,15 @@
 # Labels (LabelWriter 550)
 
+## Merge into Black Forest Tools (in progress)
+
+From **shop-desktop 1.5.6+**, Black Forest Tools **owns** the Labels HTTP server on `:8080` (vendors this tree under `labels/`, spawns `node server.mjs` when nothing is already listening — including adopting a leftover `labels.service`). Desk Create RO keeps calling `http://127.0.0.1:8080/api/print-ro` — no extension change for the merge.
+
+- Prefer Tools autostart over the separate Labels desktop launcher day-to-day.
+- A leftover `labels.service` / `start-labels.sh` is fine during transition: Tools **adopts** an already-healthy `:8080` instead of double-binding.
+- This repo remains the source of truth for LabelWriter print code + Desk extension; Tools re-syncs with `npm run sync-labels`.
+- Manjaro: disable the standalone Labels user unit later, once Tools autostart is the boot path.
+
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
-
-**0.1.13** - Black Forest Desk Hub re-upload version (AMO rejected reusing 0.1.12 after delete). Same Create RO label layout + auto unlock; self-dist pack keeps `gecko.update_url` → GitHub `updates.json`.
-
 **0.1.12** - Create RO label layout: `{LastName} - {Model}` then `Out Mileage _____________`. Strips glued first initial (`LWhatcott` → `Whatcott`); never prints VIN / `VIN:`. Still prints on every Create (dedupe unchanged).
 
 **0.1.11** - Black Forest Desk: **background auto unlock** from shop `from-gate` (startup, alarm, idle→active, shop tab complete) with Tools `:8788` fallback. No need to open the popup and press Sync for the happy path; Sync buttons + Person/PIN remain.
