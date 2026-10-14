@@ -81,12 +81,13 @@
   function onShopLoadSync() {
     if (!runtime?.runtime?.sendMessage) return;
     try {
-      // Tools unlock → Firefox jar (exchange). Also clears gate when Tools is locked.
+      // Tools unlock → Firefox jar (exchange). Force when already on /unlock so a
+      // stale gate / post-lock quiet cannot leave the SPA stuck.
+      const onUnlock = /\/unlock\b/i.test(location.pathname || "");
       runtime.runtime
-        .sendMessage({ type: "tools-to-site-unlock" })
+        .sendMessage({ type: "tools-to-site-unlock", forceExchange: onUnlock })
         .then((response) => {
           if (!response) return;
-          const onUnlock = /\/unlock\b/i.test(location.pathname || "");
           if (response.ok && response.shouldReload && onUnlock) {
             location.reload();
             return;

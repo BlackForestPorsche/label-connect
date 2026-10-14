@@ -14,8 +14,10 @@ function toolsSiteSyncAction({
   siteLockQuiet,
 }) {
   if (siteLockQuiet && !forceExchange) {
-    if (bridgeReachable && hasSession) return "lock_tools";
-    return "site_lock_hold";
+    // Tools live again after a website lock → clear quiet and exchange (never re-DELETE).
+    if (bridgeReachable && hasSession) return "clear_quiet_and_exchange";
+    if (bridgeReachable && hasSession === false) return "site_lock_hold";
+    return "site_lock_pending";
   }
   if (bridgeReachable && hasSession === false) return "clear_gate";
   if (!bridgeReachable) return "skip_tools";
@@ -25,10 +27,14 @@ function toolsSiteSyncAction({
 }
 
 function websiteLockAction({ bridgeReachable, hasSession }) {
-  // Always clear Firefox gate + Desk token; lock Tools when bridge is up.
   if (bridgeReachable && hasSession) return "lock_tools_and_clear_gate";
   if (bridgeReachable) return "clear_gate_tools_already_locked";
   return "clear_gate_bridge_down";
+}
+
+function popupToolsSyncAction() {
+  // Button label "Sync Tools → website" must exchange, not only import lot token.
+  return "tools_to_site_unlock_force";
 }
 
 test("Tools locked + bridge up clears Firefox gate", () => {
@@ -91,7 +97,7 @@ test("Bridge down does not clear Firefox gate", () => {
   );
 });
 
-test("Website lock quiet blocks Tools→site re-exchange", () => {
+test("Website lock quiet + Tools unlocked clears quiet and exchanges", () => {
   assert.equal(
     toolsSiteSyncAction({
       bridgeReachable: true,
@@ -100,11 +106,11 @@ test("Website lock quiet blocks Tools→site re-exchange", () => {
       forceExchange: false,
       siteLockQuiet: true,
     }),
-    "lock_tools",
+    "clear_quiet_and_exchange",
   );
 });
 
-test("Website lock quiet holds when Tools already cleared", () => {
+test("Website lock quiet + Tools still locked holds", () => {
   assert.equal(
     toolsSiteSyncAction({
       bridgeReachable: true,
@@ -124,9 +130,6 @@ test("Website lock with Tools session locks Tools", () => {
   );
 });
 
-test("Website lock when Tools already locked still clears gate", () => {
-  assert.equal(
-    websiteLockAction({ bridgeReachable: true, hasSession: false }),
-    "clear_gate_tools_already_locked",
-  );
+test("Popup Sync Tools → website must force exchange", () => {
+  assert.equal(popupToolsSyncAction(), "tools_to_site_unlock_force");
 });

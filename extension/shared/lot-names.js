@@ -517,14 +517,13 @@
   async function syncToolsSessionToSite({ reloadUnlockTabs = true, forceExchange = false } = {}) {
     const health = await probeToolsBridgeHealth();
 
-    // Website intentionally locked — never re-exchange Tools Bearer into Firefox.
-    // Keep pushing DELETE/lock until Tools jar + shared file are cleared.
+    // Website lock quiet: hold exchange only while Tools is still locked.
+    // If Tools has a live session again, the user unlocked Tools AFTER the site
+    // lock — clear quiet and fall through to exchange (never re-DELETE).
     if (siteLockQuietActive() && !forceExchange) {
       if (health.reachable && health.hasSession) {
-        await lockToolsViaBridge();
-      }
-      const after = await probeToolsBridgeHealth();
-      if (after.reachable && after.hasSession === false) {
+        siteLockQuietUntil = 0;
+      } else if (health.reachable && health.hasSession === false) {
         const hadGate = (await readShopGateCookie()).present;
         await clearShopGateCookie();
         return {
@@ -534,14 +533,15 @@
           reason: "site_lock",
           error: "Website locked — Tools session cleared.",
         };
+      } else {
+        return {
+          ok: false,
+          locked: true,
+          shouldReload: false,
+          reason: "site_lock_pending",
+          error: "Website locked — waiting for Tools to clear session.",
+        };
       }
-      return {
-        ok: false,
-        locked: true,
-        shouldReload: false,
-        reason: "site_lock_pending",
-        error: "Website locked — waiting for Tools to clear session.",
-      };
     }
 
     if (health.reachable && health.hasSession === false) {
