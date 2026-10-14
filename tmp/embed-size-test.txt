@@ -1,0 +1,263 @@
+/* global globalThis, chrome, browser */
+/**
+ * On the Lot last-name helpers for SSF checkout.
+ * Never reads book-today — only lot labels (cars.owner).
+ *
+ * Loaded in the background (fetch + storage) and content scripts (parse helpers).
+ */
+(function (root) {
+  const api = root.AllDataRoLabels || (root.AllDataRoLabels = {});
+  const runtime = typeof browser !== "undefined" ? browser : typeof chrome !== "undefined" ? chrome : null;
+  const DEFAULT_SHOP = "https://shop.blackforestautomotive.com";
+  const DEFAULT_TOOLS_BRIDGE = "http://127.0.0.1:8788";
+  const GATE_COOKIE = "bf_shop_gate";
+  const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+  const PERSON_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+  const PIN_RE = /^\d{4,12}$/;
+  /** After Firefox website lock, do not re-exchange Tools Bearer into the site jar. */
+  const SITE_LOCK_QUIET_MS = 90_000;
+  /**
+   * After website unlock (or successful gateToken deposit), Tools flap / hasSession:false
+   * must not clear Firefox bf_shop_gate — that is the unlock→refresh→lock bounce.
+   */
+  const SITE_UNLOCK_HOLD_MS = 120_000;
+  /** Desk unlock roster (plasmoid fallback). */
+  const DESK_PEOPLE = Object.freeze(["logan", "stephen", "steve", "carla", "john"]);
+  let siteLockQuietUntil = 0;
+
+  function lastNameFromLotLabel(label) {
+    const text = String(label || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text || /^no\s*name$/i.test(text)) return "";
+    if (text.includes(",")) {
+      const head = text.split(",")[0].trim();
+      if (head) return head;
+    }
+    const parts = text.split(" ").filter(Boolean);
+    return parts[parts.length - 1] || "";
+  }
+
+  function lotLabelsToLastNames(items) {
+    const seen = new Set();
+    const names = [];
+    for (const item of items || []) {
+      const label = item && typeof item === "object" ? item.label : item;
+      const last = lastNameFromLotLabel(label);
+      if (!last) continue;
+      const key = last.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      names.push(last);
+    }
+    names.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    return names;
+  }
+
+  function normalizePerson(person) {
+    return String(person || "")
+      .trim()
+      .toLowerCase();
+  }
+
+  function friendlyWidgetError(code, status) {
+    const key = String(code || "").trim().toLowerCase();
+    if (key === "unauthorized" || status === 401) {
+      return "Desk PIN rejected (or person not found). Pick a person from the list and use the desk/shop widget PIN — not another password.";
+    }
+    if (key === "locked" || status === 429) {
+      return "Too many PIN tries — wait a bit, then unlock again with your desk PIN.";
+    }
+    if (key === "pin_change_required") {
+      return "This person must set a PIN on the shop site first, then unlock here.";
+    }
+    if (key === "https_required") {
+      return "Shop widget login needs HTTPS. Check shop.blackforestautomotive.com.";
+    }
+    if (key === "bad_request") {
+      return "Enter a valid shop person (lowercase letters) and a 4–12 digit desk PIN.";
+    }
+    if (key === "rate_limited") {
+      return "Shop rate-limited this request. Wait a minute, then try again.";
+    }
+    if (key && !/^[a-z_]+$/.test(key)) {
+      return String(code);
+    }
+    if (status) return `Shop unlock failed (${status}). Enter your desk PIN in the popup.`;
+    return "Could not unlock. Enter your desk PIN in the Black Forest Desk popup.";
+  }
+
+  async function storageGet(keys) {
+    if (!runtime?.storage?.local) return {};
+    try {
+      return (await runtime.storage.local.get(keys)) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  async function storageSet(obj) {
+    if (!runtime?.storage?.local) return;
+    try {
+      await runtime.storage.local.set(obj);
+    } catch {}
+  }
+
+  async function setPinBadge(needsPin) {
+    if (!runtime?.action?.setBadgeText) return;
+    try {
+      if (needsPin) {
+        await runtime.action.setBadgeText({ text: "PIN" });
+        await runtime.action.setBadgeBackgroundColor?.({ color: "#7a1f1f" });
+        await runtime.action.setTitle?.({
+          title: "Black Forest Desk — enter desk PIN to unlock lot names",
+        });
+      } else {
+        const stored = await storageGet(["deskUpdateAvailable"]);
+        if (stored.deskUpdateAvailable?.version) {
+          await runtime.action.setBadgeText({ text: "↑" });
+          await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+          await runtime.action.setTitle?.({
+            title: `Black Forest Desk — update ${stored.deskUpdateAvailable.version} ready`,
+          });
+        } else {
+          // Unlocked: empty badge (no PIN). Title signals session is live.
+          await runtime.action.setBadgeText({ text: "" });
+          await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+          await runtime.action.setTitle?.({
+            title: "Black Forest Desk — lot names unlocked",
+          });
+        }
+      }
+    } catch {}
+  }
+
+  async function hasFreshWidgetToken(minTtlMs = 60_000) {
+    const stored = await storageGet(["shopWidgetToken", "shopWidgetTokenExpiresAt"]);
+    const token = stored.shopWidgetToken;
+    const expiresAt = Number(stored.shopWidgetTokenExpiresAt || 0);
+    return Boolean(token && expiresAt > Date.now() + minTtlMs);
+  }
+
+  /** Refresh toolbar badge from stored token (does not hit the network). */
+  async function refreshUnlockBadge() {
+    const fresh = await hasFreshWidgetToken(0);
+    await setPinBadge(!fresh);
+    return { unlocked: fresh };
+  }
+
+  async function shopBaseUrl() {
+    const stored = await storageGet(["shopBaseUrl"]);
+    const value = stored.shopBaseUrl;
+    if (typeof value === "string" && /^https:\/\/shop\.blackforestautomotive\.com\/?$/i.test(value.trim())) {
+      return value.trim().replace(/\/$/, "");
+    }
+    return api.DEFAULT_SHOP_BASE || DEFAULT_SHOP;
+  }
+
+  async function toolsBridgeBaseUrl() {
+    const stored = await storageGet(["toolsBridgeBaseUrl"]);
+    const value = stored.toolsBridgeBaseUrl;
+    if (
+      typeof value === "string" &&
+      /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(value.trim())
+    ) {
+      return value.trim().replace(/\/$/, "");
+    }
+    return api.DEFAULT_TOOLS_BRIDGE_BASE || DEFAULT_TOOLS_BRIDGE;
+  }
+
+  async function storeWidgetToken({ token, expiresAt, person, source, publishToTools = true } = {}) {
+    const parsedExpiry = expiresAt ? Date.parse(expiresAt) : NaN;
+    const ttlMs = Number.isFinite(parsedExpiry)
+      ? Math.max(parsedExpiry - Date.now(), 60_000)
+      : 8 * 60 * 60 * 1000;
+    const normalized = normalizePerson(person);
+    const src = source || "pin";
+    // After an intentional website lock, do not clear quiet or remint Tools via
+    // from-gate / stale gate cookie (locked-site refresh must stay locked).
+    const quiet = siteLockQuietActive();
+    const allowPublish =
+      publishToTools &&
+      !quiet &&
+      token &&
+      (src === "shop-site" || src === "site-gate" || src === "pin");
+    // Website unlock wins — clear the quiet window so Tools may unlock again.
+    // Hold Firefox gate against Tools hasSession flaps (unlock→refresh→lock bounce).
+    if (!quiet && (src === "shop-site" || src === "site-gate" || src === "pin")) {
+      siteLockQuietUntil = 0;
+    }
+    const holdPatch =
+      src === "shop-site" || src === "site-gate" || src === "pin"
+        ? { siteUnlockHoldUntil: Date.now() + SITE_UNLOCK_HOLD_MS }
+        : {};
+    await storageSet({
+      shopWidgetToken: token,
+      shopWidgetTokenExpiresAt: Date.now() + ttlMs,
+      shopPerson: normalized || undefined,
+      shopWidgetTokenSource: src,
+      ...holdPatch,
+    });
+    await setPinBadge(false);
+    // Website → Tools unlock: push Bearer into :8788 so Tools SPA leaves /unlock.
+    if (allowPublish) {
+      const expiresIso = Number.isFinite(parsedExpiry)
+        ? new Date(parsedExpiry).toISOString()
+        : new Date(Date.now() + ttlMs).toISOString();
+      await publishSessionToToolsBridge({
+        token,
+        expiresAt: expiresIso,
+        person: normalized,
+      });
+    }
+    return { ok: true, person: normalized, source: src, publishedToTools: Boolean(allowPublish) };
+  }
+
+  /**
+   * Publish Desk/site Bearer into Tools shared file (POST :8788/v1/widget-session).
+   * Tools onPublished → exchange → Electron bf_shop_gate (website unlock → Tools unlock).
+   */
+  async function publishSessionToToolsBridge({ token, expiresAt, person } = {}) {
+    if (!token || !expiresAt) {
+      return { ok: false, reason: "bad_payload" };
+    }
+    const base = await toolsBridgeBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/v1/widget-session`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: String(token),
+          expiresAt: String(expiresAt),
+          person: person ? String(person) : "",
+        }),
+        cache: "no-store",
+      });
+    } catch {
+      return { ok: false, reason: "bridge_unreachable" };
+    }
+    if (!response.ok) {
+      return { ok: false, reason: "publish_failed", status: response.status };
+    }
+    return { ok: true, reason: "published" };
+  }
+
+  /**
+   * Website lock → Tools lock. DELETE session (Tools 1.5.11+) then POST /v1/lock alias.
+   * Clears Electron jar via Tools onLock so from-gate remint cannot revive the session.
+   */
+  async function lockToolsViaBridge() {
+    const base = await toolsBridgeBaseUrl();
+    const tryOnce = async (method, path) => {
+      try {
+        const response = await fetch(`${base}${path}`, {
+          method,
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        });
+        if (response.status === 404 || response.status === 405) {
+          return { ok: false, reason: "lock_unsupported", status: response.status };
+        }
+        if (!response.ok) {
+          return { ok: false, reason: "lock_failed", status: response.status
