@@ -187,7 +187,14 @@ const server = createServer(async (req, res) => {
       const result = await exclusive(() => applyDeskExtensionUpdate(root, { localVersion }));
       let status = 500;
       if (result.ok || result.upToDate || result.mode === "up_to_date") status = 200;
-      else if (result.mode === "hub_upload" || result.error === "hub_signed_kept") status = 409;
+      else if (
+        result.mode === "hub_upload" ||
+        result.mode === "signed_staged" ||
+        result.error === "hub_signed_kept"
+      ) {
+        // Actionable staging / keep-signed — not a hard server fault.
+        status = 200;
+      }
       send(res, status, result);
       return;
     }
