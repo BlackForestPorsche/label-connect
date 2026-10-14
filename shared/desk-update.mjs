@@ -240,9 +240,10 @@ function signedStagedResult({ version, root, staged, detail }) {
     staged: true,
     applied: false,
     restartRequired: false,
+    // Staging ≠ Firefox install. Popup must not read as “updated”.
     message: pathHint
-      ? `Signed Desk ${ver} ready on Desktop (${pathHint}). about:addons → gear → Install Add-on From File… (or wait for Firefox auto-update).${detail ? ` ${detail}` : ""}`
-      : `Signed Desk ${ver} feed staged. about:addons → Install Add-on From File, or Check for Updates.${detail ? ` ${detail}` : ""}`,
+      ? `Staged Desk ${ver} on Desktop (${pathHint}) — NOT applied yet. about:addons → gear → Install Add-on From File… → that XPI. (Unsigned sideload never overwrites Hub/AMO-signed.)${detail ? ` ${detail}` : ""}`
+      : `Staged Desk ${ver} — NOT applied. about:addons → Install Add-on From File, or Check for Updates.${detail ? ` ${detail}` : ""}`,
   };
 }
 
