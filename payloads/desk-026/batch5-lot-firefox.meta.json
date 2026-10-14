@@ -1,0 +1,10 @@
+{
+  "message": "fix(desk): 0.1.26 website\u2192Tools lock/unlock + publish retry (batch 5)",
+  "paths": [
+    "extension/firefox/lot-names.js"
+  ],
+  "md5": "3548b37549a7f1a76a453a0d4f5528c9",
+  "sha256": "db93802dd691cf4b03c302383058ee930c3056cd27e8bad9fddcb26554fd9a90",
+  "bytes": 47111,
+  "parts": 3
+}
