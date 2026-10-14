@@ -24,11 +24,14 @@ jobs:
               try:
                   meta = json.loads(pathlib.Path(meta_fp).read_text())
                   parts = [pathlib.Path(f"{meta['prefix']}{i}").read_text().strip() for i in range(meta["parts"])]
-                  b64 = "".join(parts)
-                  got = hashlib.md5(b64.encode()).hexdigest()
+                  joined = "".join(parts)
+                  got = hashlib.md5(joined.encode()).hexdigest()
                   if got != meta["md5"]:
-                      raise AssertionError(f"{meta_fp} b64 md5 {got} != {meta['md5']}")
-                  raw = gzip.decompress(base64.b64decode(b64))
+                      raise AssertionError(f"{meta_fp} joined md5 {got} != {meta['md5']}")
+                  if meta.get("kind") == "hex":
+                      raw = bytes.fromhex(joined)
+                  else:
+                      raw = gzip.decompress(base64.b64decode(joined))
                   got2 = hashlib.md5(raw).hexdigest()
                   if got2 != meta["item_md5"]:
                       raise AssertionError(f"{meta_fp} raw md5 {got2} != {meta['item_md5']}")

@@ -1,7 +1,8 @@
 {
-  "prefix": "payloads/ro019r-rolabel.",
-  "parts": 2,
-  "md5": "7e1d6cda62f713afec3aaae18a3077a3",
+  "kind": "hex",
+  "prefix": "payloads/ro019r-rolabel.hex.",
+  "parts": 7,
+  "md5": "9c79b685b1059715849ec0161d0cf3cf",
   "item_md5": "58b500e4db2c432b512f9fa0904acb0a",
   "paths": [
     "shared/ro-label.mjs"
