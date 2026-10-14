@@ -81,8 +81,6 @@
   function onShopLoadSync() {
     if (!runtime?.runtime?.sendMessage) return;
     try {
-      // Tools unlock → Firefox jar (exchange). Force when already on /unlock so a
-      // stale gate / post-lock quiet cannot leave the SPA stuck.
       const onUnlock = /\/unlock\b/i.test(location.pathname || "");
       runtime.runtime
         .sendMessage({ type: "tools-to-site-unlock", forceExchange: onUnlock })
@@ -164,6 +162,77 @@
     });
     return xhrSend.apply(this, args);
   };
+
+  function publishPersonSettings(settings) {
+    if (!settings || !runtime?.runtime?.sendMessage) return;
+    try {
+      runtime.runtime.sendMessage({ type: "site-person-settings", payload: settings });
+    } catch {
+      // ignore
+    }
+  }
+
+  function readLocalPersonSettings() {
+    try {
+      const raw = localStorage.getItem("bf-person-settings");
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  let lastSettingsJson = "";
+  try {
+    const initial = readLocalPersonSettings();
+    if (initial) {
+      lastSettingsJson = JSON.stringify(initial);
+      publishPersonSettings(initial);
+    }
+    window.addEventListener("storage", (event) => {
+      if (event.key !== "bf-person-settings") return;
+      try {
+        const next = event.newValue ? JSON.parse(event.newValue) : null;
+        const json = next ? JSON.stringify(next) : "";
+        if (!next || json === lastSettingsJson) return;
+        lastSettingsJson = json;
+        publishPersonSettings(next);
+      } catch {
+        // ignore
+      }
+    });
+    setInterval(() => {
+      const next = readLocalPersonSettings();
+      if (!next) return;
+      const json = JSON.stringify(next);
+      if (json === lastSettingsJson) return;
+      lastSettingsJson = json;
+      publishPersonSettings(next);
+    }, 1000);
+  } catch {
+    // ignore
+  }
+
+  if (runtime?.runtime?.onMessage?.addListener) {
+    try {
+      runtime.runtime.onMessage.addListener((message) => {
+        if (!message || message.type !== "apply-person-settings") return;
+        try {
+          const payload = message.payload;
+          if (!payload || typeof payload !== "object") return;
+          const json = JSON.stringify(payload);
+          if (json === lastSettingsJson) return;
+          lastSettingsJson = json;
+          localStorage.setItem("bf-person-settings", json);
+          window.dispatchEvent(new Event("bf-person-settings-updated"));
+        } catch {
+          // ignore
+        }
+      });
+    } catch {
+      // ignore
+    }
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", onShopLoadSync, { once: true });
