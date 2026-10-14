@@ -31,7 +31,16 @@ jobs:
               pathlib.Path(meta["out"]).write_text(hexdata)
               print("assembled", meta["out"], len(hexdata))
           for fp in sorted(glob.glob("payloads/create-ro-012-*.hex")):
-              text = bytes.fromhex(pathlib.Path(fp).read_text().strip()).decode()
+              raw = pathlib.Path(fp).read_text().strip()
+              if not raw:
+                  print("skip empty hex", fp)
+                  continue
+              try:
+                  text = bytes.fromhex(raw).decode()
+                  json.loads(text)  # validate
+              except Exception as e:
+                  print("skip bad hex", fp, e)
+                  continue
               out = fp[:-4] + ".json"
               pathlib.Path(out).write_text(text)
               print("hex->json", fp, out)
@@ -40,33 +49,42 @@ jobs:
                   continue
               payload = json.loads(pathlib.Path(fp).read_text())
               changed = []
-              if "sed" in payload:
-                  for op in payload["sed"]:
-                      path = pathlib.Path(op["path"])
-                      text = path.read_text()
-                      count = text.count(op["old"])
-                      assert count == op.get("count", count), (op["path"], count)
-                      path.write_text(text.replace(op["old"], op["new"]))
-                      changed.append(op["path"])
-                      print("sed", op["path"], count)
-              elif "items" in payload:
-                  for item in payload["items"]:
-                      raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
-                      assert hashlib.md5(raw).hexdigest() == item["md5"], item["path"]
-                      pathlib.Path(item["path"]).parent.mkdir(parents=True, exist_ok=True)
-                      pathlib.Path(item["path"]).write_bytes(raw)
-                      changed.append(item["path"])
-                      print("wrote", item["path"], len(raw))
-              elif "gzipBase64" in payload:
-                  raw = gzip.decompress(base64.b64decode(payload["gzipBase64"]))
-                  assert hashlib.md5(raw).hexdigest() == payload["md5"], fp
-                  for path in payload["paths"]:
-                      pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
-                      pathlib.Path(path).write_bytes(raw)
-                      changed.append(path)
-                      print("wrote", path, len(raw))
-              else:
-                  print("skip unknown", fp)
+              try:
+                  if "sed" in payload:
+                      if not payload["sed"]:
+                          print("noop sed", fp)
+                          continue
+                      for op in payload["sed"]:
+                          path = pathlib.Path(op["path"])
+                          text = path.read_text()
+                          count = text.count(op["old"])
+                          assert count == op.get("count", count), (op["path"], count)
+                          path.write_text(text.replace(op["old"], op["new"]))
+                          changed.append(op["path"])
+                          print("sed", op["path"], count)
+                  elif "items" in payload:
+                      for item in payload["items"]:
+                          raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
+                          assert hashlib.md5(raw).hexdigest() == item["md5"], item["path"]
+                          pathlib.Path(item["path"]).parent.mkdir(parents=True, exist_ok=True)
+                          pathlib.Path(item["path"]).write_bytes(raw)
+                          changed.append(item["path"])
+                          print("wrote", item["path"], len(raw))
+                  elif "gzipBase64" in payload:
+                      raw = gzip.decompress(base64.b64decode(payload["gzipBase64"]))
+                      assert hashlib.md5(raw).hexdigest() == payload["md5"], fp
+                      for path in payload["paths"]:
+                          pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+                          pathlib.Path(path).write_bytes(raw)
+                          changed.append(path)
+                          print("wrote", path, len(raw))
+                  else:
+                      print("skip unknown", fp)
+                      continue
+              except Exception as e:
+                  print("ERROR applying", fp, e)
+                  raise
+              if not changed:
                   continue
               subprocess.check_call(["git", "add", "--"] + changed)
               if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
