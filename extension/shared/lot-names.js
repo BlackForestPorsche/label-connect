@@ -116,6 +116,7 @@
             title: `Black Forest Desk — update ${stored.deskUpdateAvailable.version} ready`,
           });
         } else {
+          // Unlocked: empty badge (no PIN). Title signals session is live.
           await runtime.action.setBadgeText({ text: "" });
           await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
           await runtime.action.setTitle?.({
@@ -133,6 +134,7 @@
     return Boolean(token && expiresAt > Date.now() + minTtlMs);
   }
 
+  /** Refresh toolbar badge from stored token (does not hit the network). */
   async function refreshUnlockBadge() {
     const fresh = await hasFreshWidgetToken(0);
     await setPinBadge(!fresh);
@@ -167,12 +169,15 @@
       : 8 * 60 * 60 * 1000;
     const normalized = normalizePerson(person);
     const src = source || "pin";
+    // After an intentional website lock, do not clear quiet or remint Tools via
+    // from-gate / stale gate cookie (locked-site refresh must stay locked).
     const quiet = siteLockQuietActive();
     const allowPublish =
       publishToTools &&
       !quiet &&
       token &&
       (src === "shop-site" || src === "site-gate" || src === "pin");
+    // Website unlock wins — clear the quiet window so Tools may unlock again.
     if (!quiet && (src === "shop-site" || src === "site-gate" || src === "pin")) {
       siteLockQuietUntil = 0;
     }
@@ -183,6 +188,7 @@
       shopWidgetTokenSource: src,
     });
     await setPinBadge(false);
+    // Website → Tools unlock: push Bearer into :8788 so Tools SPA leaves /unlock.
     if (allowPublish) {
       const expiresIso = Number.isFinite(parsedExpiry)
         ? new Date(parsedExpiry).toISOString()
@@ -196,6 +202,10 @@
     return { ok: true, person: normalized, source: src, publishedToTools: Boolean(allowPublish) };
   }
 
+  /**
+   * Publish Desk/site Bearer into Tools shared file (POST :8788/v1/widget-session).
+   * Tools onPublished → exchange → Electron bf_shop_gate (website unlock → Tools unlock).
+   */
   async function publishSessionToToolsBridge({ token, expiresAt, person } = {}) {
     if (!token || !expiresAt) {
       return { ok: false, reason: "bad_payload" };
@@ -222,6 +232,10 @@
     return { ok: true, reason: "published" };
   }
 
+  /**
+   * Website lock → Tools lock. DELETE session (Tools 1.5.11+) then POST /v1/lock alias.
+   * Clears Electron jar via Tools onLock so from-gate remint cannot revive the session.
+   */
   async function lockToolsViaBridge() {
     const base = await toolsBridgeBaseUrl();
     const tryOnce = async (method, path) => {
@@ -255,6 +269,9 @@
     return result;
   }
 
+  /**
+   * Firefox website lock: clear gate + Desk token, lock Tools bridge, block re-exchange.
+   */
   async function syncSiteLockToTools({ reloadShopTabs = true } = {}) {
     siteLockQuietUntil = Date.now() + SITE_LOCK_QUIET_MS;
     const hadGate = (await readShopGateCookie()).present;
@@ -266,6 +283,7 @@
     });
     await setPinBadge(true);
     const locked = await lockToolsViaBridge();
+    // Retry once if Tools still shows a session (race with from-gate remint).
     if (locked.ok) {
       const health = await probeToolsBridgeHealth();
       if (health.reachable && health.hasSession) {
@@ -284,9 +302,11 @@
           try {
             await runtime.tabs.reload(tab.id);
           } catch {
+            // ignore
           }
         }
       } catch {
+        // ignore
       }
     }
     return {
@@ -302,6 +322,7 @@
     return nowMs < siteLockQuietUntil;
   }
 
+  /** Read bf_shop_gate from the default browser profile. Never logs the value. */
   async function readShopGateCookie() {
     const base = await shopBaseUrl();
     const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
@@ -317,6 +338,11 @@
     }
   }
 
+  /**
+   * Probe Tools desk bridge health (no token). Distinguishes bridge-down vs locked.
+   * Bridge up + hasSession:false → Tools intentionally locked (clear Firefox gate).
+   * Bridge unreachable → do not clear Firefox gate (Tools may be quitting).
+   */
   async function probeToolsBridgeHealth() {
     const base = await toolsBridgeBaseUrl();
     let response;
@@ -359,6 +385,10 @@
     }
   }
 
+  /**
+   * Write bf_shop_gate into this browser's jar (Firefox/Chromium ≠ Electron persist:shop).
+   * Prefer explicit gateToken from exchange JSON; never log the value.
+   */
   async function applyGateCookie(value, expiresAt) {
     if (!value || !runtime?.cookies?.set) {
       return { ok: false, reason: "no_cookies_api" };
@@ -392,6 +422,10 @@
     }
   }
 
+  /**
+   * Tools/Desk Bearer → website bf_shop_gate via POST /api/widget/session/exchange.
+   * This is the missing half of App↔website sync (Desk already imported :8788 for itself).
+   */
   async function exchangeWidgetSessionToGate(token) {
     if (!token) return { error: "No Tools session token.", reason: "no_token" };
     const base = await shopBaseUrl();
@@ -482,13 +516,23 @@
         await runtime.tabs.reload(tab.id);
         reloaded += 1;
       } catch {
+        // ignore
       }
     }
     return { reloaded };
   }
 
+  /**
+   * End-to-end: Tools :8788 Bearer → Firefox/Chromium bf_shop_gate.
+   * Lock Tools (bridge up, no session) → clear stale site gate so refresh stays locked.
+   * forceExchange=true on explicit Sync Tools (heal stale gate); auto path skips when gate present.
+   */
   async function syncToolsSessionToSite({ reloadUnlockTabs = true, forceExchange = false } = {}) {
     const health = await probeToolsBridgeHealth();
+
+    // Website lock quiet: hold exchange only while Tools is still locked.
+    // If Tools has a live session again, the user unlocked Tools AFTER the site
+    // lock — clear quiet and fall through to exchange (never re-DELETE).
     if (siteLockQuietActive() && !forceExchange) {
       if (health.reachable && health.hasSession) {
         siteLockQuietUntil = 0;
@@ -512,6 +556,7 @@
         };
       }
     }
+
     if (health.reachable && health.hasSession === false) {
       const hadGate = (await readShopGateCookie()).present;
       await clearShopGateCookie();
@@ -525,6 +570,7 @@
         await setPinBadge(true);
       }
       if (hadGate && reloadUnlockTabs) {
+        // Reload shop tabs so SPA notices missing gate (home → /unlock).
         if (runtime?.tabs?.query && runtime?.tabs?.reload) {
           try {
             const tabs = await runtime.tabs.query({
@@ -535,10 +581,12 @@
                 try {
                   await runtime.tabs.reload(tab.id);
                 } catch {
+                  // ignore
                 }
               }
             }
           } catch {
+            // ignore
           }
         }
       }
@@ -550,10 +598,12 @@
         error: "Tools is locked — shop website cookie cleared in this browser.",
       };
     }
+
     const fromTools = await importToolsWidgetSession();
     if (!fromTools.ok) {
       return fromTools;
     }
+    // Importing from Tools means Tools unlocked — drop site-lock quiet window.
     siteLockQuietUntil = 0;
     const stored = await storageGet(["shopWidgetToken"]);
     const token = stored.shopWidgetToken;
@@ -591,7 +641,12 @@
     };
   }
 
+  /**
+   * Website shop session → Desk Bearer via POST /api/widget/session/from-gate.
+   * Degrades cleanly when the route is missing (404/406): falls back to Tools/PIN.
+   */
   async function importSiteGateSession({ publishToTools = true } = {}) {
+    // Intentional website lock: never from-gate → Tools (locked refresh remint).
     if (siteLockQuietActive()) {
       return {
         error: "Website locked — not importing shop gate into Tools.",
@@ -607,6 +662,7 @@
         reason: "no_gate_cookie",
       };
     }
+
     const base = await shopBaseUrl();
     let response;
     try {
@@ -620,12 +676,14 @@
     } catch {
       return { error: "Could not reach the shop from-gate API.", reason: "network" };
     }
+
     let data = null;
     try {
       data = await response.json();
     } catch {
       data = null;
     }
+
     if (response.status === 404 || response.status === 406) {
       return {
         error:
@@ -646,6 +704,7 @@
         reason: "from_gate_error",
       };
     }
+
     const token = data?.token || data?.accessToken || data?.bearer || data?.widgetToken;
     const expiresAt = data?.expiresAt || data?.widgetExpiresAt;
     if (!token) return { error: "from-gate returned no token.", reason: "bad_payload" };
@@ -709,6 +768,7 @@
     if (!PIN_RE.test(pinText)) {
       return { error: "Desk PIN must be 4–12 digits (same PIN as the shop / Plasma widget)." };
     }
+
     const base = await shopBaseUrl();
     let response;
     try {
@@ -747,6 +807,7 @@
     const token = stored.shopWidgetToken;
     const expiresAt = Number(stored.shopWidgetTokenExpiresAt || 0);
     if (token && expiresAt > Date.now() + 60_000) return { token };
+
     if (trySite) {
       const fromSite = await importSiteGateSession();
       if (fromSite.ok) {
@@ -764,6 +825,13 @@
     return { needsAuth: true };
   }
 
+  /**
+   * Background happy path:
+   * 1) Tools bridge up + locked → clear Firefox bf_shop_gate (no stale website unlock)
+   * 2) Tools bridge up + session → import Bearer + exchange into Firefox jar
+   * 3) else from-gate (site cookie) then Tools :8788 for Desk lot names
+   * Throttled so alarms / tab loads / idle do not spam the shop (~20/min cap).
+   */
   let autoUnlockInFlight = null;
   async function tryAutoUnlock({ force = false, reason = "" } = {}) {
     if (autoUnlockInFlight) return autoUnlockInFlight;
@@ -775,6 +843,7 @@
         if (lastAt && Date.now() - lastAt < minGapMs) {
           const health = await probeToolsBridgeHealth();
           if (health.reachable && health.hasSession === false) {
+            // Lock must win even during throttle — stale site cookie is the bug.
             return syncToolsSessionToSite({ reloadUnlockTabs: true });
           }
           const gate = await readShopGateCookie();
@@ -784,13 +853,17 @@
             return { ok: true, skipped: "throttle_fresh", reason };
           }
           if (!force && fresh && !gate.present && health.reachable && health.hasSession) {
+            // Desk token OK but website jar empty — still need exchange.
             return syncToolsSessionToSite({ reloadUnlockTabs: true });
           }
           if (!force) return { ok: false, skipped: "throttle", reason };
         }
+
         await storageSet({ deskAutoUnlockAt: Date.now() });
+
         const health = await probeToolsBridgeHealth();
         if (health.reachable) {
+          // Prefer Tools as source of truth when bridge is up (unlock + lock).
           const synced = await syncToolsSessionToSite({ reloadUnlockTabs: true });
           if (synced.ok) {
             await setPinBadge(false);
@@ -799,6 +872,8 @@
           if (synced.locked) {
             return { ...synced, reason: reason || synced.reason };
           }
+          // Tools had no session / exchange failed — fall through to site from-gate
+          // only when we are not holding a website-lock quiet window.
           if (siteLockQuietActive()) {
             return {
               ok: false,
@@ -808,10 +883,12 @@
             };
           }
         }
+
         if (!force && (await hasFreshWidgetToken()) && (await readShopGateCookie()).present) {
           await setPinBadge(false);
           return { ok: true, skipped: "already_fresh", reason };
         }
+
         if (siteLockQuietActive()) {
           return {
             ok: false,
@@ -820,11 +897,13 @@
             error: "Website locked — skipping from-gate auto unlock.",
           };
         }
+
         const auth = await ensureWidgetToken({ trySite: true, tryTools: true });
         if (auth.needsAuth) {
           await setPinBadge(true);
           return { ok: false, needsAuth: true, reason };
         }
+        // Desk Bearer present — if website jar still empty, try exchange once.
         const gate = await readShopGateCookie();
         if (!gate.present && auth.token) {
           const exchanged = await exchangeWidgetSessionToGate(auth.token);
@@ -859,6 +938,7 @@
           "Unlock the shop site in this Firefox profile (or Tools / desk PIN in the popup), then Refresh.",
       };
     }
+
     const base = await shopBaseUrl();
     let response;
     try {
@@ -876,6 +956,7 @@
         source: cachedNames.length ? "cache" : "error",
       };
     }
+
     if (response.status === 401 || response.status === 403) {
       await storageSet({ shopWidgetToken: "", shopWidgetTokenExpiresAt: 0 });
       await setPinBadge(true);
@@ -896,6 +977,7 @@
             : "Desk PIN session expired — open the Black Forest Desk popup and enter your desk PIN again.",
       };
     }
+
     let data = null;
     try {
       data = await response.json();
@@ -909,6 +991,7 @@
         source: cachedNames.length ? "cache" : "error",
       };
     }
+
     const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
     const names = lotLabelsToLastNames(items);
     await storageSet({ lotLastNames: names, lotLastNamesAt: Date.now() });
