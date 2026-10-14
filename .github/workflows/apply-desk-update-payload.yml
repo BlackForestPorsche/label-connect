@@ -13,16 +13,47 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Materialize part files from chunks
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import pathlib
+          for i in range(3):
+              chunks = sorted(
+                  pathlib.Path("payloads").glob(f"desk-update-files.json.part{i}.c*"),
+                  key=lambda p: int(p.name.rsplit(".c", 1)[1]),
+              )
+              if not chunks:
+                  print("no chunks for part", i)
+                  continue
+              marker = pathlib.Path(f"payloads/desk-update-files.json.part{i}.chunks")
+              expected = int(marker.read_text().strip()) if marker.exists() else None
+              if expected is not None and len(chunks) != expected:
+                  print(f"part {i}: have {len(chunks)} chunks, need {expected}; skip")
+                  continue
+              out = pathlib.Path(f"payloads/desk-update-files.json.part{i}")
+              data = "".join(p.read_text() for p in chunks)
+              out.write_text(data)
+              print("materialized", out, len(data), "from", [p.name for p in chunks])
+          PY
       - name: Assemble part files into JSON payloads
         run: |
           set -euo pipefail
           python3 <<'PY'
-          import json, pathlib, glob
+          import json, pathlib, glob, sys
           for meta_path in glob.glob("payloads/*.meta.json"):
               meta = json.loads(pathlib.Path(meta_path).read_text())
               parts = []
+              missing = []
               for i in range(meta["parts"]):
-                  parts.append(pathlib.Path(f'{meta["prefix"]}{i}').read_text())
+                  p = pathlib.Path(f'{meta["prefix"]}{i}')
+                  if not p.exists():
+                      missing.append(str(p))
+                      continue
+                  parts.append(p.read_text())
+              if missing:
+                  print("missing parts, skip assemble:", missing)
+                  sys.exit(0)
               out = "".join(parts)
               pathlib.Path(meta["out"]).write_text(out)
               json.loads(out)
@@ -35,26 +66,35 @@ jobs:
           import gzip, base64, json, hashlib, pathlib, glob, subprocess
           subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
           subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
-          for fp in sorted(glob.glob("payloads/desk-update-*.json")):
-              if fp.endswith(".meta.json"):
-                  continue
-              payload = json.loads(pathlib.Path(fp).read_text())
-              if "items" not in payload:
-                  print("skip", fp)
-                  continue
-              changed = []
-              for item in payload["items"]:
-                  raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
-                  assert hashlib.md5(raw).hexdigest() == item["md5"], item["path"]
-                  pathlib.Path(item["path"]).parent.mkdir(parents=True, exist_ok=True)
-                  pathlib.Path(item["path"]).write_bytes(raw)
-                  changed.append(item["path"])
-                  print("wrote", item["path"], len(raw))
-              subprocess.check_call(["git", "add", "--"] + changed)
-              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
-                  print("no change for", fp)
-                  continue
-              msg = payload.get("message") or f"Apply {fp}"
+          part_paths = [f"payloads/desk-update-files.json.part{i}" for i in range(3)]
+          existing = [p for p in part_paths if pathlib.Path(p).exists()]
+          if existing:
+              subprocess.check_call(["git", "add", "--"] + existing)
+              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
+                  subprocess.check_call(["git", "commit", "-m", "Materialize desk-update part files from chunks"])
+          assembled = pathlib.Path("payloads/desk-update-files.json")
+          if not assembled.exists():
+              print("no assembled payload yet")
+              # still push part materialization commits if any
+              subprocess.call(["git", "push"])
+              raise SystemExit(0)
+          payload = json.loads(assembled.read_text())
+          if "items" not in payload:
+              print("skip assembled: no items")
+              raise SystemExit(0)
+          changed = []
+          for item in payload["items"]:
+              raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
+              assert hashlib.md5(raw).hexdigest() == item["md5"], item["path"]
+              pathlib.Path(item["path"]).parent.mkdir(parents=True, exist_ok=True)
+              pathlib.Path(item["path"]).write_bytes(raw)
+              changed.append(item["path"])
+              print("wrote", item["path"], len(raw))
+          subprocess.check_call(["git", "add", "--"] + changed)
+          if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
+              print("no change for assembled payload")
+          else:
+              msg = payload.get("message") or "Apply desk-update-files.json"
               subprocess.check_call(["git", "commit", "-m", msg])
               print("committed", msg)
           subprocess.check_call(["git", "push"])
