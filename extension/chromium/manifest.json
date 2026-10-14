@@ -1,12 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Black Forest Desk",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "AllData Create R/O → Labels print, plus SSF checkout On-the-Lot last-name helper.",
   "permissions": [
     "storage",
     "alarms",
-    "cookies"
+    "cookies",
+    "tabs",
+    "idle"
   ],
   "host_permissions": [
     "https://manageonline.alldata.com/*",
