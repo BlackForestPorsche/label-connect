@@ -3,7 +3,7 @@ on:
   push:
     branches: [cursor/create-ro-label-text-947d]
     paths:
-      - "payloads/create-ro-*.json"
+      - "payloads/create-ro-*"
   workflow_dispatch:
 jobs:
   apply:
@@ -12,6 +12,22 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Assemble part files into JSON payloads
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json, pathlib, glob
+          for meta_path in glob.glob("payloads/*.meta.json"):
+              meta = json.loads(pathlib.Path(meta_path).read_text())
+              parts = []
+              for i in range(meta["parts"]):
+                  parts.append(pathlib.Path(f'{meta["prefix"]}{i}').read_text())
+              out = "".join(parts)
+              pathlib.Path(meta["out"]).write_text(out)
+              # validate json
+              json.loads(out)
+              print("assembled", meta["out"], len(out))
+          PY
       - name: Decode payloads and commit
         run: |
           set -euo pipefail
@@ -20,7 +36,12 @@ jobs:
           subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
           subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
           for fp in sorted(glob.glob("payloads/create-ro-*.json")):
+              if fp.endswith(".meta.json"):
+                  continue
               payload = json.loads(pathlib.Path(fp).read_text())
+              if "gzipBase64" not in payload and "items" not in payload:
+                  print("skip non-payload", fp)
+                  continue
               changed = []
               if "items" in payload:
                   for item in payload["items"]:
