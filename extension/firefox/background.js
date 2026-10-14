@@ -70,6 +70,8 @@
     if (!response.ok) {
       const code = data && data.error;
       if (response.status === 401 || response.status === 403) {
+        // Local Labels /api/print-ro has no shop PIN — this is almost always a misconfigured
+        // bridge/proxy. Do not echo cryptic "unauthorized".
         return {
           error:
             "Labels rejected the print request. Confirm Labels is running at 127.0.0.1:8080 (Create RO does not use the desk PIN).",
@@ -131,6 +133,7 @@
         deskUpdateCheckedAt: Date.now(),
         deskUpdateAvailable: available,
       });
+      // Preserve PIN / unlocked badge state; only force ↑ when an update is ready.
       const api = globalThis.AllDataRoLabels;
       if (available && runtime.action?.setBadgeText) {
         await runtime.action.setBadgeText({ text: "↑" });
@@ -232,7 +235,9 @@
     return false;
   });
 
+  // Soft update check on worker start + daily-ish alarm when available.
   void checkForUpdate(false);
+  // Happy path: mint widget token without opening the popup / pressing Sync.
   tryAutoUnlock("startup", true);
 
   if (runtime.alarms?.create) {
@@ -244,18 +249,22 @@
         if (alarm?.name === AUTO_UNLOCK_ALARM) tryAutoUnlock("alarm", false);
       });
     } catch {
+      // alarms permission optional
     }
   }
 
+  // After idle / lock, retry from-gate + Tools when the user is back.
   if (runtime.idle?.onStateChanged?.addListener) {
     try {
       runtime.idle.onStateChanged.addListener((state) => {
         if (state === "active") tryAutoUnlock("idle-active", false);
       });
     } catch {
+      // idle permission optional
     }
   }
 
+  // Shop tab finished loading → from-gate (cookie present) then Tools fallback.
   if (runtime.tabs?.onUpdated?.addListener) {
     try {
       runtime.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
@@ -265,6 +274,7 @@
         tryAutoUnlock("shop-tab-complete", false);
       });
     } catch {
+      // tabs permission optional
     }
   }
 })();
