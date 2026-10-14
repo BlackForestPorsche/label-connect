@@ -1,5 +1,5 @@
 {
-  "version": "0.1.10",
-  "message": "Create RO labels: last name only + model; print every Create (dedupe by Create click / new RO id, not customer). Fixes already-printed skip on new Create for same person.",
+  "version": "0.1.11",
+  "message": "Create RO label: LastName - Model + Out Mileage blank. Fixes LWhatcott/VIN scrape. Print every Create.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
