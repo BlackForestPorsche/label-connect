@@ -1,5 +1,5 @@
 {
-  "version": "0.1.12",
-  "message": "Create RO label: LastName - Model + Out Mileage blank. Fixes LWhatcott/VIN. Print every Create. Includes 0.1.11 auto unlock.",
+  "version": "0.1.13",
+  "message": "Desk 0.1.13 Hub re-upload (0.1.12 was uploaded then deleted on AMO). Same Create RO layout + auto unlock; self-dist keeps gecko.update_url \u2192 GitHub updates.json.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
