@@ -3,7 +3,7 @@
     "path": "extension/version.json",
     "prefix": "extension__version.json",
     "chunks": 1,
-    "sha256": "17397227bdeb4e3d9c1c749a4e5566371cdefa5483a870452c099bfff9faba75"
+    "sha256": "071d87b0adc8e9d77f4c051c50fa84e3e5f3612e128a091d4b6d73bbc9a9af81"
   },
   {
     "path": "package.json",
@@ -39,7 +39,7 @@
     "path": "test/tools-site-sync.test.mjs",
     "prefix": "test__tools-site-sync.test.mjs",
     "chunks": 1,
-    "sha256": "54331a48770fae014b30beae5c110b8f7b7713aa345c10d4bfd7e64225c8502d"
+    "sha256": "8d94af3e0868e6e19b9882214d7b5f34f82169a06a6f30808d1b0178022077b0"
   },
   {
     "path": "extension/firefox/manifest.json",
@@ -57,19 +57,19 @@
     "path": "extension/shared/background.js",
     "prefix": "extension__shared__background.js",
     "chunks": 1,
-    "sha256": "35488107473f6c12365a4ac9923e6675d9ddb1b576baf6a8bb240d077c2d186f"
+    "sha256": "79e811bec5993e2d70bada1e29a7ec4ffd8c3b92758949a4507235f0e0c919a8"
   },
   {
     "path": "extension/shared/lot-names.js",
     "prefix": "extension__shared__lot-names.js",
     "chunks": 1,
-    "sha256": "647a3bec6a5ac786026acc9196d727f682796874674ab43a780dedf1a1837a61"
+    "sha256": "4aafeb4b08ad93769266773ab0753809a8c238ae0dd6aa39c5faab4cd6347634"
   },
   {
     "path": "extension/shared/content-shop.js",
     "prefix": "extension__shared__content-shop.js",
     "chunks": 1,
-    "sha256": "b5feb0e23e7e0ff0fc433b79db88f061e22f52e0952c4059e738f53a74ffc7d3"
+    "sha256": "2fdcdb3e416bfd8c30fc5172e071f686c592cbe2931a0132a0dfcb783be14adf"
   },
   {
     "path": "extension/shared/popup.js",
@@ -93,19 +93,19 @@
     "path": "extension/firefox/background.js",
     "prefix": "extension__firefox__background.js",
     "chunks": 1,
-    "sha256": "35488107473f6c12365a4ac9923e6675d9ddb1b576baf6a8bb240d077c2d186f"
+    "sha256": "79e811bec5993e2d70bada1e29a7ec4ffd8c3b92758949a4507235f0e0c919a8"
   },
   {
     "path": "extension/firefox/lot-names.js",
     "prefix": "extension__firefox__lot-names.js",
     "chunks": 1,
-    "sha256": "647a3bec6a5ac786026acc9196d727f682796874674ab43a780dedf1a1837a61"
+    "sha256": "4aafeb4b08ad93769266773ab0753809a8c238ae0dd6aa39c5faab4cd6347634"
   },
   {
     "path": "extension/firefox/content-shop.js",
     "prefix": "extension__firefox__content-shop.js",
     "chunks": 1,
-    "sha256": "b5feb0e23e7e0ff0fc433b79db88f061e22f52e0952c4059e738f53a74ffc7d3"
+    "sha256": "2fdcdb3e416bfd8c30fc5172e071f686c592cbe2931a0132a0dfcb783be14adf"
   },
   {
     "path": "extension/firefox/popup.js",
@@ -129,19 +129,19 @@
     "path": "extension/chromium/background.js",
     "prefix": "extension__chromium__background.js",
     "chunks": 1,
-    "sha256": "35488107473f6c12365a4ac9923e6675d9ddb1b576baf6a8bb240d077c2d186f"
+    "sha256": "79e811bec5993e2d70bada1e29a7ec4ffd8c3b92758949a4507235f0e0c919a8"
   },
   {
     "path": "extension/chromium/lot-names.js",
     "prefix": "extension__chromium__lot-names.js",
     "chunks": 1,
-    "sha256": "647a3bec6a5ac786026acc9196d727f682796874674ab43a780dedf1a1837a61"
+    "sha256": "4aafeb4b08ad93769266773ab0753809a8c238ae0dd6aa39c5faab4cd6347634"
   },
   {
     "path": "extension/chromium/content-shop.js",
     "prefix": "extension__chromium__content-shop.js",
     "chunks": 1,
-    "sha256": "b5feb0e23e7e0ff0fc433b79db88f061e22f52e0952c4059e738f53a74ffc7d3"
+    "sha256": "2fdcdb3e416bfd8c30fc5172e071f686c592cbe2931a0132a0dfcb783be14adf"
   },
   {
     "path": "extension/chromium/popup.js",
