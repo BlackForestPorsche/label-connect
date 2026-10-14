@@ -1,5 +1,5 @@
 /**
- * AllData Create RO \u2192 Labels: last name + model on 30252.
+ * AllData Create RO → Labels: last name + model on 30252.
  * Rejects Update / Schedule / Assign. Real print is owned by the server route.
  *
  * Label layout (Create RO only):
@@ -20,12 +20,12 @@ const MAX_LEN = {
   customerName: 48,
 };
 
-/** Handwriting blank on line 2 \u2014 never filled from AllData. */
+/** Handwriting blank on line 2 — never filled from AllData. */
 export const OUT_MILEAGE_LINE = "Out Mileage _____________";
 
 /**
  * Extra inset (pt) inside ImageableArea for Create RO PDFs.
- * Bare PPD safe rect still clipped the top line on LabelWriter 550 \u2014 pad further.
+ * Bare PPD safe rect still clipped the top line on LabelWriter 550 — pad further.
  */
 export const RO_LABEL_SAFE_INSET_PT = 8;
 
@@ -56,7 +56,7 @@ function clean(value, max) {
   return text.slice(0, max);
 }
 
-/** True for VIN labels / VIN numbers \u2014 never print these as name or model. */
+/** True for VIN labels / VIN numbers — never print these as name or model. */
 export function isVinNoise(value) {
   const text = String(value ?? "")
     .replace(/\s+/g, " ")
@@ -79,7 +79,7 @@ function isKnownPorscheModel(value) {
 }
 
 /**
- * License plate / account # values \u2014 never print as lastName or model.
+ * License plate / account # values — never print as lastName or model.
  * Same heuristic as the Desk scrape (0.1.17+).
  */
 export function isPlateOrAccountNoise(value) {
@@ -97,28 +97,28 @@ export function isPlateOrAccountNoise(value) {
 }
 
 /**
- * Customer last name only \u2014 never first name or first initial.
+ * Customer last name only — never first name or first initial.
  * Handles "LAST, FIRST", "J. LAST", "J LAST", "J.LAST", "FIRST LAST",
- * and glued shop codes like "LWhatcott" \u2192 "Whatcott".
+ * and glued shop codes like "LWhatcott" → "Whatcott".
  * Same heuristic as the extension scrape.
  */
 export function extractLastName(fullName) {
   let text = clean(fullName, MAX_LEN.customerName);
   if (!text) return "";
   if (isVinNoise(text) || isPlateOrAccountNoise(text)) return "";
-  // "LAST, FIRST" / "LAST, F." \u2192 LAST
+  // "LAST, FIRST" / "LAST, F." → LAST
   if (text.includes(",")) {
     text = text.split(",")[0].trim();
   }
   // Leading first initial: "J. Smith", "J Smith", "J.Smith"
   text = text.replace(/^[A-Za-z]\.?\s+/, "").replace(/^[A-Za-z]\.(?=[A-Za-z])/, "");
-  // Glued initial + PascalCase last: "LWhatcott" \u2192 "Whatcott" (not "McDonald")
+  // Glued initial + PascalCase last: "LWhatcott" → "Whatcott" (not "McDonald")
   if (/^[A-Z][A-Z][a-z]/.test(text) && !/\s/.test(text)) {
     text = text.slice(1);
   }
   const parts = text.split(" ").filter(Boolean);
   if (!parts.length) return "";
-  // Drop a trailing bare initial if anything remains ("Smith J" \u2192 "Smith").
+  // Drop a trailing bare initial if anything remains ("Smith J" → "Smith").
   if (parts.length > 1 && /^[A-Za-z]\.?$/.test(parts[parts.length - 1])) {
     parts.pop();
   }
@@ -173,7 +173,7 @@ export function normalizeRoPayload(raw) {
 
   const model = cleanModel(raw.model);
   const roNumber = clean(raw.roNumber ?? raw.ro ?? raw.documentNumber, MAX_LEN.roNumber);
-  // Per-Create click id from the Desk extension \u2014 never used as a customer/person key.
+  // Per-Create click id from the Desk extension — never used as a customer/person key.
   const createArmId = clean(raw.createArmId ?? raw.create_arm_id ?? raw.createId, 64);
   const source = clean(raw.source ?? "alldata", 32) || "alldata";
   const dryRun = Boolean(raw.dryRun === true || raw.dryRun === "1" || raw.dryRun === 1);
@@ -198,7 +198,7 @@ export function normalizeRoPayload(raw) {
 }
 
 /**
- * Label content \u2014 exactly two lines:
+ * Label content — exactly two lines:
  *   {LastName} - {Model}
  *   Out Mileage _____________
  * Never VIN, RO#, mileage value, or first initial.
@@ -286,7 +286,7 @@ export function planRoPrint(raw, mediaList = FALLBACK_MEDIA) {
     ok: true,
     dryRun,
     printed: false,
-    message: dryRun ? "Dry run only \u2014 no label was sent to the printer." : "Ready to print.",
+    message: dryRun ? "Dry run only — no label was sent to the printer." : "Ready to print.",
     fields,
     lines,
     doc,
@@ -295,7 +295,7 @@ export function planRoPrint(raw, mediaList = FALLBACK_MEDIA) {
 
 /**
  * Render a one-page 30252 PDF. Text is laid out in the turned editor view
- * (wide \u00d7 short), then drawn onto the physical page with a 90\u00b0 rotation so it
+ * (wide × short), then drawn onto the physical page with a 90° rotation so it
  * reads along the long edge inside the PPD ImageableArea.
  */
 export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
@@ -344,7 +344,7 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
       const vyTop = row.y + layout.startY + lineIndex * layout.lineHeight;
       // Baseline in view coords (y grows downward in editor; PDF y grows up).
       // Convert editor-top-left view point to PDF page bottom-left via the
-      // same CW turn the Labels paint() uses, then rotate glyphs +90\u00b0.
+      // same CW turn the Labels paint() uses, then rotate glyphs +90°.
       const viewBaselineY = vyTop + layout.size * 0.8;
       const pageX = media.widthPt - viewBaselineY;
       const pageY = vx;
