@@ -10,6 +10,8 @@ From **shop-desktop 1.5.11+**, Black Forest Tools **owns** the Labels HTTP serve
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
+**0.1.24** - Desk Update applies Hub-signed upgrades via Firefox `requestUpdateCheck` + `onUpdateAvailable` reload (Desktop stage is NOT applied). Tools↔website unlock/lock watches local `:8788` (~1s edge push, no multi-second poll lag).
+
 **0.1.22** - Unlock sync: popup Sync Tools→website force-exchanges; site-lock quiet clears when Tools unlocks (no re-DELETE); website unlock→Tools POST reliability.
 
 **0.1.21** - AMO Hub sign bump of #57 bidirectional lock (Create RO 0.1.20 already signed).
