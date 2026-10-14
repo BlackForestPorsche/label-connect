@@ -76,7 +76,7 @@
   function paintUpdateState({ available, appliedVersion } = {}) {
     const version = available?.version;
     const installed = installedVersion();
-    // Stale storage after Hub Install from File of the same feed version.
+    // Stale storage after Hub/AMO Install of the same feed version.
     if (!version || !isNewerVersion(version, installed)) {
       showApply(false);
       setUpdate("Desk extension is up to date.", "ok");
@@ -94,7 +94,7 @@
     const hint =
       typeof available?.message === "string" && available.message.trim()
         ? available.message.trim()
-        : "Hub On your own → Install from File";
+        : "about:addons → Install Add-on From File (signed XPI)";
     setUpdate(`Update ${version} ready — ${hint}`, "warn");
   }
 
@@ -303,25 +303,39 @@
         if (response?.upToDate || response?.mode === "up_to_date") {
           showApply(false);
           setUpdate(response?.message || "Desk extension is up to date.", "ok");
-        } else if (response?.ok && response?.applied !== false && response?.mode !== "hub_upload") {
+        } else if (response?.mode === "firefox_update" && response?.ok) {
+          showApply(false);
+          setUpdate(
+            response.message || "Firefox is applying the signed update. Restart when prompted.",
+            "ok",
+          );
+        } else if (
+          response?.mode === "signed_staged" ||
+          response?.staged === true ||
+          response?.mode === "hub_upload" ||
+          response?.error === "hub_signed_kept"
+        ) {
+          // Signed feed / Install-from-File staging — success UX (not an error toast).
+          setUpdate(
+            response?.message || "Signed update ready — about:addons → Install Add-on From File.",
+            "ok",
+          );
+          showApply(true);
+        } else if (response?.ok && response?.applied !== false) {
           const version = response.version || "";
           showApply(false);
           setUpdate(
             version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox.",
             "ok",
           );
-        } else if (response?.mode === "hub_upload" || response?.error === "hub_signed_kept") {
-          // Actionable Hub path — not a hard "failed" (unsigned cannot overwrite Hub-signed).
-          setUpdate(response?.message || "Hub On your own → Install from File.", "warn");
-          showApply(true);
         } else {
           setUpdate(response?.message || "Update failed.", "err");
           showApply(true);
         }
       } catch {
         setUpdate(
-          "Update failed — Labels may not be running. Hub On your own → Install from File.",
-          "err",
+          "Could not reach Labels — try about:addons → Check for Updates, or Install Add-on From File (signed desk-extension XPI).",
+          "warn",
         );
         showApply(true);
       } finally {
