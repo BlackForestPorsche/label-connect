@@ -2,6 +2,11 @@ name: publish-desk-extension
 # Publishes stable GitHub Release tag `desk-extension` (XPI + updates.json + chromium zip).
 # Main-only (+ workflow_dispatch): feature-branch pushes must not publish (PR #11).
 # Unsigned pack/publish stays green when AMO secrets are absent; signing is optional.
+# Secrets (repo Actions — never paste into chat):
+#   WEB_EXT_API_KEY + WEB_EXT_API_SECRET
+#   or AMO_JWT_ISSUER + AMO_JWT_SECRET
+# Create/revoke at https://addons.mozilla.org/developers/addon/api/key/
+# Add at https://github.com/BlackForestPorsche/label-connect/settings/secrets/actions
 on:
   push:
     branches: [main]
@@ -55,12 +60,13 @@ jobs:
           export WEB_EXT_API_SECRET="${WEB_EXT_API_SECRET:-${AMO_JWT_SECRET:-}}"
           if [[ -z "${WEB_EXT_API_KEY}" || -z "${WEB_EXT_API_SECRET}" ]]; then
             echo "signed=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::AMO / web-ext secrets missing — publishing unsigned XPI + updates.json. Job stays green. Add WEB_EXT_API_KEY + WEB_EXT_API_SECRET (or AMO_JWT_ISSUER + AMO_JWT_SECRET) for a Mozilla-signed installable XPI."
+            echo "::notice::AMO / web-ext secrets missing — publishing unsigned XPI + updates.json. Job stays green. Add WEB_EXT_API_KEY + WEB_EXT_API_SECRET (or AMO_JWT_ISSUER + AMO_JWT_SECRET) for a Mozilla-signed installable XPI. Never paste JWT values into chat — only GitHub Settings → Secrets."
             exit 0
           fi
           bash scripts/sign-desk-extension.sh
           bash scripts/generate-desk-updates-json.sh
           echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::AMO web-ext sign succeeded (unlisted / self-dist). Signed XPI will be published to desk-extension release."
           ls -la extension/dist/
       - name: Publish desk-extension release (XPI + updates.json + chromium)
         env:
