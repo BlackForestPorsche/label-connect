@@ -1,1 +1,1 @@
-@/tmp/label-connect/extension/firefox/background.js
+PLACEHOLDER
