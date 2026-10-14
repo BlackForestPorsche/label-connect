@@ -3,5 +3,5 @@
   "prefix": "payloads/create-ro-batch6-tests.part",
   "out": "payloads/create-ro-batch6-tests.json",
   "message": "Create RO label text 0.1.11 — batch 6 (tests + READMEs)",
-  "nonce": "batch6-tests-fix-8-10"
+  "nonce": "batch6-part9-fmo5X"
 }
