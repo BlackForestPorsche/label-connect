@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   isLocalClient,
+  isNewerVersion,
   readDeskVersion,
   resolveLabelConnectRoot,
   stageHubUploadZip,
@@ -36,6 +37,12 @@ test("resolveLabelConnectRoot finds this checkout", async () => {
   assert.match(String(version), /^\d+\.\d+\.\d+/);
 });
 
+test("isNewerVersion compares semver-ish strings", () => {
+  assert.equal(isNewerVersion("0.1.17", "0.1.16"), true);
+  assert.equal(isNewerVersion("0.1.16", "0.1.16"), false);
+  assert.equal(isNewerVersion("0.1.15", "0.1.16"), false);
+});
+
 test("popup and background no longer tell users to run bash update script", async () => {
   const { readFile } = await import("node:fs/promises");
   const popup = await readFile(path.join(root, "extension/shared/popup.js"), "utf8");
@@ -47,8 +54,12 @@ test("popup and background no longer tell users to run bash update script", asyn
   assert.equal(/\/api\/update-desk-extension/.test(background), true);
   assert.equal(/run update-desk-extension\.sh/.test(background), false);
   assert.equal(/hub_signed_kept/.test(background), true);
+  assert.equal(/up_to_date/.test(background), true);
+  assert.equal(/localVersion/.test(background), true);
   assert.equal(/Hub On your own/.test(popup), true);
   assert.equal(/mode !== "hub_upload"/.test(popup) || /mode === "hub_upload"/.test(popup), true);
+  assert.equal(/up_to_date/.test(popup), true);
+  assert.equal(/isNewerVersion/.test(popup), true);
 });
 
 test("stageHubUploadZip copies self-dist pack to Desktop", async () => {
