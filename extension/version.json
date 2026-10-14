@@ -1,5 +1,5 @@
 {
-  "version": "0.1.16",
-  "message": "Hub On your own \u2192 Upload New Version, then about:addons \u2192 Install Add-on From File (Hub-signed XPI). Unsigned GitHub XPIs cannot auto-update a Hub-signed install.",
+  "version": "0.1.17",
+  "message": "Hub On your own → Upload New Version, then about:addons → Install Add-on From File (Hub-signed XPI). Unsigned GitHub XPIs cannot auto-update a Hub-signed install.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
