@@ -172,7 +172,10 @@ const server = createServer(async (req, res) => {
         return;
       }
       const result = await exclusive(() => applyDeskExtensionUpdate(root));
-      send(res, result.ok ? 200 : 500, result);
+      let status = 500;
+      if (result.ok) status = 200;
+      else if (result.mode === "hub_upload" || result.error === "hub_signed_kept") status = 409;
+      send(res, status, result);
       return;
     }
     // AllData Create RO → real LabelWriter print (last name + model only).
