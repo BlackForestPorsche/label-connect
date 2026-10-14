@@ -59,7 +59,11 @@
       return;
     }
     showApply(true);
-    setUpdate(`Update ${version} ready`, "warn");
+    const hint =
+      typeof available?.message === "string" && available.message.trim()
+        ? available.message.trim()
+        : "Hub On your own → Install from File";
+    setUpdate(`Update ${version} ready — ${hint}`, "warn");
   }
 
   function looksLikeApiCode(text) {
@@ -189,7 +193,7 @@
       return;
     }
     button.disabled = true;
-    setStatus(`Signing in as “${person}” with desk PIN…`);
+    setStatus(`Signing in as \u201c${person}\u201d with desk PIN\u2026`);
     try {
       await runtime.storage.local.set({ shopPerson: person });
       const response = await runtime.runtime.sendMessage({
@@ -201,7 +205,7 @@
         setStatus(humanizeUnlockError(response?.error), "err");
         return;
       }
-      setStatus(`Lot names unlocked as “${person}”. Open SSF checkout and Refresh if needed.`, "ok");
+      setStatus(`Lot names unlocked as \u201c${person}\u201d. Open SSF checkout and Refresh if needed.`, "ok");
     } catch {
       setStatus("Extension background unavailable. Reload the add-on, then enter your desk PIN.", "err");
     } finally {
@@ -212,7 +216,7 @@
   if (siteBtn) {
     siteBtn.addEventListener("click", async () => {
       siteBtn.disabled = true;
-      setStatus("Using shop site session…");
+      setStatus("Using shop site session\u2026");
       try {
         await tryImport("site-session-import", { quiet: false });
       } finally {
@@ -224,7 +228,7 @@
   if (toolsBtn) {
     toolsBtn.addEventListener("click", async () => {
       toolsBtn.disabled = true;
-      setStatus("Asking Black Forest Tools…");
+      setStatus("Asking Black Forest Tools\u2026");
       try {
         await tryImport("tools-session-import", { quiet: false });
       } finally {
@@ -235,7 +239,7 @@
 
   checkBtn.addEventListener("click", async () => {
     checkBtn.disabled = true;
-    setUpdate("Checking…");
+    setUpdate("Checking\u2026");
     showApply(false);
     try {
       const response = await runtime.runtime.sendMessage({ type: "check-update", force: true });
@@ -261,22 +265,29 @@
     applyBtn.addEventListener("click", async () => {
       applyBtn.disabled = true;
       checkBtn.disabled = true;
-      setUpdate("Updating…", "warn");
+      setUpdate("Updating\u2026", "warn");
       try {
         const response = await runtime.runtime.sendMessage({ type: "apply-update" });
-        if (response?.ok) {
+        if (response?.ok && response?.applied !== false && response?.mode !== "hub_upload") {
           const version = response.version || "";
           showApply(false);
           setUpdate(
             version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox.",
             "ok",
           );
+        } else if (response?.mode === "hub_upload" || response?.error === "hub_signed_kept") {
+          // Actionable Hub path — not a false "Updated" success.
+          setUpdate(response?.message || "Hub On your own \u2192 Install from File.", "warn");
+          showApply(true);
         } else {
           setUpdate(response?.message || "Update failed.", "err");
           showApply(true);
         }
       } catch {
-        setUpdate("Update failed — Labels may not be running.", "err");
+        setUpdate(
+          "Update failed — Labels may not be running. Hub On your own \u2192 Install from File.",
+          "err",
+        );
         showApply(true);
       } finally {
         applyBtn.disabled = false;
