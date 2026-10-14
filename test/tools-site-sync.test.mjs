@@ -15,8 +15,9 @@ function toolsSiteSyncAction({
   toolsJarGate = false,
 }) {
   if (siteLockQuiet && !forceExchange) {
-    // Tools live again after a website lock → clear quiet and exchange (never re-DELETE).
-    if (bridgeReachable && hasSession) return "clear_quiet_and_exchange";
+    // Live Tools session during quiet = pre-lock Bearer still present → force-lock
+    // (0.1.22 clear_quiet_and_exchange reminted Tools after website lock).
+    if (bridgeReachable && hasSession) return "site_lock_force_tools";
     if (bridgeReachable && hasSession === false) return "site_lock_hold";
     return "site_lock_pending";
   }
@@ -44,12 +45,14 @@ function popupToolsSyncAction() {
   return "tools_to_site_unlock_force";
 }
 
-/** Tab-load on /unlock must not parallel site-session-import (locked-refresh-remint). */
+/** Tab-load sync order (website→Tools flash). */
 function shopLoadSyncAction({ onUnlockPage, toolsLocked }) {
   if (onUnlockPage) {
+    // Remint guard: never site-session-import on /unlock.
     return toolsLocked ? "tools_to_site_clear_only" : "tools_to_site_then_no_site_import";
   }
-  return "tools_to_site_then_site_import";
+  // Unlocked pages: site publish first, then Tools→site (not the reverse).
+  return "site_import_then_tools_to_site";
 }
 
 test("Tools locked + bridge up clears Firefox gate", () => {
@@ -139,19 +142,6 @@ test("Bridge down does not clear Firefox gate", () => {
   );
 });
 
-test("Website lock quiet + Tools unlocked clears quiet and exchanges", () => {
-  assert.equal(
-    toolsSiteSyncAction({
-      bridgeReachable: true,
-      hasSession: true,
-      gatePresent: false,
-      forceExchange: false,
-      siteLockQuiet: true,
-    }),
-    "clear_quiet_and_exchange",
-  );
-});
-
 test("Website lock quiet + Tools still locked holds", () => {
   assert.equal(
     toolsSiteSyncAction({
@@ -187,7 +177,7 @@ test("Locked /unlock tab load skips site-session-import publish", () => {
   );
   assert.equal(
     shopLoadSyncAction({ onUnlockPage: false, toolsLocked: false }),
-    "tools_to_site_then_site_import",
+    "site_import_then_tools_to_site",
   );
 });
 
@@ -199,4 +189,28 @@ function bridgeSyncTickMs() {
 test("Bridge sync tick is sub-second for instant lock/fun", () => {
   assert.ok(bridgeSyncTickMs() <= 500);
   assert.ok(bridgeSyncTickMs() >= 200);
+});
+
+/** Website→Tools: quiet + live Tools session must force-lock, not exchange (0.1.22 regression). */
+test("Website lock quiet + Tools still unlocked forces Tools lock", () => {
+  assert.equal(
+    toolsSiteSyncAction({
+      bridgeReachable: true,
+      hasSession: true,
+      gatePresent: false,
+      forceExchange: false,
+      siteLockQuiet: true,
+    }),
+    "site_lock_force_tools",
+  );
+});
+
+/** Unlock-hold: intentional website unlock must not publish site-lock. */
+function siteLockAllowed({ unlockHold }) {
+  return unlockHold ? "skip_unlock_hold" : "sync_site_lock_to_tools";
+}
+
+test("Unlock-hold blocks site-lock publish to Tools", () => {
+  assert.equal(siteLockAllowed({ unlockHold: true }), "skip_unlock_hold");
+  assert.equal(siteLockAllowed({ unlockHold: false }), "sync_site_lock_to_tools");
 });

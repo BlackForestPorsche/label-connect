@@ -1,0 +1,10 @@
+{
+  "message": "fix(desk): 0.1.26 website\u2192Tools sync tests (batch 7)",
+  "paths": [
+    "test/tools-site-sync.test.mjs"
+  ],
+  "md5": "cfceaefbf4670e01b7dca73414b27317",
+  "sha256": "fbb388d3832da2b4bddbf90134eb80facaa29baf2d9ace2fbdf125de11bea085",
+  "bytes": 6223,
+  "parts": 1
+}
