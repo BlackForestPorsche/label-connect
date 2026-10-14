@@ -10,6 +10,8 @@ From **shop-desktop 1.5.9+**, Black Forest Tools **owns** the Labels HTTP server
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
+**0.1.19** - Same Update fix as 0.1.18 source tip; AMO bump because 0.1.18 was already signed without the toast fix.
+
 **0.1.18** - Desk popup **Update** uses Firefox `requestUpdateCheck` + signed `updates.json` XPI staging (Install from File). Labels `POST /api/update-desk-extension` stages the signed feed on Desktop with success UX when Hub/AMO signed is kept — no false failure toast. Bump required (0.1.17 already AMO-signed).
 
 **0.1.17** - CI AMO-signed self-dist on `desk-extension` release (`WEB_EXT_*`); `updates.json` points at Mozilla-signed XPI.

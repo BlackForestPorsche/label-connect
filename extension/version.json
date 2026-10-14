@@ -1,5 +1,5 @@
 {
-  "version": "0.1.18",
-  "message": "Update downloads CI AMO-signed XPI from updates.json (Install from File or Firefox auto-update) — never a false failed toast when staging works.",
+  "version": "0.1.19",
+  "message": "Update: Firefox signed feed / Install-from-File staging success UX (fixes false failed toast on Hub-signed desks).",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
