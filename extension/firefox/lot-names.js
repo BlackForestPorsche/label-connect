@@ -19,6 +19,8 @@
   /** Desk unlock roster (plasmoid fallback). */
   const DESK_PEOPLE = Object.freeze(["logan", "stephen", "steve", "carla", "john"]);
   let siteLockQuietUntil = 0;
+  /** While exchanging / applying gateToken, ignore cookie-removal → site-lock. */
+  let unlockHoldUntil = 0;
 
   function lastNameFromLotLabel(label) {
     const text = String(label || "")
@@ -162,15 +164,25 @@
     return api.DEFAULT_TOOLS_BRIDGE_BASE || DEFAULT_TOOLS_BRIDGE;
   }
 
-  async function storeWidgetToken({ token, expiresAt, person, source, publishToTools = true } = {}) {
+  async function storeWidgetToken({
+    token,
+    expiresAt,
+    person,
+    source,
+    publishToTools = true,
+  } = {}) {
     const parsedExpiry = expiresAt ? Date.parse(expiresAt) : NaN;
     const ttlMs = Number.isFinite(parsedExpiry)
       ? Math.max(parsedExpiry - Date.now(), 60_000)
       : 8 * 60 * 60 * 1000;
     const normalized = normalizePerson(person);
     const src = source || "pin";
+    // During site-lock quiet, never publish a leftover Firefox gate into Tools
+    // (locked /unlock refresh remint). PIN / explicit shop unlock still win.
+    const allowPublish =
+      publishToTools && !(siteLockQuietActive() && (src === "site-gate" || src === "shop-site"));
     // Website unlock wins — clear the quiet window so Tools may unlock again.
-    if (src === "shop-site" || src === "site-gate" || src === "pin") {
+    if (allowPublish && (src === "shop-site" || src === "site-gate" || src === "pin")) {
       siteLockQuietUntil = 0;
     }
     await storageSet({
@@ -182,7 +194,7 @@
     await setPinBadge(false);
     // Website → Tools unlock: push Bearer into :8788 so Tools SPA leaves /unlock.
     if (
-      publishToTools &&
+      allowPublish &&
       token &&
       (src === "shop-site" || src === "site-gate" || src === "pin")
     ) {
@@ -229,8 +241,8 @@
   }
 
   /**
-   * Website lock → Tools lock. DELETE session (Tools 1.5.11+) then POST /v1/lock alias.
-   * Clears Electron jar via Tools onLock so from-gate remint cannot revive the session.
+   * Website lock → Tools lock. Prefer POST /v1/lock (SPA → /unlock + jar clear),
+   * then DELETE session as belt-and-suspenders. Always try both when reachable.
    */
   async function lockToolsViaBridge() {
     const base = await toolsBridgeBaseUrl();
@@ -258,18 +270,34 @@
         return { ok: false, reason: "bridge_unreachable" };
       }
     };
-    let result = await tryOnce("DELETE", "/v1/widget-session");
-    if (!result.ok && result.reason === "lock_unsupported") {
+    // POST /v1/lock first — navigates Tools SPA to /unlock via onLock.
+    let result = await tryOnce("POST", "/v1/lock");
+    const del = await tryOnce("DELETE", "/v1/widget-session");
+    if (!result.ok && del.ok) result = del;
+    else if (!result.ok && del.reason === "lock_unsupported") {
       result = await tryOnce("POST", "/v1/lock");
     }
     return result;
+  }
+
+  /** Arm quiet immediately so /unlock tab-load cannot exchange before Tools DELETE finishes. */
+  function armSiteLockQuiet(nowMs = Date.now()) {
+    siteLockQuietUntil = nowMs + SITE_LOCK_QUIET_MS;
+  }
+
+  const UNLOCK_HOLD_MS = 8_000;
+  function armUnlockHold(nowMs = Date.now()) {
+    unlockHoldUntil = nowMs + UNLOCK_HOLD_MS;
+  }
+  function unlockHoldActive(nowMs = Date.now()) {
+    return nowMs < unlockHoldUntil;
   }
 
   /**
    * Firefox website lock: clear gate + Desk token, lock Tools bridge, block re-exchange.
    */
   async function syncSiteLockToTools({ reloadShopTabs = true } = {}) {
-    siteLockQuietUntil = Date.now() + SITE_LOCK_QUIET_MS;
+    armSiteLockQuiet();
     const hadGate = (await readShopGateCookie()).present;
     await clearShopGateCookie();
     await storageSet({
@@ -278,13 +306,12 @@
       shopGateFromToolsAt: 0,
     });
     await setPinBadge(true);
-    const locked = await lockToolsViaBridge();
-    // Retry once if Tools still shows a session (race with from-gate remint).
-    if (locked.ok) {
+    let locked = await lockToolsViaBridge();
+    // Retry while Tools still shows a session (race with from-gate / tab exchange).
+    for (let i = 0; i < 3; i += 1) {
       const health = await probeToolsBridgeHealth();
-      if (health.reachable && health.hasSession) {
-        await lockToolsViaBridge();
-      }
+      if (!health.reachable || health.hasSession === false) break;
+      locked = await lockToolsViaBridge();
     }
     if (hadGate && reloadShopTabs && runtime?.tabs?.query && runtime?.tabs?.reload) {
       try {
@@ -361,11 +388,13 @@
       return { reachable: true, hasSession: false, reason: "health_error", status: response.status };
     }
     const hasSession = Boolean(data && data.hasSession);
+    const hasGate = Boolean(data && data.hasGate);
     return {
       reachable: true,
       hasSession,
+      hasGate,
       person: data && data.person ? String(data.person) : "",
-      reason: hasSession ? "has_session" : "no_session",
+      reason: hasSession ? "has_session" : hasGate ? "gate_only" : "no_session",
     };
   }
 
@@ -422,6 +451,169 @@
    * Tools/Desk Bearer → website bf_shop_gate via POST /api/widget/session/exchange.
    * This is the missing half of App↔website sync (Desk already imported :8788 for itself).
    */
+  /**
+   * Copy bf_shop_gate from Tools Electron jar (GET :8788/v1/shop-gate).
+   * Works when exchange Set-Cookie / gateToken JSON is missing on the site.
+   */
+  async function importShopGateFromToolsBridge() {
+    const base = await toolsBridgeBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/v1/shop-gate`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+    } catch {
+      return { ok: false, reason: "bridge_unreachable" };
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    if (response.status === 404) {
+      return { ok: false, reason: "no_gate", error: "Tools has no shop gate cookie yet." };
+    }
+    if (!response.ok || !data || !data.gateToken) {
+      return { ok: false, reason: "gate_copy_failed", status: response.status };
+    }
+    await applyGateCookie(data.gateToken, data.expiresAt);
+    const gate = await readShopGateCookie();
+    if (!gate.present) {
+      return { ok: false, reason: "cookie_set_failed" };
+    }
+    await storageSet({ shopGateFromToolsAt: Date.now() });
+    return {
+      ok: true,
+      person: data.person ? String(data.person) : "",
+      expiresAt: data.expiresAt || "",
+      source: "tools-jar-gate",
+    };
+  }
+
+  let lastToolsPrefsFingerprint = "";
+
+  /** Pull Tools SPA person settings and push into open shop tabs (fun on/off last-wins). */
+  async function applyToolsPersonSettingsToSite() {
+    const base = await toolsBridgeBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/v1/person-settings`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+    } catch {
+      return { ok: false, reason: "bridge_unreachable" };
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    if (!response.ok || !data || !data.ok || !data.person || !data.settings) {
+      return { ok: false, reason: "no_settings", status: response.status };
+    }
+    const fp = `${data.person}|${data.settings.funMode}|${data.updatedAt || ""}`;
+    if (fp === lastToolsPrefsFingerprint) {
+      return { ok: true, person: data.person, funMode: data.settings.funMode, applied: 0, skipped: "same" };
+    }
+    lastToolsPrefsFingerprint = fp;
+    if (!runtime?.tabs?.query || !runtime?.tabs?.sendMessage) {
+      return { ok: false, reason: "no_tabs_api" };
+    }
+    let applied = 0;
+    try {
+      const tabs = await runtime.tabs.query({
+        url: ["https://shop.blackforestautomotive.com/*"],
+      });
+      for (const tab of tabs || []) {
+        if (tab?.id == null) continue;
+        try {
+          await runtime.tabs.sendMessage(tab.id, {
+            type: "apply-tools-person-settings",
+            person: data.person,
+            settings: data.settings,
+            updatedAt: data.updatedAt || Date.now(),
+          });
+          applied += 1;
+        } catch {
+          // tab may not have content-shop yet
+        }
+      }
+    } catch {
+      return { ok: false, reason: "tabs_failed" };
+    }
+    return {
+      ok: true,
+      person: data.person,
+      funMode: data.settings.funMode,
+      applied,
+      source: "tools-spa",
+    };
+  }
+
+  /** Website → Tools: push Firefox funMode/prefs into Electron (immediate, last write). */
+  async function publishPersonSettingsToToolsBridge({ person, settings } = {}) {
+    if (!person || !settings) return { ok: false, reason: "bad_payload" };
+    const base = await toolsBridgeBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/v1/person-settings`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ person: String(person), settings }),
+        cache: "no-store",
+      });
+    } catch {
+      return { ok: false, reason: "bridge_unreachable" };
+    }
+    if (!response.ok) {
+      return { ok: false, reason: "publish_failed", status: response.status };
+    }
+    lastToolsPrefsFingerprint = `${person}|${settings.funMode}|${Date.now()}`;
+    return { ok: true, person, funMode: settings.funMode, source: "site-push" };
+  }
+
+  let bridgeSyncPollTimer = null;
+  let lastBridgeSessionFp = "";
+
+  /**
+   * Local :8788 must feel instant — poll Tools health + prefs well under 1s.
+   * Session fingerprint flip → syncToolsSessionToSite (lock/unlock) without waiting
+   * on tab load or the 2-minute alarm.
+   */
+  function startBridgeSyncPoll() {
+    if (bridgeSyncPollTimer) return;
+    const TICK_MS = 400;
+    bridgeSyncPollTimer = setInterval(() => {
+      void (async () => {
+        try {
+          const health = await probeToolsBridgeHealth();
+          const fp = health.reachable
+            ? `up|${health.hasSession ? "1" : "0"}|${health.hasGate ? "g" : "-"}|${health.person || ""}`
+            : "down";
+          if (fp !== lastBridgeSessionFp) {
+            const prev = lastBridgeSessionFp;
+            lastBridgeSessionFp = fp;
+            // First tick only seeds fingerprint — avoid reload storms on load.
+            if (prev) {
+              await syncToolsSessionToSite({ reloadUnlockTabs: true });
+            }
+          }
+          await applyToolsPersonSettingsToSite();
+        } catch {
+          // ignore
+        }
+      })();
+    }, TICK_MS);
+  }
+
+  startBridgeSyncPoll();
+
   async function exchangeWidgetSessionToGate(token) {
     if (!token) return { error: "No Tools session token.", reason: "no_token" };
     const base = await shopBaseUrl();
@@ -465,19 +657,43 @@
         reason: "exchange_failed",
       };
     }
+    // Hold site-lock: cookies.set may remove+set; must not publish lock to Tools.
+    armUnlockHold();
+    siteLockQuietUntil = 0;
+    // Site beta 0.1.36+ returns gateToken for extension cookies.set (Set-Cookie often invisible).
     const gateToken = data.gateToken || data.gate || data.cookieValue || "";
     if (gateToken) {
-      await applyGateCookie(gateToken, data.expiresAt);
+      const applied = await applyGateCookie(gateToken, data.expiresAt);
+      if (!applied.ok) {
+        return {
+          error: "Could not write bf_shop_gate into Firefox (cookies.set failed).",
+          reason: "cookie_set_failed",
+          person: data.person ? String(data.person) : "",
+        };
+      }
     }
-    const gate = await readShopGateCookie();
+    let gate = await readShopGateCookie();
+    // Fallback: copy Electron bf_shop_gate when JSON/Set-Cookie still did not land.
     if (!gate.present) {
+      const copied = await importShopGateFromToolsBridge();
+      if (copied.ok) {
+        armUnlockHold();
+        await storageSet({ shopGateFromToolsAt: Date.now() });
+        return {
+          ok: true,
+          person: copied.person || (data.person ? String(data.person) : ""),
+          expiresAt: copied.expiresAt || data.expiresAt || "",
+          source: "tools-jar-gate",
+        };
+      }
       return {
         error:
-          "Exchange succeeded but bf_shop_gate is missing in this browser. Paste grok-exchange-gate-token so exchange returns gateToken.",
+          "Exchange succeeded but bf_shop_gate is missing in this browser. Need site gateToken (beta 0.1.36+) or Tools 1.5.13+ jar-gate copy.",
         reason: "cookie_missing",
         person: data.person ? String(data.person) : "",
       };
     }
+    armUnlockHold();
     await storageSet({ shopGateFromToolsAt: Date.now() });
     return {
       ok: true,
@@ -517,13 +733,25 @@
   async function syncToolsSessionToSite({ reloadUnlockTabs = true, forceExchange = false } = {}) {
     const health = await probeToolsBridgeHealth();
 
-    // Website lock quiet: hold exchange only while Tools is still locked.
-    // If Tools has a live session again, the user unlocked Tools AFTER the site
-    // lock — clear quiet and fall through to exchange (never re-DELETE).
+    // Website lock quiet: NEVER exchange. A live Tools session during quiet is
+    // almost always the pre-lock Bearer still present (Logan: lock website →
+    // /unlock tab load used to clear quiet and remint Tools). Force-lock Tools
+    // instead. Intentional Tools unlock clears quiet via storeWidgetToken /
+    // Sync Tools (forceExchange) / quiet expiry.
     if (siteLockQuietActive() && !forceExchange) {
       if (health.reachable && health.hasSession) {
-        siteLockQuietUntil = 0;
-      } else if (health.reachable && health.hasSession === false) {
+        await lockToolsViaBridge();
+        const hadGate = (await readShopGateCookie()).present;
+        await clearShopGateCookie();
+        return {
+          ok: false,
+          locked: true,
+          shouldReload: hadGate && reloadUnlockTabs,
+          reason: "site_lock_force_tools",
+          error: "Website locked — forcing Tools lock.",
+        };
+      }
+      if (health.reachable && health.hasSession === false) {
         const hadGate = (await readShopGateCookie()).present;
         await clearShopGateCookie();
         return {
@@ -533,18 +761,41 @@
           reason: "site_lock",
           error: "Website locked — Tools session cleared.",
         };
-      } else {
-        return {
-          ok: false,
-          locked: true,
-          shouldReload: false,
-          reason: "site_lock_pending",
-          error: "Website locked — waiting for Tools to clear session.",
-        };
       }
+      return {
+        ok: false,
+        locked: true,
+        shouldReload: false,
+        reason: "site_lock_pending",
+        error: "Website locked — waiting for Tools to clear session.",
+      };
     }
 
     if (health.reachable && health.hasSession === false) {
+      // Mismatch: Tools SPA unlocked (jar gate) but Bearer empty — heal Firefox.
+      // Never do this during site-lock quiet (last lock wins: refresh /unlock
+      // must not copy a leftover Electron gate and must not remint Tools).
+      if (!siteLockQuietActive()) {
+        const jarGate = await importShopGateFromToolsBridge();
+        if (jarGate.ok) {
+          siteLockQuietUntil = 0;
+          const prefs = await applyToolsPersonSettingsToSite();
+          if (reloadUnlockTabs) {
+            await reloadShopUnlockTabs();
+          }
+          await setPinBadge(false);
+          return {
+            ok: true,
+            person: jarGate.person || "",
+            source: "tools-jar-gate",
+            siteGate: true,
+            shouldReload: true,
+            reason: "tools_gate_without_bearer",
+            prefsApplied: Boolean(prefs.ok),
+            funMode: prefs.funMode,
+          };
+        }
+      }
       const hadGate = (await readShopGateCookie()).present;
       await clearShopGateCookie();
       const stored = await storageGet(["shopWidgetTokenSource"]);
@@ -596,6 +847,7 @@
     const token = stored.shopWidgetToken;
     const gateBefore = (await readShopGateCookie()).present;
     if (gateBefore && !forceExchange) {
+      const prefs = await applyToolsPersonSettingsToSite();
       return {
         ok: true,
         person: fromTools.person,
@@ -603,28 +855,39 @@
         siteGate: true,
         shouldReload: false,
         reason: "gate_present",
+        prefsApplied: Boolean(prefs.ok),
+        funMode: prefs.funMode,
       };
     }
-    const exchanged = await exchangeWidgetSessionToGate(token);
+    let exchanged = await exchangeWidgetSessionToGate(token);
+    // If exchange path failed entirely, still try direct Tools jar gate copy.
     if (!exchanged.ok) {
-      return {
-        ...fromTools,
-        ok: false,
-        error: exchanged.error,
-        reason: exchanged.reason,
-        deskOk: true,
-      };
+      const copied = await importShopGateFromToolsBridge();
+      if (copied.ok) {
+        exchanged = copied;
+      } else {
+        return {
+          ...fromTools,
+          ok: false,
+          error: exchanged.error,
+          reason: exchanged.reason,
+          deskOk: true,
+        };
+      }
     }
     const shouldReload = !gateBefore || forceExchange;
     if (shouldReload && reloadUnlockTabs) {
       await reloadShopUnlockTabs();
     }
+    const prefs = await applyToolsPersonSettingsToSite();
     return {
       ok: true,
       person: exchanged.person || fromTools.person,
-      source: "tools-bridge",
+      source: exchanged.source || "tools-bridge",
       siteGate: true,
       shouldReload,
+      prefsApplied: Boolean(prefs.ok),
+      funMode: prefs.funMode,
     };
   }
 
@@ -632,7 +895,11 @@
    * Website shop session → Desk Bearer via POST /api/widget/session/from-gate.
    * Degrades cleanly when the route is missing (404/406): falls back to Tools/PIN.
    */
-  async function importSiteGateSession() {
+  async function importSiteGateSession({ publishToTools = true } = {}) {
+    // Locked-site refresh / quiet: do not from-gate → POST :8788 (remints Tools).
+    if (siteLockQuietActive() || publishToTools === false) {
+      return { ok: false, skipped: "no_site_publish", reason: "site_lock" };
+    }
     const gate = await readShopGateCookie();
     if (!gate.present) {
       return {
@@ -692,6 +959,7 @@
       expiresAt,
       person: data.person,
       source: "site-gate",
+      publishToTools,
     });
   }
 
@@ -811,10 +1079,18 @@
    * Throttled so alarms / tab loads / idle do not spam the shop (~20/min cap).
    */
   let autoUnlockInFlight = null;
-  async function tryAutoUnlock({ force = false, reason = "" } = {}) {
+  async function tryAutoUnlock({
+    force = false,
+    reason = "",
+    allowSitePublish = true,
+    tabUrl = "",
+  } = {}) {
     if (autoUnlockInFlight) return autoUnlockInFlight;
     autoUnlockInFlight = (async () => {
       try {
+        const onUnlockPage = /\/unlock\b/i.test(String(tabUrl || ""));
+        // Locked /unlock tab: only Tools→site clear path — never from-gate publish.
+        const canPublishFromSite = allowSitePublish && !onUnlockPage && !siteLockQuietActive();
         const stored = await storageGet(["deskAutoUnlockAt"]);
         const lastAt = Number(stored.deskAutoUnlockAt || 0);
         const minGapMs = force ? 5_000 : 30_000;
@@ -850,7 +1126,15 @@
           if (synced.locked) {
             return { ...synced, reason: reason || synced.reason };
           }
-          // Tools had no session / exchange failed — fall through to site from-gate.
+          // Tools had no session / exchange failed — fall through only if publish allowed.
+        }
+
+        if (!canPublishFromSite) {
+          // Clear any leftover Firefox gate without minting Tools.
+          if ((await readShopGateCookie()).present) {
+            await clearShopGateCookie();
+          }
+          return { ok: false, skipped: "no_site_publish", reason: reason || "unlock_page" };
         }
 
         if (!force && (await hasFreshWidgetToken()) && (await readShopGateCookie()).present) {
@@ -989,7 +1273,13 @@
   api.syncToolsSessionToSite = syncToolsSessionToSite;
   api.syncSiteLockToTools = syncSiteLockToTools;
   api.lockToolsViaBridge = lockToolsViaBridge;
+  api.armSiteLockQuiet = armSiteLockQuiet;
+  api.armUnlockHold = armUnlockHold;
+  api.unlockHoldActive = unlockHoldActive;
   api.publishSessionToToolsBridge = publishSessionToToolsBridge;
+  api.importShopGateFromToolsBridge = importShopGateFromToolsBridge;
+  api.applyToolsPersonSettingsToSite = applyToolsPersonSettingsToSite;
+  api.publishPersonSettingsToToolsBridge = publishPersonSettingsToToolsBridge;
   api.siteLockQuietActive = siteLockQuietActive;
   api.reloadShopUnlockTabs = reloadShopUnlockTabs;
   api.ensureWidgetToken = ensureWidgetToken;
