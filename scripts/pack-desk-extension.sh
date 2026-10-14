@@ -26,13 +26,16 @@ XPI_ID="$DIST/${ID}.xpi"
 XPI_STABLE="$DIST/${STABLE_XPI_NAME}"
 XPI_VERSIONED="$DIST/Black.Forest.Desk-${VER}.xpi"
 XPI_AMO="$DIST/Black.Forest.Desk-${VER}-amo-hosted.xpi"
-rm -f "$XPI_ID" "$XPI_STABLE" "$XPI_VERSIONED" "$XPI_AMO"
+XPI_HUB_ZIP="$DIST/Black.Forest.Desk-${VER}-hub-upload.zip"
+rm -f "$XPI_ID" "$XPI_STABLE" "$XPI_VERSIONED" "$XPI_AMO" "$XPI_HUB_ZIP"
 (
   cd "$ROOT/extension/firefox"
   zip -qr "$XPI_ID" . -x '*.DS_Store*'
 )
 cp -f "$XPI_ID" "$XPI_STABLE"
 cp -f "$XPI_ID" "$XPI_VERSIONED"
+# Same self-dist bytes as .zip for Hub “On your own” file pickers that prefer .zip
+cp -f "$XPI_ID" "$XPI_HUB_ZIP"
 
 # AMO-hosted pack: same bits, but strip gecko.update_url (AMO rejects listed uploads that keep it).
 python3 - "$XPI_ID" "$XPI_AMO" <<'PY'
@@ -80,6 +83,7 @@ printf '%s\n' "$XPI_STABLE"
 printf '%s\n' "$CHROME_STABLE"
 printf '%s\n' "$XPI_VERSIONED"
 printf '%s\n' "$XPI_AMO"
+printf '%s\n' "$XPI_HUB_ZIP"
 printf '%s\n' "$DIST/updates.json"
 printf '%s\n' "$XPI_ID"
 printf '%s\n' "$CHROME_LEGACY"
