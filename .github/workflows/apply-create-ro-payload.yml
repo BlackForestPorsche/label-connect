@@ -3,7 +3,8 @@ on:
   push:
     branches: [cursor/create-ro-label-text-947d]
     paths:
-      - "payloads/create-ro-*"
+      - "payloads/**"
+      - ".github/workflows/apply-create-ro-payload.yml"
   workflow_dispatch:
 jobs:
   apply:
@@ -24,7 +25,6 @@ jobs:
                   parts.append(pathlib.Path(f'{meta["prefix"]}{i}').read_text())
               out = "".join(parts)
               pathlib.Path(meta["out"]).write_text(out)
-              # validate json
               json.loads(out)
               print("assembled", meta["out"], len(out))
           PY
