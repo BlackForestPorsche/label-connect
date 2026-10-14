@@ -133,3 +133,24 @@ test("Website lock with Tools session locks Tools", () => {
 test("Popup Sync Tools → website must force exchange", () => {
   assert.equal(popupToolsSyncAction(), "tools_to_site_unlock_force");
 });
+
+function lockedSiteRefreshAction({ onUnlockPath, siteLockQuiet }) {
+  // content-shop on /unlock: tools-to-site only — never site-session-import/from-gate publish.
+  if (onUnlockPath) return "tools_to_site_only";
+  if (siteLockQuiet) return "skip_from_gate_publish";
+  return "tools_to_site_and_site_import";
+}
+
+test("Locked /unlock refresh does not from-gate publish to Tools", () => {
+  assert.equal(
+    lockedSiteRefreshAction({ onUnlockPath: true, siteLockQuiet: true }),
+    "tools_to_site_only",
+  );
+});
+
+test("Unlocked shop load may import site gate", () => {
+  assert.equal(
+    lockedSiteRefreshAction({ onUnlockPath: false, siteLockQuiet: false }),
+    "tools_to_site_and_site_import",
+  );
+});
