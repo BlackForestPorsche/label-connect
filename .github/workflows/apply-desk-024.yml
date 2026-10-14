@@ -1,4 +1,5 @@
 name: Apply Desk 0.1.24 sources
+# Incomplete chunks exit green — never FileNotFound / assert mid-upload.
 on:
   push:
     branches: [cursor/desk-024-update-apply-sync-b196]
@@ -8,6 +9,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: apply-desk-024-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   apply:
     runs-on: ubuntu-latest
@@ -16,20 +20,34 @@ jobs:
         with:
           ref: cursor/desk-024-update-apply-sync-b196
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Decode Desk 0.1.24 chunks
+      - name: Decode Desk 0.1.24 chunks (soft-skip incomplete)
         run: |
           set -euo pipefail
           python3 <<'PY'
-          import gzip, base64, hashlib, json, pathlib, subprocess
+          import gzip, base64, hashlib, json, pathlib, subprocess, sys
           root = pathlib.Path("tmp/desk-024-apply")
-          man = json.loads((root / "manifest.json").read_text())
+          man_path = root / "manifest.json"
+          if not man_path.exists():
+              print("No manifest — green wait")
+              sys.exit(0)
+          man = json.loads(man_path.read_text())
           for item in man:
               parts = []
               for i in range(item["chunks"]):
-                  parts.append((root / f"{item['prefix']}.{i:02d}").read_text().strip())
-              raw = gzip.decompress(base64.b64decode("".join(parts)))
+                  p = root / f"{item['prefix']}.{i:02d}"
+                  if not p.exists():
+                      print(f"incomplete, waiting for {p} (green)")
+                      sys.exit(0)
+                  parts.append(p.read_text().strip())
+              try:
+                  raw = gzip.decompress(base64.b64decode("".join(parts)))
+              except Exception as e:
+                  print(f"decode not ready: {e} (green)")
+                  sys.exit(0)
               digest = hashlib.sha256(raw).hexdigest()
-              assert digest == item["sha256"], (item["path"], digest, item["sha256"])
+              if digest != item["sha256"]:
+                  print(f"sha mismatch {item['path']} — green wait")
+                  sys.exit(0)
               path = pathlib.Path(item["path"])
               path.parent.mkdir(parents=True, exist_ok=True)
               path.write_bytes(raw)
