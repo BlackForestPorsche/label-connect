@@ -1,44 +1,9 @@
-name: Apply Desk 0.1.26 combined Hub sources
+name: MUTED — apply-desk-026
+# Push trigger removed so mid-upload chunks stop emailing Logan.
 on:
-  push:
-    branches: [cursor/desk-026-hub-ship-b196]
-    paths:
-      - tmp/desk-026-apply/**
-      - .github/workflows/apply-desk-026.yml
   workflow_dispatch:
-permissions:
-  contents: write
 jobs:
-  apply:
+  muted:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: cursor/desk-026-hub-ship-b196
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Decode Desk 0.1.26 chunks
-        run: |
-          set -euo pipefail
-          python3 <<'PY'
-          import gzip, base64, hashlib, json, pathlib, subprocess
-          root = pathlib.Path("tmp/desk-026-apply")
-          man = json.loads((root / "manifest.json").read_text())
-          for item in man:
-              parts = [(root / f"{item['prefix']}.{i:02d}").read_text().strip() for i in range(item["chunks"])]
-              raw = gzip.decompress(base64.b64decode("".join(parts)))
-              digest = hashlib.sha256(raw).hexdigest()
-              assert digest == item["sha256"], (item["path"], digest, item["sha256"])
-              path = pathlib.Path(item["path"])
-              path.parent.mkdir(parents=True, exist_ok=True)
-              path.write_bytes(raw)
-              print("wrote", path, len(raw))
-          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
-          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
-          subprocess.check_call(["git", "add", "-A"])
-          st = subprocess.call(["git", "diff", "--cached", "--quiet"])
-          if st != 0:
-              subprocess.check_call(["git", "commit", "-m", "fix(desk): apply 0.1.26 combined Hub sources (Update+sync+scrape+unlock-hold)"])
-              subprocess.check_call(["git", "push"])
-          else:
-              print("no changes")
-          PY
+      - run: echo "Muted. Use main apply-payload.yml (soft-skip) or assemble offline."
