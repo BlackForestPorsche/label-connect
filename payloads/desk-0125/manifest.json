@@ -1,0 +1,24 @@
+[
+  {
+    "paths": [
+      "extension/shared/background.js",
+      "extension/firefox/background.js",
+      "extension/chromium/background.js"
+    ],
+    "prefix": "background.gz.b64",
+    "chunks": 3,
+    "sha256": "fb20b61e253a772ff93a34c61a3a57c70619ac1c57bf92af939559f46d3d52cc",
+    "bytes": 22956
+  },
+  {
+    "paths": [
+      "extension/shared/lot-names.js",
+      "extension/firefox/lot-names.js",
+      "extension/chromium/lot-names.js"
+    ],
+    "prefix": "lot-names.gz.b64",
+    "chunks": 4,
+    "sha256": "bc1cf8c521099ed6b550a926863de53dd32ab47395512efcbc00fd560737b13a",
+    "bytes": 45508
+  }
+]
