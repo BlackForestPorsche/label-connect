@@ -43,7 +43,8 @@ notify() {
   fi
 }
 
-npm --prefix "$ROOT" run sync-extension >/dev/null
+# Sync shared → browser trees; don't abort the whole update if cp is briefly busy.
+npm --prefix "$ROOT" run sync-extension >/dev/null || true
 bash "$ROOT/scripts/pack-desk-extension.sh" >/dev/null
 set +e
 INSTALL_OUT="$(bash "$ROOT/scripts/install-desk-extension-firefox.sh" ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"} 2>&1)"
