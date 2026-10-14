@@ -57,6 +57,38 @@ export async function readDeskVersion(root) {
   }
 }
 
+/** Semver-ish compare: true when `remote` is strictly newer than `local`. */
+export function isNewerVersion(remote, local) {
+  const parse = (v) =>
+    String(v || "0")
+      .split(/[.+-]/)
+      .map((part) => Number.parseInt(part, 10) || 0);
+  const a = parse(remote);
+  const b = parse(local);
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i += 1) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x > y) return true;
+    if (x < y) return false;
+  }
+  return false;
+}
+
+function upToDateResult(version, root, extra = {}) {
+  return {
+    ok: true,
+    upToDate: true,
+    mode: "up_to_date",
+    version: version || "?",
+    root,
+    applied: false,
+    restartRequired: false,
+    message: version ? `Desk ${version} is up to date.` : "Desk is up to date.",
+    ...extra,
+  };
+}
+
 function runCommand(command, args, { cwd, timeoutMs = 180_000 } = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
@@ -124,9 +156,13 @@ function parseInstallMode(combinedOutput) {
 /**
  * Pull latest (ff-only when possible) and refresh Desk.
  * Hub-signed Firefox installs are never overwritten with an unsigned sideload.
- * When signed is kept: stage Desktop hub-upload.zip and return ok:false (actionable).
+ * When feed/tree is not newer than the client's installed version → up_to_date (ok).
+ * When signed is kept and tree IS newer: stage Desktop hub-upload.zip (actionable, not "failed").
  */
-export async function applyDeskExtensionUpdate(serverRoot, { pull = true } = {}) {
+export async function applyDeskExtensionUpdate(
+  serverRoot,
+  { pull = true, localVersion = null } = {},
+) {
   const root = await resolveLabelConnectRoot(serverRoot);
   if (!root) {
     return {
@@ -134,6 +170,14 @@ export async function applyDeskExtensionUpdate(serverRoot, { pull = true } = {})
       error: "label_connect_missing",
       message: "Could not find label-connect with scripts/update-desk-extension.sh on this desk.",
     };
+  }
+
+  const clientVersion = localVersion != null && String(localVersion).trim() ? String(localVersion).trim() : null;
+
+  // Fast path before pull: client already matches tree on disk.
+  const preVersion = await readDeskVersion(root);
+  if (clientVersion && preVersion && !isNewerVersion(preVersion, clientVersion)) {
+    return upToDateResult(clientVersion, root, { treeVersion: preVersion });
   }
 
   const applyScript = path.join(root, "scripts", "apply-desk-extension-update.sh");
@@ -147,7 +191,34 @@ export async function applyDeskExtensionUpdate(serverRoot, { pull = true } = {})
   const combined = `${result.stdout || ""}\n${result.stderr || ""}`;
   const mode = parseInstallMode(combined);
 
+  // After pull/pack: tree still not newer than installed Hub build → up to date.
+  if (clientVersion && version && version !== "?" && !isNewerVersion(version, clientVersion)) {
+    if (mode === "signed_skipped" || result.code === 0) {
+      return upToDateResult(clientVersion, root, { treeVersion: version, skipped: mode === "signed_skipped" });
+    }
+  }
+
   if (result.code !== 0) {
+    // Signed skip should exit 0; if an older script failed mid-way but printed skip, prefer Hub UX.
+    if (mode === "signed_skipped") {
+      if (clientVersion && !isNewerVersion(version, clientVersion)) {
+        return upToDateResult(clientVersion, root, { treeVersion: version, skipped: true });
+      }
+      const hubUploadPath = await stageHubUploadZip(root, version);
+      return {
+        ok: false,
+        error: "hub_signed_kept",
+        mode: "hub_upload",
+        version,
+        root,
+        hubUploadPath,
+        restartRequired: false,
+        applied: false,
+        message: hubUploadPath
+          ? `Newer Desk ${version} is ready for Hub. Pack on Desktop: ${hubUploadPath} — Hub On your own → Upload New Version, then about:addons → Install Add-on From File.`
+          : `Newer Desk ${version} needs Hub On your own → Upload, then about:addons → Install Add-on From File.`,
+      };
+    }
     const detail = (result.stderr || result.stdout || "Update script failed.").trim().slice(0, 400);
     return {
       ok: false,
@@ -162,6 +233,9 @@ export async function applyDeskExtensionUpdate(serverRoot, { pull = true } = {})
 
   // Mozilla-signed Hub/AMO install kept — never report sideload success.
   if (mode === "signed_skipped") {
+    if (clientVersion && !isNewerVersion(version, clientVersion)) {
+      return upToDateResult(clientVersion, root, { treeVersion: version, skipped: true });
+    }
     const hubUploadPath = await stageHubUploadZip(root, version);
     return {
       ok: false,
@@ -173,8 +247,8 @@ export async function applyDeskExtensionUpdate(serverRoot, { pull = true } = {})
       restartRequired: false,
       applied: false,
       message: hubUploadPath
-        ? `Hub-signed Desk kept (unsigned sideload skipped). Pack saved to ${hubUploadPath} — Hub On your own → Upload New Version, then about:addons → Install Add-on From File (Hub-signed XPI).`
-        : "Hub-signed Desk kept (unsigned sideload skipped). Upload the self-dist XPI via Hub On your own, then about:addons → Install Add-on From File.",
+        ? `Newer Desk ${version} is ready for Hub. Pack on Desktop: ${hubUploadPath} — Hub On your own → Upload New Version, then about:addons → Install Add-on From File.`
+        : `Newer Desk ${version} needs Hub On your own → Upload, then about:addons → Install Add-on From File.`,
     };
   }
 
@@ -191,6 +265,9 @@ export async function applyDeskExtensionUpdate(serverRoot, { pull = true } = {})
   }
 
   // Unknown install outcome after exit 0 — stage Hub pack and do not claim success.
+  if (clientVersion && !isNewerVersion(version, clientVersion)) {
+    return upToDateResult(clientVersion, root, { treeVersion: version });
+  }
   const hubUploadPath = await stageHubUploadZip(root, version);
   return {
     ok: false,
