@@ -1,0 +1,58 @@
+name: Copy bidir sources from sibling branch
+on:
+  workflow_dispatch:
+  push:
+    branches: [cursor/bidirectional-lock-sync-36c9b]
+    paths:
+      - .github/workflows/copy-bidir-from-sibling.yml
+permissions:
+  contents: write
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/bidirectional-lock-sync-36c9b
+          fetch-depth: 0
+      - name: Copy applied sources from sibling tip
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin cursor/bidirectional-lock-sync-36c9
+          SRC=origin/cursor/bidirectional-lock-sync-36c9
+          files=(
+            extension/shared/background.js
+            extension/shared/content-shop.js
+            extension/shared/lot-names.js
+            extension/firefox/background.js
+            extension/firefox/content-shop.js
+            extension/firefox/lot-names.js
+            extension/chromium/background.js
+            extension/chromium/content-shop.js
+            extension/chromium/lot-names.js
+            test/tools-site-sync.test.mjs
+            payloads/bidir-lock/manifest.json
+            payloads/bidir-lock/src0.00
+            payloads/bidir-lock/src0.01
+            payloads/bidir-lock/src0.02
+            payloads/bidir-lock/src1.00
+            payloads/bidir-lock/src2.00
+            payloads/bidir-lock/src2.01
+            payloads/bidir-lock/src2.02
+            payloads/bidir-lock/src2.03
+          )
+          for f in "${files[@]}"; do
+            git checkout "$SRC" -- "$f"
+            echo "copied $f"
+          done
+          # Keep rebased version.json / manifests / README already on this branch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "${files[@]}"
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git commit -m "fix(desk): copy bidirectional lock sources from sibling (0.1.20)"
+          git push origin HEAD
