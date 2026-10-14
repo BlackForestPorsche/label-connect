@@ -1,5 +1,5 @@
 {
-  "version": "0.1.17",
-  "message": "CI AMO-signed self-dist (unlisted). Install/Update from desk-extension release XPI; Hub On your own still works for the same versioned build.",
+  "version": "0.1.18",
+  "message": "Update when offered; if already on feed version, Desk says up to date (no false failed toast). CI AMO-signed self-dist; Hub On your own still works.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
