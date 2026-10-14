@@ -1,0 +1,49 @@
+name: apply-create-ro-payload
+on:
+  push:
+    branches: [cursor/create-ro-label-text-012-947d]
+    paths:
+      - "payloads/create-ro-012-*.json"
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode payloads and commit
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import gzip, base64, json, hashlib, pathlib, glob, subprocess
+          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+          for fp in sorted(glob.glob("payloads/create-ro-012-*.json")):
+              payload = json.loads(pathlib.Path(fp).read_text())
+              changed = []
+              if "items" in payload:
+                  for item in payload["items"]:
+                      raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
+                      assert hashlib.md5(raw).hexdigest() == item["md5"], item["path"]
+                      pathlib.Path(item["path"]).parent.mkdir(parents=True, exist_ok=True)
+                      pathlib.Path(item["path"]).write_bytes(raw)
+                      changed.append(item["path"])
+                      print("wrote", item["path"], len(raw))
+              else:
+                  raw = gzip.decompress(base64.b64decode(payload["gzipBase64"]))
+                  assert hashlib.md5(raw).hexdigest() == payload["md5"], fp
+                  for path in payload["paths"]:
+                      pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+                      pathlib.Path(path).write_bytes(raw)
+                      changed.append(path)
+                      print("wrote", path, len(raw))
+              subprocess.check_call(["git", "add", "--"] + changed)
+              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
+                  print("no change for", fp)
+                  continue
+              msg = payload.get("message") or f"Apply {fp}"
+              subprocess.check_call(["git", "commit", "-m", msg])
+              print("committed", msg)
+          subprocess.check_call(["git", "push"])
+          PY
