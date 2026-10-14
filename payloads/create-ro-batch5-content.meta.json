@@ -1,0 +1,7 @@
+{
+  "parts": 8,
+  "prefix": "payloads/create-ro-batch5-content.part",
+  "out": "payloads/create-ro-batch5-content.json",
+  "message": "Create RO label text 0.1.11 — batch 5 (content shared+chromium+firefox)",
+  "nonce": "batch5-content-1791994723419"
+}
