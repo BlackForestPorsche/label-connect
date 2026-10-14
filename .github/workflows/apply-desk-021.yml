@@ -31,7 +31,10 @@ jobs:
               return True
 
           for fp in sorted(glob.glob("payloads/desk-021-*.json")):
-              payload = json.loads(pathlib.Path(fp).read_text())
+              text = pathlib.Path(fp).read_text()
+              # repair MCP transcription typos in gzipBase64 from initial push
+              text = text.replace("ecAtY8t", "ecMpY8t").replace("64Zyo2A7nDcSxDo", "CCZyo2A7nDcSxDo")
+              payload = json.loads(text)
               raw = gzip.decompress(base64.b64decode(payload["gzipBase64"]))
               assert hashlib.md5(raw).hexdigest() == payload["md5"], fp
               changed = []
