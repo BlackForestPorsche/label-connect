@@ -119,16 +119,10 @@
         if (response.person) fillPersonSelect(response.person);
         const label =
           response.source === "tools-bridge" || type === "tools-session-import"
-            ? response.siteGate
-              ? "Shop website + lot names unlocked from Tools. Refresh the shop tab if it still shows lock."
-              : "Lot names unlocked from Black Forest Tools."
+            ? "Lot names unlocked from Black Forest Tools."
             : "Lot names unlocked from the shop site session.";
         setStatus(label, "ok");
         return true;
-      }
-      if (response?.locked) {
-        if (!quiet) setStatus(response.error || "Tools is locked — shop website cookie cleared.", "err");
-        return false;
       }
       if (!quiet) setStatus(humanizeUnlockError(response?.error), "err");
       return false;
@@ -274,24 +268,39 @@
       setUpdate("Updating…", "warn");
       try {
         const response = await runtime.runtime.sendMessage({ type: "apply-update" });
-        if (response?.ok && response?.applied !== false && response?.mode !== "hub_upload") {
+        if (response?.mode === "firefox_update" && response?.ok) {
+          showApply(false);
+          setUpdate(
+            response.message || "Firefox is applying the signed update. Restart when prompted.",
+            "ok",
+          );
+        } else if (
+          response?.mode === "signed_staged" ||
+          response?.staged === true ||
+          response?.mode === "hub_upload" ||
+          response?.error === "hub_signed_kept"
+        ) {
+          // Signed feed / Install-from-File staging — success UX (not an error toast).
+          setUpdate(
+            response?.message || "Signed update ready — about:addons → Install Add-on From File.",
+            "ok",
+          );
+          showApply(true);
+        } else if (response?.ok && response?.applied !== false) {
           const version = response.version || "";
           showApply(false);
           setUpdate(
             version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox.",
             "ok",
           );
-        } else if (response?.mode === "hub_upload" || response?.error === "hub_signed_kept") {
-          setUpdate(response?.message || "Hub On your own → Install from File.", "warn");
-          showApply(true);
         } else {
           setUpdate(response?.message || "Update failed.", "err");
           showApply(true);
         }
       } catch {
         setUpdate(
-          "Update failed — Labels may not be running. Hub On your own → Install from File.",
-          "err",
+          "Could not reach Labels — try about:addons → Check for Updates, or Install Add-on From File (signed desk-extension XPI).",
+          "warn",
         );
         showApply(true);
       } finally {
