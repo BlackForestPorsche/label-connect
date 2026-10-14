@@ -1,0 +1,29 @@
+{
+  "bg": {
+    "n": 6,
+    "sha256": "4bb9a82f3f6c242baa23249154bc34a853401409a284fd42f89c828c5cabf55e",
+    "len": 8833,
+    "targets": [
+      "tmp/desk-024-apply/extension__chromium__background.js.00",
+      "tmp/desk-024-apply/extension__firefox__background.js.00"
+    ]
+  },
+  "shared_bg": {
+    "n": 6,
+    "sha256": "8d5fff5ea50b0822497c13d1237eacac22cae9933cce7287102439bbfbbc2a76",
+    "len": 8877,
+    "targets": [
+      "tmp/desk-024-apply/extension__shared__background.js.00"
+    ]
+  },
+  "lot": {
+    "n": 9,
+    "sha256": "7a8d53fa4b6718e83822725990ddef83a597f0cf208c7f870ea1409c7b4b1f46",
+    "len": 12001,
+    "targets": [
+      "tmp/desk-024-apply/extension__chromium__lot-names.js.00",
+      "tmp/desk-024-apply/extension__firefox__lot-names.js.00",
+      "tmp/desk-024-apply/extension__shared__lot-names.js.00"
+    ]
+  }
+}
