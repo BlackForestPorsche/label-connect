@@ -4,6 +4,7 @@ on:
     branches: [cursor/create-ro-label-text-012-947d]
     paths:
       - "payloads/create-ro-012-*.json"
+      - "payloads/create-ro-012-*.hex"
   workflow_dispatch:
 jobs:
   apply:
@@ -19,6 +20,12 @@ jobs:
           import gzip, base64, json, hashlib, pathlib, glob, subprocess
           subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
           subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+          # Materialize .hex -> .json first
+          for fp in sorted(glob.glob("payloads/create-ro-012-*.hex")):
+              text = bytes.fromhex(pathlib.Path(fp).read_text().strip()).decode()
+              out = fp[:-4] + ".json"
+              pathlib.Path(out).write_text(text)
+              print("hex->json", fp, out)
           for fp in sorted(glob.glob("payloads/create-ro-012-*.json")):
               payload = json.loads(pathlib.Path(fp).read_text())
               changed = []
