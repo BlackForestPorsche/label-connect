@@ -1,0 +1,61 @@
+name: Apply bidirectional lock payloads
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cursor/bidirectional-lock-sync-36c9
+      - cursor/bidirectional-lock-sync-36c9b
+    paths:
+      - .github/workflows/apply-bidirectional-lock.yml
+      - payloads/bidir-lock/**
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - name: Decode and commit payloads
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import pathlib, gzip, base64, hashlib, json, sys, subprocess
+          root = pathlib.Path("payloads/bidir-lock")
+          manifest_path = root / "manifest.json"
+          if not manifest_path.exists():
+              print("No manifest")
+              sys.exit(0)
+          manifest = json.loads(manifest_path.read_text())
+          changed = []
+          for item in manifest:
+              parts = []
+              for i in range(item["chunks"]):
+                  p = root / f"{item['prefix']}.{i:02d}"
+                  if not p.exists():
+                      print(f"missing {p}", file=sys.stderr)
+                      sys.exit(1)
+                  parts.append(p.read_text().strip())
+              data = gzip.decompress(base64.b64decode("".join(parts)))
+              if hashlib.sha256(data).hexdigest() != item["sha256"]:
+                  print(f"sha mismatch {item['paths']}", file=sys.stderr)
+                  sys.exit(1)
+              for rel in item["paths"]:
+                  path = pathlib.Path(rel)
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  if path.exists() and path.read_bytes() == data:
+                      print(f"unchanged {rel}")
+                      continue
+                  path.write_bytes(data)
+                  changed.append(rel)
+                  print(f"wrote {rel} {len(data)}")
+          if not changed:
+              print("No changes")
+              sys.exit(0)
+          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+          subprocess.check_call(["git", "add", "--"] + changed)
+          subprocess.check_call(["git", "commit", "-m", "fix(desk): apply bidirectional lock sources (0.1.20)"])
+          subprocess.check_call(["git", "push", "origin", "HEAD"])
+          PY
