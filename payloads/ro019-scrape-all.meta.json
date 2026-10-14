@@ -1,7 +1,7 @@
 {
   "prefix": "payloads/ro019-scrape-all.",
   "parts": 2,
-  "md5": "PLACEHOLDER_MD5",
+  "md5": "70a6662994ed2180400812fa48f98ae5",
   "item_md5": "c6d3b51afec4fd4c0ed0fd1fcbb44f44",
   "paths": [
     "extension/shared/scrape.js",
