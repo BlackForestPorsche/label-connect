@@ -476,14 +476,36 @@
         return false;
       }
       const payload = message.payload || {};
+      // Website unlock JSON → Desk storage + POST :8788 (Tools unlock).
       api
         .storeWidgetToken({
           token: payload.token,
           expiresAt: payload.expiresAt,
           person: payload.person,
           source: payload.source || "shop-site",
+          publishToTools: true,
         })
         .then(sendResponse);
+      return true;
+    }
+    if (message.type === "tools-to-site-unlock") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.syncToolsSessionToSite) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      // Tools unlock → Firefox gate (exchange). Also clears gate when Tools locked.
+      api.syncToolsSessionToSite({ reloadUnlockTabs: true }).then(sendResponse);
+      return true;
+    }
+    if (message.type === "site-lock") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.syncSiteLockToTools) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      // Website lock → clear Firefox gate + DELETE Tools bridge (clear Electron jar).
+      api.syncSiteLockToTools({ reloadShopTabs: false }).then(sendResponse);
       return true;
     }
     if (message.type === "check-update") {
@@ -539,6 +561,43 @@
         tryAutoUnlock("shop-tab-complete", false);
       });
     } catch {
+    }
+  }
+
+  // Website lock that only clears bf_shop_gate (no lockShop body) still must lock Tools.
+  // Debounce remove→set during exchange so we do not false-lock.
+  if (runtime.cookies?.onChanged?.addListener) {
+    let gateRemovalTimer = null;
+    const GATE_REMOVAL_MS = 700;
+    try {
+      runtime.cookies.onChanged.addListener((changeInfo) => {
+        const cookie = changeInfo?.cookie;
+        if (!cookie || cookie.name !== "bf_shop_gate") return;
+        if (!/blackforestautomotive\.com$/i.test(String(cookie.domain || ""))) return;
+        if (!changeInfo.removed) {
+          if (gateRemovalTimer) {
+            clearTimeout(gateRemovalTimer);
+            gateRemovalTimer = null;
+          }
+          return;
+        }
+        if (gateRemovalTimer) clearTimeout(gateRemovalTimer);
+        gateRemovalTimer = setTimeout(() => {
+          gateRemovalTimer = null;
+          const api = globalThis.AllDataRoLabels;
+          if (!api?.readShopGateCookie || !api?.syncSiteLockToTools) return;
+          void api.readShopGateCookie().then((gate) => {
+            if (gate.present) return null;
+            // Skip if Tools already locked (Tools→site clear path owns this).
+            return api.probeToolsBridgeHealth().then((health) => {
+              if (health.reachable && health.hasSession === false) return null;
+              return api.syncSiteLockToTools({ reloadShopTabs: true });
+            });
+          });
+        }, GATE_REMOVAL_MS);
+      });
+    } catch {
+      // cookies.onChanged unavailable
     }
   }
 })();

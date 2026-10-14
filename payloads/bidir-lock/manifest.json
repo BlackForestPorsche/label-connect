@@ -1,0 +1,32 @@
+[
+  {
+    "paths": [
+      "extension/chromium/background.js",
+      "extension/firefox/background.js",
+      "extension/shared/background.js"
+    ],
+    "prefix": "src0",
+    "chunks": 3,
+    "sha256": "5364976563cbff0727f2097b9de351c8a1efb2c80ad5a5386d1356fa74e81ead"
+  },
+  {
+    "paths": [
+      "extension/chromium/content-shop.js",
+      "extension/firefox/content-shop.js",
+      "extension/shared/content-shop.js"
+    ],
+    "prefix": "src1",
+    "chunks": 1,
+    "sha256": "612db698fe449a4f33f9b77b86f9fc4d3f5a054a99ece5b2ea7d76707ae96e32"
+  },
+  {
+    "paths": [
+      "extension/chromium/lot-names.js",
+      "extension/firefox/lot-names.js",
+      "extension/shared/lot-names.js"
+    ],
+    "prefix": "src2",
+    "chunks": 4,
+    "sha256": "287f6f13544baf3e38aa4f6362f3120c5d9026283f21682138b7b8f7363f8cfa"
+  }
+]
