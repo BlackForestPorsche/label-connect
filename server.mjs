@@ -150,6 +150,7 @@ const server = createServer(async (req, res) => {
       send(res, 200, result);
       return;
     }
+    // Desk extension one-click update (localhost only — never expose shell to LAN).
     if (req.method === "GET" && url.pathname === "/api/desk-extension") {
       if (!isLocalClient(req)) {
         send(res, 403, { error: "localhost_only", message: "Desk updates are only available from this machine." });
@@ -190,6 +191,7 @@ const server = createServer(async (req, res) => {
       send(res, status, result);
       return;
     }
+    // AllData Create RO → real LabelWriter print (last name + model only).
     if (req.method === "POST" && url.pathname === "/api/print-ro") {
       const raw = await readBody(req, 64_000);
       let parsed;
@@ -212,6 +214,9 @@ const server = createServer(async (req, res) => {
         send(res, 400, { error: plan.error });
         return;
       }
+
+      // Idempotency is by concrete RO id only — never by customer/person/name.
+      // Extension omits open/baseline RO# so a new Create for the same person always prints.
       if (fields.roNumber && (await roPrintStore.has(fields.roNumber))) {
         send(res, 200, {
           ok: true,
@@ -225,6 +230,7 @@ const server = createServer(async (req, res) => {
         });
         return;
       }
+
       if (fields.dryRun) {
         send(res, 200, {
           ok: true,
@@ -238,6 +244,7 @@ const server = createServer(async (req, res) => {
         });
         return;
       }
+
       const { pdf, media } = await renderRoLabelPdf(fields);
       const result = await exclusive(() => sendPdfToQueue(pdf, { pageKey: media.key }));
       if (fields.roNumber) {
