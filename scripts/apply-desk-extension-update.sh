@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # One-click Desk update for Labels POST /api/update-desk-extension (localhost only).
-# Pulls label-connect (ff-only when possible), then sideloads via update-desk-extension.sh.
+# Pulls label-connect (ff-only when possible), then runs update-desk-extension.sh.
+# That script skips unsigned sideload when a Mozilla-signed Hub/AMO Desk is present
+# (prints skipped=signed-amo). Labels must not treat skip as a successful apply.
 # Idempotent. Never creates Firefox profiles. No GUI.
 set -euo pipefail
 
@@ -47,5 +49,5 @@ fi
 
 chmod +x "$ROOT/scripts/"*.sh 2>/dev/null || true
 bash "$ROOT/scripts/update-desk-extension.sh" --quiet
-VER="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/extension/version.json"))["version"])' 2>/dev/null || echo '?')"
+VER="$(python3 -c 'import json; print(json.load(open("'$ROOT'/extension/version.json"))["version"])' 2>/dev/null || echo '?')"
 log "Desk v${VER} applied"

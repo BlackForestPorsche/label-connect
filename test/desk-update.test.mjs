@@ -6,6 +6,7 @@ import {
   isLocalClient,
   readDeskVersion,
   resolveLabelConnectRoot,
+  stageHubUploadZip,
 } from "../shared/desk-update.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -45,4 +46,33 @@ test("popup and background no longer tell users to run bash update script", asyn
   assert.equal(/apply-update/.test(background), true);
   assert.equal(/\/api\/update-desk-extension/.test(background), true);
   assert.equal(/run update-desk-extension\.sh/.test(background), false);
+  assert.equal(/hub_signed_kept/.test(background), true);
+  assert.equal(/Hub On your own/.test(popup), true);
+  assert.equal(/mode !== "hub_upload"/.test(popup) || /mode === "hub_upload"/.test(popup), true);
+});
+
+test("stageHubUploadZip copies self-dist pack to Desktop", async () => {
+  const { mkdtemp, rm, mkdir, writeFile, readFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { homedir } = await import("node:os");
+  const fakeRoot = await mkdtemp(path.join(tmpdir(), "desk-hub-"));
+  const dist = path.join(fakeRoot, "extension", "dist");
+  await mkdir(dist, { recursive: true });
+  const payload = Buffer.from("fake-xpi-bytes");
+  await writeFile(path.join(dist, "Black.Forest.Desk-9.9.9.xpi"), payload);
+  const prevHome = process.env.HOME;
+  const fakeHome = await mkdtemp(path.join(tmpdir(), "desk-home-"));
+  process.env.HOME = fakeHome;
+  try {
+    const dest = await stageHubUploadZip(fakeRoot, "9.9.9");
+    assert.equal(dest, path.join(fakeHome, "Desktop", "Black.Forest.Desk-9.9.9-hub-upload.zip"));
+    const copied = await readFile(dest);
+    assert.equal(Buffer.compare(copied, payload), 0);
+  } finally {
+    process.env.HOME = prevHome;
+    await rm(fakeRoot, { recursive: true, force: true });
+    await rm(fakeHome, { recursive: true, force: true });
+  }
+  // silence unused import warning if bundlers care
+  assert.equal(typeof homedir, "function");
 });
