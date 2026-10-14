@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Launch Labels (LabelWriter 550 bench) as a desktop app.
+# Prefer Black Forest Tools 1.5.4+ (Shop → Open Labels): Tools owns :8080.
+# This script remains for transition / manual bench use.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
