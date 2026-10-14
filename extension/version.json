@@ -1,5 +1,5 @@
 {
-  "version": "0.1.11",
-  "message": "Background auto unlock: shop from-gate on startup / alarm / idle / shop tab load, Tools :8788 fallback. Sync buttons kept as manual fallback; Person + PIN unchanged.",
+  "version": "0.1.12",
+  "message": "One-click Update in the Desk popup — Labels applies the sideload on this machine. No shell commands. Restart Firefox when prompted.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
