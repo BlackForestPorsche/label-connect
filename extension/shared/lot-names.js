@@ -1,1 +1,1 @@
-PLACEHOLDER_SEE_ARGS_FILE
+$file:/home/ubuntu/repos/label-connect/extension/shared/lot-names.js
