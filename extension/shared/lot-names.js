@@ -1,1 +1,1 @@
-$file:/tmp/lot0-content-only.txt
+__CURSOR_MCP_ARGS_FILE__
