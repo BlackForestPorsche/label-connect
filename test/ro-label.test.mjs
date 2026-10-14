@@ -3,9 +3,11 @@ import test from "node:test";
 import { PDFDocument } from "pdf-lib";
 import {
   OUT_MILEAGE_LINE,
+  RO_LABEL_SAFE_INSET_PT,
   buildRoLabelDoc,
   cleanModel,
   extractLastName,
+  isPlateOrAccountNoise,
   isVinNoise,
   normalizeRoPayload,
   planRoPrint,
@@ -42,6 +44,19 @@ test("extractLastName rejects VIN noise", () => {
   assert.equal(extractLastName("WP0AB2A99KS123456"), "");
 });
 
+test("extractLastName rejects license plate and account #", () => {
+  assert.equal(extractLastName("ABC1234"), "");
+  assert.equal(extractLastName("A12345"), "");
+  assert.equal(extractLastName("123456"), "");
+  assert.equal(extractLastName("License plate"), "");
+  assert.equal(extractLastName("Account #"), "");
+  assert.equal(isPlateOrAccountNoise("ABC1234"), true);
+  assert.equal(isPlateOrAccountNoise("12345"), true);
+  assert.equal(isPlateOrAccountNoise("Whatcott"), false);
+  assert.equal(isPlateOrAccountNoise("Boxster"), false);
+  assert.equal(isPlateOrAccountNoise("911"), false);
+});
+
 test("normalize strips first initial from lastName field", () => {
   const result = normalizeRoPayload({
     lastName: "J. Owner",
@@ -70,6 +85,15 @@ test("normalize rejects VIN as lastName or model", () => {
     normalizeRoPayload({ lastName: "Whatcott", model: "WP0AB2A99KS123456", event: "create-ro" }).ok,
     false,
   );
+});
+
+test("normalize rejects license plate / account as lastName or model", () => {
+  assert.equal(normalizeRoPayload({ lastName: "ABC1234", model: "Boxster", event: "create-ro" }).ok, false);
+  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "12345", event: "create-ro" }).ok, false);
+  assert.equal(normalizeRoPayload({ lastName: "A98765", model: "XYZ99", event: "create-ro" }).ok, false);
+  assert.equal(cleanModel("12345"), "");
+  assert.equal(cleanModel("ABC1234"), "");
+  assert.equal(cleanModel("Boxster"), "Boxster");
 });
 
 test("ro label lines are LastName - Model plus Out Mileage blank", () => {
@@ -158,6 +182,13 @@ test("buildRoLabelDoc stays on 30252 address media", () => {
   const doc = buildRoLabelDoc({ lastName: "Test", model: "911", roNumber: "J9" });
   assert.equal(doc.mediaKey, "w79h252");
   assert.equal(doc.turned, true);
+});
+
+test("buildRoLabelDoc pads past ImageableArea so top line is not clipped", () => {
+  assert.ok(RO_LABEL_SAFE_INSET_PT >= 6);
+  const doc = buildRoLabelDoc({ lastName: "Whatcott", model: "Boxster" });
+  assert.ok(doc.blocks[0].y >= RO_LABEL_SAFE_INSET_PT);
+  assert.ok(doc.blocks[0].x >= RO_LABEL_SAFE_INSET_PT);
 });
 
 test("renderRoLabelPdf builds a one-page 30252 PDF", async () => {
