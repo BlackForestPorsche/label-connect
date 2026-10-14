@@ -5,13 +5,11 @@ import { homedir } from "node:os";
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"]);
 
-/** True when the HTTP client is loopback (Labels binds 0.0.0.0). */
 export function isLocalClient(req) {
   const remote = String(req?.socket?.remoteAddress || "")
     .replace(/^::ffff:/i, "")
     .toLowerCase();
   if (remote === "127.0.0.1" || remote === "::1" || remote === "localhost") return true;
-  // Unix-domain / missing remote (tests) — treat as local only when Host is loopback.
   const hostHeader = String(req?.headers?.host || "")
     .split(":")[0]
     .toLowerCase();
@@ -28,17 +26,12 @@ async function pathExists(filePath) {
   }
 }
 
-/**
- * Prefer the Labels checkout (server root), then ~/label-connect, then LABEL_CONNECT_ROOT.
- * Vendored copies under shop-desktop/labels may not ship the desk scripts.
- */
 export async function resolveLabelConnectRoot(serverRoot) {
   const candidates = [];
   const envRoot = process.env.LABEL_CONNECT_ROOT;
   if (envRoot) candidates.push(path.resolve(envRoot));
   if (serverRoot) candidates.push(path.resolve(serverRoot));
   candidates.push(path.join(homedir(), "label-connect"));
-
   for (const root of candidates) {
     const script = path.join(root, "scripts", "update-desk-extension.sh");
     if (await pathExists(script)) return root;
@@ -57,7 +50,6 @@ export async function readDeskVersion(root) {
   }
 }
 
-/** Semver-ish compare: true when `remote` is strictly newer than `local`. */
 export function isNewerVersion(remote, local) {
   const parse = (v) =>
     String(v || "0")
@@ -102,27 +94,13 @@ function runCommand(command, args, { cwd, timeoutMs = 180_000 } = {}) {
       child.kill("SIGTERM");
       resolve({ code: 124, stdout, stderr: `${stderr}\nTimed out after ${timeoutMs}ms` });
     }, timeoutMs);
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ code: 1, stdout, stderr: error.message });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? 1, stdout, stderr });
-    });
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.on("error", (error) => { clearTimeout(timer); resolve({ code: 1, stdout, stderr: error.message }); });
+    child.on("close", (code) => { clearTimeout(timer); resolve({ code: code ?? 1, stdout, stderr }); });
   });
 }
 
-/**
- * Stage self-dist pack (keeps gecko.update_url) on the Desktop for Hub
- * “On your own” re-upload. Never claims this applied the Firefox install.
- */
 export async function stageHubUploadZip(root, version) {
   if (!root || !version) return null;
   const candidates = [
@@ -132,13 +110,9 @@ export async function stageHubUploadZip(root, version) {
   ];
   let src = null;
   for (const file of candidates) {
-    if (await pathExists(file)) {
-      src = file;
-      break;
-    }
+    if (await pathExists(file)) { src = file; break; }
   }
   if (!src) return null;
-
   const desktop = path.join(homedir(), "Desktop");
   await mkdir(desktop, { recursive: true });
   const dest = path.join(desktop, `Black.Forest.Desk-${version}-hub-upload.zip`);
@@ -153,133 +127,54 @@ function parseInstallMode(combinedOutput) {
   return "unknown";
 }
 
-/**
- * Pull latest (ff-only when possible) and refresh Desk.
- * Hub-signed Firefox installs are never overwritten with an unsigned sideload.
- * When feed/tree is not newer than the client's installed version → up_to_date (ok).
- * When signed is kept and tree IS newer: stage Desktop hub-upload.zip (actionable, not "failed").
- */
-export async function applyDeskExtensionUpdate(
-  serverRoot,
-  { pull = true, localVersion = null } = {},
-) {
+export async function applyDeskExtensionUpdate(serverRoot, { pull = true, localVersion = null } = {}) {
   const root = await resolveLabelConnectRoot(serverRoot);
   if (!root) {
-    return {
-      ok: false,
-      error: "label_connect_missing",
-      message: "Could not find label-connect with scripts/update-desk-extension.sh on this desk.",
-    };
+    return { ok: false, error: "label_connect_missing", message: "Could not find label-connect with scripts/update-desk-extension.sh on this desk." };
   }
-
   const clientVersion = localVersion != null && String(localVersion).trim() ? String(localVersion).trim() : null;
-
-  // Fast path before pull: client already matches tree on disk.
   const preVersion = await readDeskVersion(root);
   if (clientVersion && preVersion && !isNewerVersion(preVersion, clientVersion)) {
     return upToDateResult(clientVersion, root, { treeVersion: preVersion });
   }
-
   const applyScript = path.join(root, "scripts", "apply-desk-extension-update.sh");
   const updateScript = path.join(root, "scripts", "update-desk-extension.sh");
   const script = (await pathExists(applyScript)) ? applyScript : updateScript;
   const args = ["--quiet"];
   if (script === applyScript && !pull) args.push("--no-pull");
-
   const result = await runCommand("bash", [script, ...args], { cwd: root });
   const version = (await readDeskVersion(root)) || "?";
   const combined = `${result.stdout || ""}\n${result.stderr || ""}`;
   const mode = parseInstallMode(combined);
-
-  // After pull/pack: tree still not newer than installed Hub build → up to date.
   if (clientVersion && version && version !== "?" && !isNewerVersion(version, clientVersion)) {
     if (mode === "signed_skipped" || result.code === 0) {
       return upToDateResult(clientVersion, root, { treeVersion: version, skipped: mode === "signed_skipped" });
     }
   }
-
   if (result.code !== 0) {
-    // Signed skip should exit 0; if an older script failed mid-way but printed skip, prefer Hub UX.
     if (mode === "signed_skipped") {
       if (clientVersion && !isNewerVersion(version, clientVersion)) {
         return upToDateResult(clientVersion, root, { treeVersion: version, skipped: true });
       }
       const hubUploadPath = await stageHubUploadZip(root, version);
-      return {
-        ok: false,
-        error: "hub_signed_kept",
-        mode: "hub_upload",
-        version,
-        root,
-        hubUploadPath,
-        restartRequired: false,
-        applied: false,
-        message: hubUploadPath
-          ? `Newer Desk ${version} is ready for Hub. Pack on Desktop: ${hubUploadPath} — Hub On your own → Upload New Version, then about:addons → Install Add-on From File.`
-          : `Newer Desk ${version} needs Hub On your own → Upload, then about:addons → Install Add-on From File.`,
-      };
+      return { ok: false, error: "hub_signed_kept", mode: "hub_upload", version, root, hubUploadPath, restartRequired: false, applied: false, message: hubUploadPath ? `Newer Desk ${version} is ready for Hub. Pack on Desktop: ${hubUploadPath} — Hub On your own → Upload New Version, then about:addons → Install Add-on From File.` : `Newer Desk ${version} needs Hub On your own → Upload, then about:addons → Install Add-on From File.` };
     }
     const detail = (result.stderr || result.stdout || "Update script failed.").trim().slice(0, 400);
-    return {
-      ok: false,
-      error: "update_failed",
-      message: detail || "Desk update failed.",
-      version,
-      root,
-      code: result.code,
-      mode,
-    };
+    return { ok: false, error: "update_failed", message: detail || "Desk update failed.", version, root, code: result.code, mode };
   }
-
-  // Mozilla-signed Hub/AMO install kept — never report sideload success.
   if (mode === "signed_skipped") {
     if (clientVersion && !isNewerVersion(version, clientVersion)) {
       return upToDateResult(clientVersion, root, { treeVersion: version, skipped: true });
     }
     const hubUploadPath = await stageHubUploadZip(root, version);
-    return {
-      ok: false,
-      error: "hub_signed_kept",
-      mode: "hub_upload",
-      version,
-      root,
-      hubUploadPath,
-      restartRequired: false,
-      applied: false,
-      message: hubUploadPath
-        ? `Newer Desk ${version} is ready for Hub. Pack on Desktop: ${hubUploadPath} — Hub On your own → Upload New Version, then about:addons → Install Add-on From File.`
-        : `Newer Desk ${version} needs Hub On your own → Upload, then about:addons → Install Add-on From File.`,
-    };
+    return { ok: false, error: "hub_signed_kept", mode: "hub_upload", version, root, hubUploadPath, restartRequired: false, applied: false, message: hubUploadPath ? `Newer Desk ${version} is ready for Hub. Pack on Desktop: ${hubUploadPath} — Hub On your own → Upload New Version, then about:addons → Install Add-on From File.` : `Newer Desk ${version} needs Hub On your own → Upload, then about:addons → Install Add-on From File.` };
   }
-
   if (mode === "unsigned_sideload") {
-    return {
-      ok: true,
-      version,
-      root,
-      mode: "unsigned_sideload",
-      restartRequired: true,
-      applied: true,
-      message: `Desk ${version} sideloaded (unsigned) — restart Firefox. Prefer Hub-signed Install from File for durable installs.`,
-    };
+    return { ok: true, version, root, mode: "unsigned_sideload", restartRequired: true, applied: true, message: `Desk ${version} sideloaded (unsigned) — restart Firefox. Prefer Hub-signed Install from File for durable installs.` };
   }
-
-  // Unknown install outcome after exit 0 — stage Hub pack and do not claim success.
   if (clientVersion && !isNewerVersion(version, clientVersion)) {
     return upToDateResult(clientVersion, root, { treeVersion: version });
   }
   const hubUploadPath = await stageHubUploadZip(root, version);
-  return {
-    ok: false,
-    error: "update_outcome_unclear",
-    mode: "hub_upload",
-    version,
-    root,
-    hubUploadPath,
-    restartRequired: false,
-    applied: false,
-    message: hubUploadPath
-      ? `Could not confirm Firefox apply. Pack saved to ${hubUploadPath} — Hub On your own → Upload, then Install Add-on From File.`
-      : "Could not confirm Firefox apply. Prefer Hub On your own → Install from File.",
-  };
+  return { ok: false, error: "update_outcome_unclear", mode: "hub_upload", version, root, hubUploadPath, restartRequired: false, applied: false, message: hubUploadPath ? `Could not confirm Firefox apply. Pack saved to ${hubUploadPath} — Hub On your own → Upload, then Install Add-on From File.` : "Could not confirm Firefox apply. Prefer Hub On your own → Install from File." };
 }
