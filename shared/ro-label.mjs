@@ -1,10 +1,12 @@
 /**
- * AllData Create RO → Labels: last name + model on 30252.
+ * AllData Create RO \u2192 Labels: last name + model on 30252.
  * Rejects Update / Schedule / Assign. Real print is owned by the server route.
  *
  * Label layout (Create RO only):
  *   Whatcott - Boxster
  *   Out Mileage _____________
+ *
+ * Never license plate, account #, VIN, or first initial.
  */
 
 import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
@@ -18,10 +20,33 @@ const MAX_LEN = {
   customerName: 48,
 };
 
-/** Handwriting blank on line 2 — never filled from AllData. */
+/** Handwriting blank on line 2 \u2014 never filled from AllData. */
 export const OUT_MILEAGE_LINE = "Out Mileage _____________";
 
+/**
+ * Extra inset (pt) inside ImageableArea for Create RO PDFs.
+ * Bare PPD safe rect still clipped the top line on LabelWriter 550 \u2014 pad further.
+ */
+export const RO_LABEL_SAFE_INSET_PT = 8;
+
 const FORBIDDEN_EVENT_RE = /update|schedule|assign|new[\s_-]*r\/?o/i;
+
+const PORSCHE_MODELS = [
+  "911",
+  "718",
+  "Boxster",
+  "Cayman",
+  "Cayenne",
+  "Macan",
+  "Panamera",
+  "Taycan",
+  "Carrera",
+  "Targa",
+  "Turbo",
+  "GT3",
+  "GT4",
+  "GTS",
+];
 
 function clean(value, max) {
   const text = String(value ?? "")
@@ -31,7 +56,7 @@ function clean(value, max) {
   return text.slice(0, max);
 }
 
-/** True for VIN labels / VIN numbers — never print these as name or model. */
+/** True for VIN labels / VIN numbers \u2014 never print these as name or model. */
 export function isVinNoise(value) {
   const text = String(value ?? "")
     .replace(/\s+/g, " ")
@@ -45,46 +70,78 @@ export function isVinNoise(value) {
   return false;
 }
 
+function isKnownPorscheModel(value) {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  return PORSCHE_MODELS.some((model) => new RegExp(`^${model}$`, "i").test(text));
+}
+
 /**
- * Customer last name only — never first name or first initial.
+ * License plate / account # values \u2014 never print as lastName or model.
+ * Same heuristic as the Desk scrape (0.1.17+).
+ */
+export function isPlateOrAccountNoise(value) {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (/^\s*(license\s*plate|account\s*#?|acct\.?\s*#?)\s*:?\s*$/i.test(text)) return true;
+  if (/^(license\s*plate|account\s*#?|acct\.?\s*#?)\b/i.test(text)) return true;
+  if (isKnownPorscheModel(text)) return false;
+  const compact = text.replace(/[\s-]/g, "");
+  if (/^[A-Z]?\d{4,}$/i.test(compact)) return true;
+  if (/^(?=.*\d)[A-Z0-9]{5,8}$/i.test(compact)) return true;
+  return false;
+}
+
+/**
+ * Customer last name only \u2014 never first name or first initial.
  * Handles "LAST, FIRST", "J. LAST", "J LAST", "J.LAST", "FIRST LAST",
- * and glued shop codes like "LWhatcott" → "Whatcott".
+ * and glued shop codes like "LWhatcott" \u2192 "Whatcott".
  * Same heuristic as the extension scrape.
  */
 export function extractLastName(fullName) {
   let text = clean(fullName, MAX_LEN.customerName);
   if (!text) return "";
-  if (isVinNoise(text)) return "";
-  // "LAST, FIRST" / "LAST, F." → LAST
+  if (isVinNoise(text) || isPlateOrAccountNoise(text)) return "";
+  // "LAST, FIRST" / "LAST, F." \u2192 LAST
   if (text.includes(",")) {
     text = text.split(",")[0].trim();
   }
   // Leading first initial: "J. Smith", "J Smith", "J.Smith"
   text = text.replace(/^[A-Za-z]\.?\s+/, "").replace(/^[A-Za-z]\.(?=[A-Za-z])/, "");
-  // Glued initial + PascalCase last: "LWhatcott" → "Whatcott" (not "McDonald")
+  // Glued initial + PascalCase last: "LWhatcott" \u2192 "Whatcott" (not "McDonald")
   if (/^[A-Z][A-Z][a-z]/.test(text) && !/\s/.test(text)) {
     text = text.slice(1);
   }
   const parts = text.split(" ").filter(Boolean);
   if (!parts.length) return "";
-  // Drop a trailing bare initial if anything remains ("Smith J" → "Smith").
+  // Drop a trailing bare initial if anything remains ("Smith J" \u2192 "Smith").
   if (parts.length > 1 && /^[A-Za-z]\.?$/.test(parts[parts.length - 1])) {
     parts.pop();
   }
   const last = parts[parts.length - 1] || "";
-  if (isVinNoise(last) || /^vin:?$/i.test(last)) return "";
+  if (isVinNoise(last) || isPlateOrAccountNoise(last) || /^vin:?$/i.test(last)) return "";
+  if (/\d/.test(last)) return "";
   return last;
 }
 
-/** Drop VIN / empty junk; keep a short vehicle model token. */
+/** Drop VIN / plate / account / empty junk; keep a short vehicle model token. */
 export function cleanModel(value) {
   let model = clean(value, MAX_LEN.model);
   if (!model) return "";
-  if (isVinNoise(model)) return "";
+  if (isVinNoise(model) || isPlateOrAccountNoise(model)) return "";
   if (/^vin:?$/i.test(model)) return "";
   // Strip a leading "VIN:" if a scraper glued it onto the model field.
   model = model.replace(/^vin\s*:\s*/i, "").trim();
-  if (!model || isVinNoise(model)) return "";
+  if (!model || isVinNoise(model) || isPlateOrAccountNoise(model)) return "";
+  // Prefer a known Porsche model token when the scraper's string is messy.
+  for (const known of PORSCHE_MODELS) {
+    if (new RegExp(`\\b${known}\\b`, "i").test(model)) return known;
+  }
+  if (/\d/.test(model) && !isKnownPorscheModel(model)) return "";
   return model.slice(0, MAX_LEN.model);
 }
 
@@ -112,11 +169,11 @@ export function normalizeRoPayload(raw) {
     lastName = extractLastName(customerName);
   }
   lastName = clean(lastName, MAX_LEN.lastName);
-  if (isVinNoise(lastName)) lastName = "";
+  if (isVinNoise(lastName) || isPlateOrAccountNoise(lastName)) lastName = "";
 
   const model = cleanModel(raw.model);
   const roNumber = clean(raw.roNumber ?? raw.ro ?? raw.documentNumber, MAX_LEN.roNumber);
-  // Per-Create click id from the Desk extension — never used as a customer/person key.
+  // Per-Create click id from the Desk extension \u2014 never used as a customer/person key.
   const createArmId = clean(raw.createArmId ?? raw.create_arm_id ?? raw.createId, 64);
   const source = clean(raw.source ?? "alldata", 32) || "alldata";
   const dryRun = Boolean(raw.dryRun === true || raw.dryRun === "1" || raw.dryRun === 1);
@@ -141,7 +198,7 @@ export function normalizeRoPayload(raw) {
 }
 
 /**
- * Label content — exactly two lines:
+ * Label content \u2014 exactly two lines:
  *   {LastName} - {Model}
  *   Out Mileage _____________
  * Never VIN, RO#, mileage value, or first initial.
@@ -180,7 +237,8 @@ export function buildRoLabelDoc(fields, mediaList = FALLBACK_MEDIA) {
   const view = viewSize(media, turned);
   const safe = viewSafeRect(media, turned);
   const box = safe.w > 8 && safe.h > 6 ? safe : { x: 0, y: 0, w: view.widthPt, h: view.heightPt };
-  const pad = Math.max(2, Math.min(box.w, box.h) * 0.06);
+  // Extra inset beyond ImageableArea so the top line is not clipped on the 550.
+  const pad = Math.max(RO_LABEL_SAFE_INSET_PT, Math.min(box.w, box.h) * 0.1);
   const x0 = box.x + pad;
   const y0 = box.y + pad;
   const innerW = Math.max(8, box.w - pad * 2);
@@ -228,7 +286,7 @@ export function planRoPrint(raw, mediaList = FALLBACK_MEDIA) {
     ok: true,
     dryRun,
     printed: false,
-    message: dryRun ? "Dry run only — no label was sent to the printer." : "Ready to print.",
+    message: dryRun ? "Dry run only \u2014 no label was sent to the printer." : "Ready to print.",
     fields,
     lines,
     doc,
@@ -237,7 +295,7 @@ export function planRoPrint(raw, mediaList = FALLBACK_MEDIA) {
 
 /**
  * Render a one-page 30252 PDF. Text is laid out in the turned editor view
- * (wide × short), then drawn onto the physical page with a 90° rotation so it
+ * (wide \u00d7 short), then drawn onto the physical page with a 90\u00b0 rotation so it
  * reads along the long edge inside the PPD ImageableArea.
  */
 export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
@@ -258,7 +316,14 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
   // Layout in turned view space (matches buildRoLabelDoc), then map each
   // baseline into page space. Editor CW: view(x,y) = (pageY, pageW - pageX).
   // Inverse: page(x,y) = (pageW - viewY, viewX).
-  const box = viewSafe.w > 8 && viewSafe.h > 6 ? viewSafe : { x: 0, y: 0, w: media.heightPt, h: media.widthPt };
+  const outer = viewSafe.w > 8 && viewSafe.h > 6 ? viewSafe : { x: 0, y: 0, w: media.heightPt, h: media.widthPt };
+  const pad = Math.max(RO_LABEL_SAFE_INSET_PT, Math.min(outer.w, outer.h) * 0.1);
+  const box = {
+    x: outer.x + pad,
+    y: outer.y + pad,
+    w: Math.max(8, outer.w - pad * 2),
+    h: Math.max(6, outer.h - pad * 2),
+  };
   const rowH = box.h / lines.length;
 
   for (let i = 0; i < lines.length; i += 1) {
@@ -279,7 +344,7 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
       const vyTop = row.y + layout.startY + lineIndex * layout.lineHeight;
       // Baseline in view coords (y grows downward in editor; PDF y grows up).
       // Convert editor-top-left view point to PDF page bottom-left via the
-      // same CW turn the Labels paint() uses, then rotate glyphs +90°.
+      // same CW turn the Labels paint() uses, then rotate glyphs +90\u00b0.
       const viewBaselineY = vyTop + layout.size * 0.8;
       const pageX = media.widthPt - viewBaselineY;
       const pageY = vx;
