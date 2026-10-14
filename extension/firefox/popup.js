@@ -46,11 +46,43 @@
     applyBtn.hidden = !show;
   }
 
+  function parseVersionParts(v) {
+    return String(v || "0")
+      .split(/[.+-]/)
+      .map((part) => Number.parseInt(part, 10) || 0);
+  }
+
+  function isNewerVersion(remote, local) {
+    const a = parseVersionParts(remote);
+    const b = parseVersionParts(local);
+    const n = Math.max(a.length, b.length);
+    for (let i = 0; i < n; i += 1) {
+      const x = a[i] || 0;
+      const y = b[i] || 0;
+      if (x > y) return true;
+      if (x < y) return false;
+    }
+    return false;
+  }
+
+  function installedVersion() {
+    try {
+      return String(runtime.runtime.getManifest()?.version || "0");
+    } catch {
+      return "0";
+    }
+  }
+
   function paintUpdateState({ available, appliedVersion } = {}) {
     const version = available?.version;
-    if (!version) {
+    const installed = installedVersion();
+    // Stale storage after Hub Install from File of the same feed version.
+    if (!version || !isNewerVersion(version, installed)) {
       showApply(false);
       setUpdate("Desk extension is up to date.", "ok");
+      if (version && !isNewerVersion(version, installed)) {
+        void runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+      }
       return;
     }
     if (appliedVersion && String(appliedVersion) === String(version)) {
@@ -119,16 +151,10 @@
         if (response.person) fillPersonSelect(response.person);
         const label =
           response.source === "tools-bridge" || type === "tools-session-import"
-            ? response.siteGate
-              ? "Shop website + lot names unlocked from Tools. Refresh the shop tab if it still shows lock."
-              : "Lot names unlocked from Black Forest Tools."
+            ? "Lot names unlocked from Black Forest Tools."
             : "Lot names unlocked from the shop site session.";
         setStatus(label, "ok");
         return true;
-      }
-      if (response?.locked) {
-        if (!quiet) setStatus(response.error || "Tools is locked — shop website cookie cleared.", "err");
-        return false;
       }
       if (!quiet) setStatus(humanizeUnlockError(response?.error), "err");
       return false;
@@ -274,7 +300,10 @@
       setUpdate("Updating…", "warn");
       try {
         const response = await runtime.runtime.sendMessage({ type: "apply-update" });
-        if (response?.ok && response?.applied !== false && response?.mode !== "hub_upload") {
+        if (response?.upToDate || response?.mode === "up_to_date") {
+          showApply(false);
+          setUpdate(response?.message || "Desk extension is up to date.", "ok");
+        } else if (response?.ok && response?.applied !== false && response?.mode !== "hub_upload") {
           const version = response.version || "";
           showApply(false);
           setUpdate(
@@ -282,6 +311,7 @@
             "ok",
           );
         } else if (response?.mode === "hub_upload" || response?.error === "hub_signed_kept") {
+          // Actionable Hub path — not a hard "failed" (unsigned cannot overwrite Hub-signed).
           setUpdate(response?.message || "Hub On your own → Install from File.", "warn");
           showApply(true);
         } else {
