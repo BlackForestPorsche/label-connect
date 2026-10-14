@@ -10,6 +10,12 @@ From **shop-desktop 1.5.11+**, Black Forest Tools **owns** the Labels HTTP serve
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
+**0.1.25** - Instant `:8788` lock/unlock + fun on/off (~400ms bridge poll). Locked `/unlock` refresh: Tools→site clear first; **skip** `site-session-import` / from-gate publish (locked-refresh-remint). Fold with Update-apply into one Hub ship.
+
+**0.1.24** - Sticky lock: refresh on `/unlock` must not auto-login Tools; fun mode **on and off** sync Tools↔website via `:8788` (2s poll + push on change). Keeps 0.1.23 gateToken/jar-gate.
+
+**0.1.23** - Tools→website unlock: use site **beta 0.1.36** `gateToken` on exchange; if `:8788` Bearer empty but Tools Electron still has `bf_shop_gate`, copy jar gate (mismatch fix) and push Tools `funMode`/person settings into Firefox shop tabs. Builds on 0.1.22 quiet/Sync Tools exchange.
+
 **0.1.22** - Unlock sync: popup Sync Tools→website force-exchanges; site-lock quiet clears when Tools unlocks (no re-DELETE); website unlock→Tools POST reliability.
 
 **0.1.21** - AMO Hub sign bump of #57 bidirectional lock (Create RO 0.1.20 already signed).
