@@ -1,5 +1,5 @@
 {
-  "version": "0.1.12",
-  "message": "Create RO label: LastName - Model + Out Mileage blank. Fixes LWhatcott/VIN. Print every Create. Includes 0.1.11 auto unlock.",
+  "version": "0.1.14",
+  "message": "One-click Update in the Desk popup — Labels applies the sideload on this machine. No shell commands. Restart Firefox when prompted.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
