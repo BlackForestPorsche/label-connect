@@ -38,7 +38,8 @@
     if (/unlockShop|widgetToken|widgetExpiresAt/i.test(hay)) return false;
     if (/widget\/logout/i.test(hay)) return true;
     if (/\/api\/widget\/session/i.test(hay)) return false;
-    return /lockShop|clearGateSession/i.test(hay);
+    // TanStack server fn id / path / serialized createServerFn payload.
+    return /lockShop|clearGateSession|gate\.ts.*lockShop|\/lockShop\b/i.test(hay);
   }
 
   function requestUrl(input) {
@@ -57,7 +58,36 @@
     if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
       return body.toString();
     }
-    return "";
+    if (typeof FormData !== "undefined" && body instanceof FormData) {
+      try {
+        const parts = [];
+        body.forEach((value, key) => {
+          parts.push(`${key}=${typeof value === "string" ? value : ""}`);
+        });
+        return parts.join("&");
+      } catch {
+        return "FormData";
+      }
+    }
+    if (typeof Blob !== "undefined" && body instanceof Blob) {
+      return "";
+    }
+    try {
+      return String(body);
+    } catch {
+      return "";
+    }
+  }
+
+  /** lockShop often returns bare {ok:true} with empty body on the request. */
+  function looksLikeLockResponse(url, method, text) {
+    if (String(method || "GET").toUpperCase() !== "POST") return false;
+    if (looksLikeLock(url, method, "")) return true;
+    const bareOk =
+      typeof text === "string" &&
+      (/^\s*\{\s*"ok"\s*:\s*true\s*\}\s*$/.test(text) ||
+        /^\s*\{\s*"ok"\s*:\s*true\s*,\s*"result"\s*:\s*\{\s*"ok"\s*:\s*true\s*\}\s*\}\s*$/.test(text));
+    return Boolean(bareOk && /lockShop|clearGateSession/i.test(String(url || "")));
   }
 
   function publish(session) {
@@ -80,12 +110,18 @@
 
   function onShopLoadSync() {
     if (!runtime?.runtime?.sendMessage) return;
+    const onUnlock = /\/unlock\b/i.test(location.pathname || "");
     try {
-      // Tools unlock → Firefox jar (exchange). Force when already on /unlock so a
-      // stale gate / post-lock quiet cannot leave the SPA stuck.
-      const onUnlock = /\/unlock\b/i.test(location.pathname || "");
+      // Sequence: Tools→site first (clears Firefox gate when Tools locked).
+      // NEVER parallel site-session-import on /unlock — leftover bf_shop_gate
+      // → from-gate → POST :8788 remints Tools (locked-refresh-remint.md).
       runtime.runtime
-        .sendMessage({ type: "tools-to-site-unlock", forceExchange: onUnlock })
+        .sendMessage({
+          type: "tools-to-site-unlock",
+          // On /unlock only force-exchange when Tools is unlocked (handler decides).
+          forceExchange: false,
+          skipSitePublish: onUnlock,
+        })
         .then((response) => {
           if (!response) return;
           if (response.ok && response.shouldReload && onUnlock) {
@@ -94,14 +130,15 @@
           }
           if (response.locked && response.shouldReload && !onUnlock) {
             location.reload();
+            return;
+          }
+          // Website already unlocked pages may import site→Desk/Tools.
+          // Locked /unlock refresh must NOT publish to Tools.
+          if (!onUnlock && !response.locked) {
+            runtime.runtime.sendMessage({ type: "site-session-import" }).catch(() => {});
           }
         })
         .catch(() => {});
-    } catch {
-      // ignore
-    }
-    try {
-      runtime.runtime.sendMessage({ type: "site-session-import" });
     } catch {
       // ignore
     }
@@ -114,6 +151,7 @@
     const url = requestUrl(input);
     const method = init.method || (input && input.method) || "GET";
     try {
+      // Fire site-lock BEFORE await — /unlock navigation must not beat Tools DELETE.
       if (looksLikeLock(url, method, bodyText(init.body))) {
         reportSiteLock();
       }
@@ -128,6 +166,11 @@
         clone
           .text()
           .then((text) => {
+            try {
+              if (looksLikeLockResponse(url, method, text)) reportSiteLock();
+            } catch {
+              // ignore
+            }
             const session = extractUnlock(text);
             if (session) publish(session);
           })
@@ -156,6 +199,9 @@
     }
     this.addEventListener("load", function onLoad() {
       try {
+        if (looksLikeLockResponse(this.__bfUrl, this.__bfMethod, this.responseText)) {
+          reportSiteLock();
+        }
         const session = extractUnlock(this.responseText);
         if (session) publish(session);
       } catch {
@@ -164,6 +210,134 @@
     });
     return xhrSend.apply(this, args);
   };
+
+  // Do NOT reportSiteLock on bare /unlock navigation — that fires during unlock
+  // bounce and intentional Tools→site heal, and wrongly locks Tools (~30s later).
+
+  const FUN_MODES = [
+    "pirate",
+    "west",
+    "alien",
+    "medieval",
+    "odyssey",
+    "tron",
+    "casino",
+    "arcade",
+    "dota",
+    "race",
+    "surfer",
+    "seasonal",
+  ];
+
+  function applyToolsPersonSettings(message) {
+    const person = message && message.person ? String(message.person) : "";
+    const settings = message && message.settings && typeof message.settings === "object" ? message.settings : null;
+    if (!person || !settings) return { ok: false };
+    try {
+      const key = "bf-person-settings";
+      let all = {};
+      try {
+        all = JSON.parse(localStorage.getItem(key) || "{}") || {};
+      } catch {
+        all = {};
+      }
+      if (!all || typeof all !== "object") all = {};
+      const prev = all[person] && typeof all[person] === "object" ? all[person] : {};
+      all[person] = { ...prev, ...settings };
+      localStorage.setItem(key, JSON.stringify(all));
+      localStorage.setItem("bf-last-person", person);
+      const mode = settings.funMode || "off";
+      for (const name of FUN_MODES) {
+        document.documentElement.classList.toggle(name, name === mode);
+      }
+      if (mode === "off") {
+        for (const name of FUN_MODES) document.documentElement.classList.remove(name);
+      }
+      // Hold Tools prefs against the site's 4s poll + keep-local-fun-on bias for a short window.
+      const until = Date.now() + 20_000;
+      const stamp = Number(message.updatedAt) || Date.now();
+      localStorage.setItem("bf-tools-prefs-at", String(stamp));
+      const hold = window.setInterval(() => {
+        if (Date.now() > until) {
+          window.clearInterval(hold);
+          return;
+        }
+        try {
+          const again = JSON.parse(localStorage.getItem(key) || "{}") || {};
+          const cur = again[person] && typeof again[person] === "object" ? again[person] : {};
+          if (cur.funMode !== mode) {
+            again[person] = { ...cur, ...settings, funMode: mode };
+            localStorage.setItem(key, JSON.stringify(again));
+            for (const name of FUN_MODES) {
+              document.documentElement.classList.toggle(name, name === mode);
+            }
+            if (mode === "off") {
+              for (const name of FUN_MODES) document.documentElement.classList.remove(name);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }, 500);
+      return { ok: true, funMode: mode };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  if (runtime?.runtime?.onMessage?.addListener) {
+    try {
+      runtime.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+        if (!message || message.type !== "apply-tools-person-settings") return false;
+        sendResponse(applyToolsPersonSettings(message));
+        return false;
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  // Immediate website → Tools fun on/off (last user action), not only the 4s site poll.
+  let prefsPushTimer = 0;
+  function pushLocalPrefsToTools() {
+    try {
+      const person = localStorage.getItem("bf-last-person") || "";
+      const all = JSON.parse(localStorage.getItem("bf-person-settings") || "{}") || {};
+      const settings = person && all[person] && typeof all[person] === "object" ? all[person] : null;
+      if (!person || !settings || !runtime?.runtime?.sendMessage) return;
+      // Skip echo of a Tools→site apply we just wrote (short; :8788 should feel instant).
+      const toolsAt = Number(localStorage.getItem("bf-tools-prefs-at") || 0);
+      if (toolsAt && Date.now() - toolsAt < 600) return;
+      runtime.runtime
+        .sendMessage({
+          type: "site-person-settings",
+          person,
+          settings,
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+  }
+  window.addEventListener("storage", (event) => {
+    if (event.key !== "bf-person-settings" && event.key !== "bf-last-person") return;
+    window.clearTimeout(prefsPushTimer);
+    prefsPushTimer = window.setTimeout(pushLocalPrefsToTools, 50);
+  });
+  // Same-tab toggles do not fire `storage` — sub-second poll for instant Tools push.
+  let lastLocalPrefsFp = "";
+  window.setInterval(() => {
+    try {
+      const person = localStorage.getItem("bf-last-person") || "";
+      const raw = localStorage.getItem("bf-person-settings") || "";
+      const fp = `${person}|${raw}`;
+      if (fp === lastLocalPrefsFp) return;
+      lastLocalPrefsFp = fp;
+      pushLocalPrefsToTools();
+    } catch {
+      // ignore
+    }
+  }, 350);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", onShopLoadSync, { once: true });
