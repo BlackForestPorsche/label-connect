@@ -1,5 +1,5 @@
 {
-  "version": "0.1.14",
-  "message": "One-click Update in the Desk popup \u2014 Labels applies the sideload on this machine. No shell commands. Restart Firefox when prompted.",
+  "version": "0.1.15",
+  "message": "Desk 0.1.15: Create R/O confirm is more reliable (armed Create button + shadow DOM + success banner). Keeps 0.1.14 one-click Update in the Desk popup. Label layout unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }

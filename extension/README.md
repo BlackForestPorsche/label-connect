@@ -104,7 +104,7 @@ If the toolbar popup shows `File not found` / `moz-extension://…/popup.html`, 
 ## AllData — what gets scraped
 
 | Field | Source |
-| --- | --- |
+| --- | --- | --- |
 | Last name | “Last Name” / “Customer” field; last name only (strips `J.` / `LAST, F` / glued `LWhatcott` → `Whatcott` — never first initial on the label). Never VIN. |
 | Model | “Model” field; else Year/Make/Model line; else known Porsche model token on screen. Never VIN / `VIN:`. |
 | RO number | Optional; AllData repair-order id for server idempotency only — **not printed** on the label |
@@ -118,7 +118,7 @@ Out Mileage _____________
 
 Line 2 is a handwriting blank (not mileage from AllData). Every **Create R/O** success prints, even when that customer already has an open RO or you Create again for the same tester person. Dedupe is per Create click / new RO id — never by customer. Pre-existing Update / old RO# is not treated as success and is not sent to Labels (that was causing “already printed this RO”). Update / Schedule New / Assign never print.
 
-If last name or model cannot be read after Create succeeds, the extension toasts **Label skipped** and does not print.
+If last name or model cannot be read after Create succeeds, the extension toasts **Label skipped — could not read last name or model** and does not print. If Create was clicked but AllData never shows a success signal within ~18s, it toasts **Create R/O success not confirmed** (fail closed — Update / Schedule / Assign never arm).
 
 ## SSF — On the Lot dropdown
 
