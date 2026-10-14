@@ -2,6 +2,8 @@
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
+**0.1.11** - Black Forest Desk: **background auto unlock** from shop `from-gate` (startup, alarm, idle→active, shop tab complete) with Tools `:8788` fallback. No need to open the popup and press Sync for the happy path; Sync buttons + Person/PIN remain.
+
 **0.1.10** - Create RO labels: **last name only** + model; print on **every** Create (same customer / open RO OK). Dedupe per Create click or new RO id — not person. Open/baseline RO# is not sent to Labels (fixes “already printed this RO” on a new Create).
 
 **0.1.6** - Black Forest Desk: map shop `unauthorized` to clear **desk PIN** unlock copy; lowercase person like the Plasma widget; host permissions include `127.0.0.1:8080`; SSF empty state points at the popup PIN. Keeps Firefox `strict_min_version` **140.0** + `data_collection_permissions` from 0.1.5.
