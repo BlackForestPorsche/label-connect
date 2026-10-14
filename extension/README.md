@@ -40,7 +40,7 @@ Details / secrets: [docs/desk-extension-signing.md](../docs/desk-extension-signi
 
 **Chrome / Edge:** unzip → Load unpacked (or keep Load unpacked on `extension/chromium/` after git pull / Reload).
 
-In-extension checker (badge `↑` + popup “Check for extension update”) still fetches `extension/version.json` from GitHub `main` as a nudge — it does not replace A or B.
+In-extension checker (badge `↑` + popup **Check for extension update** / **Update**) fetches `extension/version.json` from GitHub `main`. **Update** calls local Labels `POST /api/update-desk-extension` (localhost-only), which pulls + sideloads — never tell the desk user to run bash. Restart Firefox when prompted. This is still path C (local sideload), not a substitute for A or B.
 
 ## Requirements
 
@@ -70,13 +70,7 @@ bash scripts/install-desk-extension-firefox.sh
 # restart Firefox once so the profile picks up the XPI
 ```
 
-Later local refreshes (still not AMO/GitHub auto-update):
-
-```bash
-bash scripts/update-labels.sh
-# or:
-bash scripts/update-desk-extension.sh
-```
+Later local refreshes (still not AMO/GitHub auto-update): use the Desk popup **Update** button (Labels must be running). Agents / installers may still call `scripts/apply-desk-extension-update.sh` or `update-desk-extension.sh` — never surface those commands in the UI.
 
 **Note:** Release Firefox may ignore unsigned sideloads. Prefer Hub **On this site** (amo-hosted pack) or a Mozilla-signed self-dist XPI.
 
@@ -86,7 +80,7 @@ Package folder: `extension/chromium/` (same sibling layout as Firefox: `manifest
 
 1. `npm run sync-extension`
 2. `chrome://extensions` / `edge://extensions` → Developer mode → **Load unpacked** → `label-connect/extension/chromium` (the folder that contains `manifest.json` and `popup.html`)
-3. Leave that path forever; after `git pull` / `update-desk-extension.sh`, click **Reload** on the card when the version badge shows `↑`
+3. Leave that path forever; after Desk **Update** (or a git pull), click **Reload** on the card when the version badge shows `↑`
 
 ## Install — Firefox temporary (desk day-to-day)
 
