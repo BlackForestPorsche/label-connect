@@ -1,7 +1,4 @@
 Release remote: https://github.com/BlackForestPorsche/label-connect
-Upstream mirror: https://github.com/BlackForestPorsche/blackforest-tools
-Branch: cursor/labelwriter-550-6410
-PR: https://github.com/BlackForestPorsche/blackforest-tools/pull/3
-Version: 0.1.1 — CUPS ImageableArea safe print margins (viewSafeRect / pageSafeRect), editor safe-zone guide, block clamp.
-Installed as a dedicated Labels app checkout (not shop-desktop).
-Update on this PC: bash ~/label-connect/scripts/update-labels.sh
+Runtime ownership: Black Forest Tools (shop-desktop 1.5.8+) vendors server.mjs + shared/ + public/
+under labels/ and starts/adopts :8080. Standalone labels.service is transitional.
+Update: git pull here, then on Tools: npm run sync-labels -- ~/label-connect
