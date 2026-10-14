@@ -18,6 +18,8 @@
   let armedFields = { lastName: "", model: "", roNumber: "" };
   let createArmId = "";
   let pendingTimer = null;
+  /** UI success seen but scrape still empty — keep polling; timeout uses scrape toast. */
+  let sawUiConfirm = false;
   /** createArmId values that already got a print attempt — never key on customer/person. */
   const printedArms = new Set();
 
@@ -37,6 +39,7 @@
     armedHadCreate = false;
     armedCreateEl = null;
     armedFields = { lastName: "", model: "", roNumber: "" };
+    sawUiConfirm = false;
     // keep createArmId until print finishes so requestPrint can mark it
     if (pendingTimer) {
       clearTimeout(pendingTimer);
@@ -65,11 +68,18 @@
     createArmId = newCreateArmId();
     armed = true;
     armedAt = Date.now();
+    sawUiConfirm = false;
     if (pendingTimer) clearTimeout(pendingTimer);
     pendingTimer = setTimeout(() => {
       if (armed) {
+        const scrapeMiss = sawUiConfirm;
         disarm();
-        toast("Label skipped — Create R/O success not confirmed.", "skip");
+        toast(
+          scrapeMiss
+            ? "Label skipped — could not read last name or model."
+            : "Label skipped — Create R/O success not confirmed.",
+          "skip",
+        );
       }
     }, SUCCESS_WAIT_MS);
     scheduleSuccessChecks();
@@ -207,9 +217,10 @@
 
     if (!result.confirmed) return;
 
+    // UI confirmed but scrape empty — do NOT disarm yet. Dom/fields often settle
+    // a beat after Create disappears; early "could not read" was aborting polls.
     if (!scraped.lastName || !scraped.model) {
-      disarm();
-      toast("Label skipped — could not read last name or model.", "skip");
+      sawUiConfirm = true;
       return;
     }
     const armId = createArmId;
