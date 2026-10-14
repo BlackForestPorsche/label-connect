@@ -1,5 +1,5 @@
 {
   "version": "0.1.19",
-  "message": "Update says up to date when feed matches installed (no false Desk update failed). Hub On your own \u2192 Upload New Version, then about:addons \u2192 Install Add-on From File when a newer Hub build is needed.",
+  "message": "Already-current Update says up to date (no false failed). Newer builds stage CI AMO-signed XPI from updates.json \u2014 about:addons Install from File / auto-update.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
