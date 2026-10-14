@@ -1,0 +1,48 @@
+name: apply-desk-017
+on:
+  push:
+    branches: [cursor/tools-to-website-unlock-3d81]
+    paths:
+      - "payloads/desk-017-*"
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble and apply desk-017 payloads
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import gzip, base64, json, hashlib, pathlib, glob, subprocess
+          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+          for meta_fp in sorted(glob.glob("payloads/desk-017-*.meta.json")):
+              meta = json.loads(pathlib.Path(meta_fp).read_text())
+              parts = [pathlib.Path(f"{meta['prefix']}{i}").read_text().strip() for i in range(meta["parts"])]
+              b64 = "".join(parts)
+              assert hashlib.md5(b64.encode()).hexdigest() == meta["md5"], meta_fp
+              raw = gzip.decompress(base64.b64decode(b64))
+              assert hashlib.md5(raw).hexdigest() == meta["item_md5"], meta_fp
+              changed = []
+              for path in meta["paths"]:
+                  p = pathlib.Path(path)
+                  p.parent.mkdir(parents=True, exist_ok=True)
+                  if p.exists() and p.read_bytes() == raw:
+                      print("unchanged", path)
+                      continue
+                  p.write_bytes(raw)
+                  changed.append(path)
+                  print("wrote", path, len(raw))
+              if not changed:
+                  continue
+              subprocess.check_call(["git", "add", "--"] + changed)
+              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
+                  continue
+              subprocess.check_call(["git", "commit", "-m", meta.get("message") or f"Apply {meta_fp}"])
+          r = subprocess.run(["git", "status", "-sb"], capture_output=True, text=True)
+          print(r.stdout)
+          subprocess.check_call(["git", "push"])
+          PY
