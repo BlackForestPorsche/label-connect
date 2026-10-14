@@ -1,0 +1,17 @@
+{
+  "sed": [
+    {
+      "path": "payloads/desk-021-lock.json",
+      "old": "ecAtY8t",
+      "new": "ecMpY8t",
+      "count": 1
+    },
+    {
+      "path": "payloads/desk-021-readme.json",
+      "old": "64Zyo2A7nDcSxDo",
+      "new": "CCZyo2A7nDcSxDo",
+      "count": 1
+    }
+  ],
+  "message": "fix: repair desk-021 payload base64 typos"
+}
