@@ -17,11 +17,18 @@
     } catch {
       return null;
     }
-    const candidates = [data, data && data.data, data && data.payload, data && data.result].filter(
-      Boolean,
-    );
+    // TanStack server-fn wraps: result / data / payload / nested ok envelopes.
+    const candidates = [
+      data,
+      data && data.data,
+      data && data.payload,
+      data && data.result,
+      data && data.result && data.result.data,
+      data && data.result && data.result.result,
+    ].filter(Boolean);
     for (const obj of candidates) {
-      if (!obj || !obj.widgetToken || !obj.widgetExpiresAt) continue;
+      if (!obj || typeof obj !== "object") continue;
+      if (!obj.widgetToken || !obj.widgetExpiresAt) continue;
       return {
         token: String(obj.widgetToken),
         expiresAt: String(obj.widgetExpiresAt),
@@ -92,11 +99,20 @@
 
   function publish(session) {
     if (!session || !runtime?.runtime?.sendMessage) return;
-    try {
-      runtime.runtime.sendMessage({ type: "shop-site-session", payload: session });
-    } catch {
-      // ignore
-    }
+    const send = () => {
+      try {
+        return runtime.runtime.sendMessage({ type: "shop-site-session", payload: session });
+      } catch {
+        return Promise.resolve(null);
+      }
+    };
+    // One retry — unlock JSON can race Tools localLock clear.
+    send()
+      .then((res) => {
+        if (res && res.ok === false && res.toolsPublished === false) return send();
+        return res;
+      })
+      .catch(() => send().catch(() => {}));
   }
 
   function reportSiteLock() {
@@ -112,31 +128,34 @@
     if (!runtime?.runtime?.sendMessage) return;
     const onUnlock = /\/unlock\b/i.test(location.pathname || "");
     try {
-      // Sequence: Tools→site first (clears Firefox gate when Tools locked).
-      // NEVER parallel site-session-import on /unlock — leftover bf_shop_gate
-      // → from-gate → POST :8788 remints Tools (locked-refresh-remint.md).
+      // /unlock: Tools→site only (remint guard). Unlocked pages: site→Tools
+      // publish FIRST, then Tools→site — otherwise a brief hasSession:false
+      // clears bf_shop_gate (unlock flash / website→Tools miss).
+      if (onUnlock) {
+        runtime.runtime
+          .sendMessage({
+            type: "tools-to-site-unlock",
+            forceExchange: false,
+            skipSitePublish: true,
+          })
+          .then((response) => {
+            if (response?.ok && response.shouldReload) location.reload();
+          })
+          .catch(() => {});
+        return;
+      }
       runtime.runtime
-        .sendMessage({
-          type: "tools-to-site-unlock",
-          // On /unlock only force-exchange when Tools is unlocked (handler decides).
-          forceExchange: false,
-          skipSitePublish: onUnlock,
-        })
+        .sendMessage({ type: "site-session-import" })
+        .catch(() => {})
+        .then(() =>
+          runtime.runtime.sendMessage({
+            type: "tools-to-site-unlock",
+            forceExchange: false,
+          }),
+        )
         .then((response) => {
           if (!response) return;
-          if (response.ok && response.shouldReload && onUnlock) {
-            location.reload();
-            return;
-          }
-          if (response.locked && response.shouldReload && !onUnlock) {
-            location.reload();
-            return;
-          }
-          // Website already unlocked pages may import site→Desk/Tools.
-          // Locked /unlock refresh must NOT publish to Tools.
-          if (!onUnlock && !response.locked) {
-            runtime.runtime.sendMessage({ type: "site-session-import" }).catch(() => {});
-          }
+          if (response.locked && response.shouldReload) location.reload();
         })
         .catch(() => {});
     } catch {
