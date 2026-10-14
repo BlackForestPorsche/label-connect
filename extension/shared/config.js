@@ -9,5 +9,5 @@
   cfg.UPDATE_LABEL_RE = /^\s*update\s*r\s*\/?\s*o\s*$/i;
   cfg.ASSIGN_LABEL_RE = /^\s*assign\s*r\s*\/?\s*o\s*$/i;
   cfg.SCHEDULE_NEW_RE = /^\s*(new\s*r\s*\/?\s*o|schedule\s*new)\s*$/i;
-  cfg.SUCCESS_WAIT_MS = 12000;
+  cfg.SUCCESS_WAIT_MS = 18000;
 })(globalThis);
