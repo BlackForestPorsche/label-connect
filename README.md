@@ -10,6 +10,10 @@ From **shop-desktop 1.5.11+**, Black Forest Tools **owns** the Labels HTTP serve
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
+**0.1.22** - Unlock sync: popup Sync Tools→website force-exchanges; site-lock quiet clears when Tools unlocks (no re-DELETE); website unlock→Tools POST reliability.
+
+**0.1.21** - AMO Hub sign bump of #57 bidirectional lock (Create RO 0.1.20 already signed).
+
 **0.1.20** - Bidirectional website↔Tools lock/unlock (site lock clears Tools jar via `:8788` DELETE; unlock publishes Bearer; `tools-to-site-unlock` / `syncSiteLockToTools`) + Create RO label restore: reject plate/account; `{LastName} - {Model}` + Out Mileage blank; safe top inset.
 
 **0.1.19** - Create RO label restore: reject **license plate** / **account #** (and VIN) in Desk scrape + Labels normalize; print only `{LastName} - {Model}` then `Out Mileage _____________`; extra top safe inset so the LabelWriter 550 does not clip line 1.
