@@ -1,0 +1,13 @@
+{
+  "prefix": "payloads/desk-017-01.",
+  "parts": 3,
+  "md5": "ba386e31ff1f8c9a913ef82473048cbc",
+  "out": "payloads/desk-017-01.assembled.b64",
+  "item_md5": "adaa121d2c41a0d8a4e9f3e0d1793e20",
+  "paths": [
+    "extension/shared/lot-names.js",
+    "extension/firefox/lot-names.js",
+    "extension/chromium/lot-names.js"
+  ],
+  "message": "Desk 0.1.17 apply lot-names: extension/shared/lot-names.js, extension/firefox/lot-names.js, extension/chromium/lot-names.js"
+}

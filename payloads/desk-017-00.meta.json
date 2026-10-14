@@ -1,0 +1,12 @@
+{
+  "prefix": "payloads/desk-017-00.",
+  "parts": 2,
+  "md5": "f053f9ab70e57307d8c16a42f705e914",
+  "out": "payloads/desk-017-00.assembled.b64",
+  "item_md5": "bd6559b8e976967d77bc13f658349f67",
+  "paths": [
+    "extension/firefox/background.js",
+    "extension/chromium/background.js"
+  ],
+  "message": "Desk 0.1.17 apply background: extension/firefox/background.js, extension/chromium/background.js"
+}

@@ -1,0 +1,11 @@
+{
+  "prefix": "payloads/desk-017-02.",
+  "parts": 2,
+  "md5": "f055ab216c229e9befe9cbd28cdad101",
+  "out": "payloads/desk-017-02.assembled.b64",
+  "item_md5": "4ac0e7ec45d17fffb63f19a275ca5cf8",
+  "paths": [
+    "package-lock.json"
+  ],
+  "message": "Desk 0.1.17 apply package-lock: package-lock.json"
+}
