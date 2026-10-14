@@ -1,0 +1,11 @@
+{
+  "kind": "hex",
+  "prefix": "payloads/ro019r-extreadme.hex.",
+  "parts": 5,
+  "md5": "89788b58e30f2c42c4df06a0834ef427",
+  "item_md5": "dba5516ad0297621044114913335e32f",
+  "paths": [
+    "extension/README.md"
+  ],
+  "message": "Desk + Labels 0.1.19: exact UTF-8 extension/README.md"
+}
