@@ -109,12 +109,33 @@
         if (stored.deskUpdateAvailable?.version) {
           await runtime.action.setBadgeText({ text: "↑" });
           await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+          await runtime.action.setTitle?.({
+            title: `Black Forest Desk — update ${stored.deskUpdateAvailable.version} ready`,
+          });
         } else {
+          // Unlocked: empty badge (no PIN). Title signals session is live.
           await runtime.action.setBadgeText({ text: "" });
-          await runtime.action.setTitle?.({ title: "Black Forest Desk" });
+          await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+          await runtime.action.setTitle?.({
+            title: "Black Forest Desk — lot names unlocked",
+          });
         }
       }
     } catch {}
+  }
+
+  async function hasFreshWidgetToken(minTtlMs = 60_000) {
+    const stored = await storageGet(["shopWidgetToken", "shopWidgetTokenExpiresAt"]);
+    const token = stored.shopWidgetToken;
+    const expiresAt = Number(stored.shopWidgetTokenExpiresAt || 0);
+    return Boolean(token && expiresAt > Date.now() + minTtlMs);
+  }
+
+  /** Refresh toolbar badge from stored token (does not hit the network). */
+  async function refreshUnlockBadge() {
+    const fresh = await hasFreshWidgetToken(0);
+    await setPinBadge(!fresh);
+    return { unlocked: fresh };
   }
 
   async function shopBaseUrl() {
@@ -345,6 +366,50 @@
     return { needsAuth: true };
   }
 
+  /**
+   * Background happy path: from-gate (shop cookie) then Tools :8788.
+   * Throttled so alarms / tab loads / idle do not spam the shop (~20/min cap).
+   * Does not open the popup; Sync / PIN remain as manual fallbacks.
+   */
+  let autoUnlockInFlight = null;
+  async function tryAutoUnlock({ force = false, reason = "" } = {}) {
+    if (autoUnlockInFlight) return autoUnlockInFlight;
+    autoUnlockInFlight = (async () => {
+      try {
+        const stored = await storageGet(["deskAutoUnlockAt"]);
+        const lastAt = Number(stored.deskAutoUnlockAt || 0);
+        const minGapMs = force ? 5_000 : 30_000;
+        if (lastAt && Date.now() - lastAt < minGapMs) {
+          const fresh = await hasFreshWidgetToken();
+          if (fresh) {
+            await setPinBadge(false);
+            return { ok: true, skipped: "throttle_fresh", reason };
+          }
+          if (!force) return { ok: false, skipped: "throttle", reason };
+        }
+
+        if (!force && (await hasFreshWidgetToken())) {
+          await setPinBadge(false);
+          return { ok: true, skipped: "already_fresh", reason };
+        }
+
+        await storageSet({ deskAutoUnlockAt: Date.now() });
+        const auth = await ensureWidgetToken({ trySite: true, tryTools: true });
+        if (auth.needsAuth) {
+          await setPinBadge(true);
+          return { ok: false, needsAuth: true, reason };
+        }
+        await setPinBadge(false);
+        return { ok: true, source: auth.source || "stored", reason };
+      } catch {
+        return { ok: false, error: "auto_unlock_failed", reason };
+      } finally {
+        autoUnlockInFlight = null;
+      }
+    })();
+    return autoUnlockInFlight;
+  }
+
   async function resolveLotLastNames() {
     const cached = await storageGet(["lotLastNames", "lotLastNamesAt"]);
     const cachedNames = Array.isArray(cached.lotLastNames) ? cached.lotLastNames : [];
@@ -445,6 +510,9 @@
   api.storeWidgetToken = storeWidgetToken;
   api.readShopGateCookie = readShopGateCookie;
   api.ensureWidgetToken = ensureWidgetToken;
+  api.tryAutoUnlock = tryAutoUnlock;
+  api.hasFreshWidgetToken = hasFreshWidgetToken;
+  api.refreshUnlockBadge = refreshUnlockBadge;
   api.resolveLotLastNames = resolveLotLastNames;
   api.loadLotLastNames = loadLotLastNames;
 })(globalThis);

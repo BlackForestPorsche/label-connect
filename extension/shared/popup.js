@@ -45,16 +45,16 @@
   }
 
   function humanizeUnlockError(raw) {
-    if (!raw) return "Unlock failed. Use shop session, Tools, or desk PIN.";
+    if (!raw) return "Unlock failed. Sync shop session, Sync Tools, or desk PIN.";
     const text = String(raw).trim();
     const lower = text.toLowerCase();
     if (lower === "unauthorized" || lower === "unauthorised") {
-      return "Desk PIN rejected (or person not found). Or unlock the shop site and click Use shop session.";
+      return "Desk PIN rejected (or person not found). Or unlock the shop site and Sync shop session.";
     }
     if (looksLikeApiCode(text)) {
       const map = {
         unauthorized:
-          "Desk PIN rejected (or person not found). Or unlock the shop site and click Use shop session.",
+          "Desk PIN rejected (or person not found). Or unlock the shop site and Sync shop session.",
         locked: "Too many PIN tries — wait, then unlock again.",
         pin_change_required: "Set a PIN on the shop site first, then unlock here.",
         bad_request: "Pick a shop person from the list and enter a 4–12 digit desk PIN.",
@@ -132,7 +132,7 @@
         if (!fromSite) {
           const fromTools = await tryImport("tools-session-import", { quiet: true });
           if (!fromTools) {
-            setStatus("Select person + PIN, or unlock the shop site / Tools first.");
+            setStatus("Waiting for background unlock — or Sync shop / Tools, or person + PIN.");
           }
         }
       }
@@ -152,7 +152,7 @@
     const pin = pinEl.value;
     if (person && personEl.value !== person) personEl.value = person;
     if (!person || !pin) {
-      setStatus("Select a person and enter your desk PIN (or Use shop session).", "err");
+      setStatus("Select a person and enter your desk PIN (or Sync shop session).", "err");
       return;
     }
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(person)) {

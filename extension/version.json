@@ -1,5 +1,5 @@
 {
-  "version": "0.1.10",
-  "message": "Create RO labels: last name only + model; print every Create (dedupe by Create click / new RO id, not customer). Fixes already-printed skip on new Create for same person.",
+  "version": "0.1.11",
+  "message": "Background auto unlock: shop from-gate on startup / alarm / idle / shop tab load, Tools :8788 fallback. Sync buttons kept as manual fallback; Person + PIN unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
