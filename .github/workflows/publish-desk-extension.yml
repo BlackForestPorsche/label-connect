@@ -2,6 +2,8 @@ name: publish-desk-extension
 # Publishes stable GitHub Release tag `desk-extension` (XPI + updates.json + chromium zip).
 # Main-only (+ workflow_dispatch): feature-branch pushes must not publish (PR #11).
 # Unsigned pack/publish stays green when AMO secrets are absent; signing is optional.
+# AMO "Version X already exists" is expected when main lands fixes without a bump —
+# sign-desk-extension.sh reuses the release XPI and stays green (no failure email).
 # Secrets (repo Actions — never paste into chat):
 #   WEB_EXT_API_KEY + WEB_EXT_API_SECRET
 #   or AMO_JWT_ISSUER + AMO_JWT_SECRET
