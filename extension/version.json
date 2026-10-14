@@ -1,5 +1,5 @@
 {
-  "version": "0.1.21",
-  "message": "Bidirectional website\u2194Tools lock/unlock + Create RO label. AMO Hub sign (0.1.20 Create RO signed before lock merge). Hub On your own \u2192 Install from File.",
+  "version": "0.1.22",
+  "message": "Update applies signed feed via Firefox when possible; else Install from File the Desktop XPI (staging \u2260 installed).",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
