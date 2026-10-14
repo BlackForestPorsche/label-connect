@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PDFDocument } from "pdf-lib";
 import {
+  OUT_MILEAGE_LINE,
   buildRoLabelDoc,
+  cleanModel,
   extractLastName,
+  isVinNoise,
   normalizeRoPayload,
   planRoPrint,
   renderRoLabelPdf,
@@ -26,6 +29,19 @@ test("extractLastName strips first initial forms", () => {
   assert.equal(extractLastName("Abernathy"), "Abernathy");
 });
 
+test("extractLastName strips glued shop code LWhatcott", () => {
+  assert.equal(extractLastName("LWhatcott"), "Whatcott");
+  assert.equal(extractLastName("JSmith"), "Smith");
+  // McDonald: second char is lowercase — keep intact
+  assert.equal(extractLastName("McDonald"), "McDonald");
+});
+
+test("extractLastName rejects VIN noise", () => {
+  assert.equal(extractLastName("VIN:"), "");
+  assert.equal(extractLastName("VIN"), "");
+  assert.equal(extractLastName("WP0AB2A99KS123456"), "");
+});
+
 test("normalize strips first initial from lastName field", () => {
   const result = normalizeRoPayload({
     lastName: "J. Owner",
@@ -36,10 +52,37 @@ test("normalize strips first initial from lastName field", () => {
   assert.equal(result.fields.lastName, "Owner");
 });
 
-test("ro label lines never include roNumber", () => {
+test("normalize strips LWhatcott glued initial", () => {
+  const result = normalizeRoPayload({
+    lastName: "LWhatcott",
+    model: "Boxster",
+    event: "create-ro",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.fields.lastName, "Whatcott");
+  assert.equal(result.fields.model, "Boxster");
+});
+
+test("normalize rejects VIN as lastName or model", () => {
+  assert.equal(normalizeRoPayload({ lastName: "VIN:", model: "Boxster", event: "create-ro" }).ok, false);
+  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "VIN:", event: "create-ro" }).ok, false);
+  assert.equal(
+    normalizeRoPayload({ lastName: "Whatcott", model: "WP0AB2A99KS123456", event: "create-ro" }).ok,
+    false,
+  );
+});
+
+test("ro label lines are LastName - Model plus Out Mileage blank", () => {
+  const lines = roLabelLines({ lastName: "Whatcott", model: "Boxster", roNumber: "J001094" });
+  assert.deepEqual(lines, ["Whatcott - Boxster", OUT_MILEAGE_LINE]);
+  assert.ok(!lines.some((line) => /J001094|VIN/i.test(line)));
+  assert.match(lines[1], /Out Mileage _{3,}/);
+});
+
+test("ro label lines never include roNumber or VIN", () => {
   const lines = roLabelLines({ lastName: "Owner", model: "Macan", roNumber: "J001094" });
-  assert.deepEqual(lines, ["Owner", "Macan"]);
-  assert.ok(!lines.some((line) => /J001094|RO/i.test(line)));
+  assert.deepEqual(lines, ["Owner - Macan", OUT_MILEAGE_LINE]);
+  assert.ok(!lines.some((line) => /J001094|RO|VIN/i.test(line)));
 });
 
 test("normalize accepts create-ro with lastName + model", () => {
@@ -87,16 +130,18 @@ test("normalize rejects missing lastName or model", () => {
   assert.equal(normalizeRoPayload({ lastName: "Owner", event: "create-ro" }).ok, false);
 });
 
-test("ro label lines are last name then model only", () => {
-  const lines = roLabelLines({ lastName: "Owner", model: "Cayman" });
-  assert.deepEqual(lines, ["Owner", "Cayman"]);
+test("cleanModel drops VIN junk", () => {
+  assert.equal(cleanModel("VIN:"), "");
+  assert.equal(cleanModel("Boxster"), "Boxster");
+  assert.equal(isVinNoise("VIN:"), true);
+  assert.equal(isVinNoise("Boxster"), false);
 });
 
 test("planRoPrint dry-run never marks printed", () => {
   const plan = planRoPrint({
     roNumber: "J001094",
-    lastName: "Owner",
-    model: "Macan",
+    lastName: "Whatcott",
+    model: "Boxster",
     dryRun: true,
   });
   assert.equal(plan.ok, true);
@@ -104,8 +149,9 @@ test("planRoPrint dry-run never marks printed", () => {
   assert.equal(plan.printed, false);
   assert.equal(plan.doc.mediaKey, "w79h252");
   assert.equal(plan.doc.blocks.length, 2);
-  assert.equal(plan.doc.blocks[0].text, "Owner");
-  assert.equal(plan.doc.blocks[1].text, "Macan");
+  assert.equal(plan.doc.blocks[0].text, "Whatcott - Boxster");
+  assert.equal(plan.doc.blocks[1].text, OUT_MILEAGE_LINE);
+  assert.deepEqual(plan.lines, ["Whatcott - Boxster", OUT_MILEAGE_LINE]);
 });
 
 test("buildRoLabelDoc stays on 30252 address media", () => {
