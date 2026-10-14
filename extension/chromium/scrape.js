@@ -139,32 +139,140 @@
     return text;
   }
 
+  /** Label-only text (no value) — allow trailing * / required marks. */
+  function isExactFieldLabel(text, labelRe) {
+    const t = String(text || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\s*[*†‡]\s*$/, "")
+      .replace(/\s*:\s*$/, "");
+    return Boolean(t && labelRe.test(t));
+  }
+
+  /**
+   * Value after "Label:" on the same node ("Customer: Whatcott").
+   * Only short leftovers — never a whole Work-screen blob. Plate/account still rejected.
+   */
+  function valueAfterLabelPrefix(text, labelRe) {
+    const raw = String(text || "").replace(/\s+/g, " ").trim();
+    if (!raw) return "";
+    const m = labelRe.exec(raw);
+    if (!m || m.index !== 0) return "";
+    const rest = raw
+      .slice(m[0].length)
+      .replace(/^[\s*:·\-–—]+/, "")
+      .trim();
+    if (!rest || rest.length > 48) return "";
+    if (FIELD_NOISE_HINT_RE.test(rest) || /^\s*vin\b/i.test(rest)) return "";
+    // Single field value only (not "Name Plate Account" composites).
+    if (rest.split(/\s+/).length > 4) return "";
+    return acceptFieldValue(rest);
+  }
+
+  function firstCleanInputValue(root) {
+    if (!root?.querySelectorAll) return "";
+    const inputs = root.querySelectorAll("input, select, textarea");
+    for (const input of inputs) {
+      const hint = controlLabel(input);
+      if (/vin/i.test(hint) || FIELD_NOISE_HINT_RE.test(hint)) continue;
+      if (!String(input.value || "").trim()) continue;
+      const v = acceptFieldValue(input.value);
+      if (v) return v;
+    }
+    return "";
+  }
+
+  /**
+   * Pull a value from a field wrapper. Broad `[class*='row']` is allowed again
+   * (AllData often uses it) but plate/account inputs and noise text are rejected
+   * — that is what 0.1.20 was trying to stop, not the wrapper itself.
+   */
+  function valueFromFieldWrapper(row, labelText) {
+    if (!row) return "";
+    // td/th tables: value cell next to the label cell.
+    if (row.tagName === "TD" || row.tagName === "TH") {
+      const cellSibling = row.nextElementSibling;
+      if (cellSibling) {
+        const fromInput = firstCleanInputValue(cellSibling);
+        if (fromInput) return fromInput;
+        const cellText = visibleText(cellSibling);
+        const v = acceptFieldValue(cellText);
+        if (v) return v;
+      }
+    }
+    if (row.tagName === "DT") {
+      const dd = row.nextElementSibling;
+      if (dd && dd.tagName === "DD") {
+        const fromInput = firstCleanInputValue(dd);
+        if (fromInput) return fromInput;
+        const v = acceptFieldValue(visibleText(dd));
+        if (v) return v;
+      }
+    }
+
+    const fromInput = firstCleanInputValue(row);
+    if (fromInput) return fromInput;
+
+    // Whole-row text only when it does not also advertise plate/account/VIN.
+    const rowText = visibleText(row);
+    if (/^\s*vin\b/i.test(rowText) || FIELD_NOISE_HINT_RE.test(rowText)) {
+      return "";
+    }
+    const stripped = rowText
+      .replace(labelText, "")
+      .replace(/^[:\s*]+/, "")
+      .trim();
+    // Avoid multi-field blobs (name + phone + email in one row).
+    if (stripped.length > 64 || /\b(phone|email|@)\b/i.test(stripped)) return "";
+    return acceptFieldValue(stripped);
+  }
+
   function labeledValue(doc, labelRe) {
-    const nodes = collectMatching(doc, "label, span, div, th, dt, strong, b");
+    // Prefix form for "Customer: Whatcott" on one node (anchors at start).
+    const labelPrefixRe = new RegExp(
+      labelRe.source.replace(/\$$/, "").replace(/^\^/, "^"),
+      labelRe.flags.includes("i") ? "i" : labelRe.flags,
+    );
+    const nodes = collectMatching(doc, "label, span, div, th, td, dt, dd, strong, b, p");
     for (const node of nodes) {
       const label = visibleText(node);
-      if (!label || !labelRe.test(label)) continue;
-      // Never take VIN / plate / account rows even if a nearby regex matched.
-      if (/^\s*vin\b/i.test(label) || FIELD_NOISE_LABEL_RE.test(label) || FIELD_NOISE_HINT_RE.test(label)) {
-        continue;
-      }
+      if (!label) continue;
+      // Never treat a VIN / plate / account caption as the Customer/Model label.
+      if (FIELD_NOISE_LABEL_RE.test(label) || /^\s*vin\b/i.test(label)) continue;
+
+      const exact = isExactFieldLabel(label, labelRe);
+      // Inline "Label: value" only on small nodes (avoid form-root divs).
+      const childCount = node.children ? node.children.length : 0;
+      const inline =
+        !exact && childCount <= 2 ? valueAfterLabelPrefix(label, labelPrefixRe) : "";
+      if (!exact && !inline) continue;
+      if (inline) return inline;
+
       const forId = node.getAttribute?.("for");
       if (forId) {
         const input = doc.getElementById(forId);
         if (input && "value" in input && String(input.value || "").trim()) {
-          const v = acceptFieldValue(input.value);
-          if (v) return v;
+          const hint = controlLabel(input);
+          if (!FIELD_NOISE_HINT_RE.test(hint) && !/vin/i.test(hint)) {
+            const v = acceptFieldValue(input.value);
+            if (v) return v;
+          }
         }
       }
       // Prefer immediate next sibling — parent.querySelector can jump to License Plate / Account.
       const sibling = node.nextElementSibling;
       if (sibling) {
         if ("value" in sibling && String(sibling.value || "").trim()) {
-          const v = acceptFieldValue(sibling.value);
-          if (v) return v;
+          const hint = controlLabel(sibling);
+          if (!FIELD_NOISE_HINT_RE.test(hint) && !/vin/i.test(hint)) {
+            const v = acceptFieldValue(sibling.value);
+            if (v) return v;
+          }
         }
+        const sibInput = firstCleanInputValue(sibling);
+        if (sibInput) return sibInput;
         const text = visibleText(sibling);
-        if (text && text !== label) {
+        if (text && text !== label && !FIELD_NOISE_HINT_RE.test(text) && !/^\s*vin\b/i.test(text)) {
           const stripped = text
             .replace(new RegExp("^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[:\\s]*", "i"), "")
             .trim();
@@ -172,23 +280,12 @@
           if (v) return v;
         }
       }
-      // Tight field wrappers only — avoid broad [class*='row'] (wraps plate + account).
-      const row = node.closest("tr, li, .form-group, .field, [class*='form-field'], [class*='FormField']");
+      // Include row wrappers AllData uses; noise filters (not omitting the wrapper) stop plate bleed.
+      const row = node.closest(
+        "tr, li, dl, .form-group, .field, [class*='form-field'], [class*='FormField'], [class*='formField'], [class*='row'], [class*='Row'], [class*='Field']",
+      );
       if (row) {
-        const rowHead = visibleText(row).slice(0, 48);
-        if (/^\s*vin\b/i.test(rowHead) || FIELD_NOISE_HINT_RE.test(rowHead)) {
-          continue;
-        }
-        const input = row.querySelector("input, select, textarea");
-        if (input && String(input.value || "").trim()) {
-          const hint = controlLabel(input);
-          if (!FIELD_NOISE_HINT_RE.test(hint) && !/vin/i.test(hint)) {
-            const v = acceptFieldValue(input.value);
-            if (v) return v;
-          }
-        }
-        const text = visibleText(row).replace(label, "").replace(/^[:\s]+/, "").trim();
-        const v = acceptFieldValue(text);
+        const v = valueFromFieldWrapper(row, label);
         if (v) return v;
       }
     }
@@ -230,14 +327,14 @@
 
   function modelFromPage(doc) {
     const direct =
-      labeledValue(doc, /^\s*model\s*:?\s*$/i) ||
+      labeledValue(doc, /^\s*model\s*$/i) ||
       findInputByHint(doc, /(^|[^a-z])model([^a-z]|$)/i);
     const fromDirect = normalizeModelToken(direct);
     if (fromDirect) return fromDirect;
 
     const ymm =
-      labeledValue(doc, /year\s*\/?\s*make\s*\/?\s*model/i) ||
-      labeledValue(doc, /^\s*vehicle\s*:?\s*$/i);
+      labeledValue(doc, /^\s*year\s*\/?\s*make\s*\/?\s*model\s*$/i) ||
+      labeledValue(doc, /^\s*vehicle\s*$/i);
     const fromYmm = normalizeModelToken(ymm);
     if (fromYmm) return fromYmm;
 
@@ -251,7 +348,7 @@
 
   function scrapeCustomerLastName(doc) {
     const last =
-      labeledValue(doc, /^\s*last\s*name\s*:?\s*$/i) ||
+      labeledValue(doc, /^\s*last\s*name\s*$/i) ||
       findInputByHint(doc, /last\s*name/i);
     if (last) {
       const parsed = lastNameFromFull(last);
@@ -260,14 +357,14 @@
 
     // Prefer explicit customer/owner labels — never bare /name/i (matches HTML name= attrs).
     const full =
-      labeledValue(doc, /^\s*(customer|customer\s*name)\s*:?\s*$/i) ||
+      labeledValue(doc, /^\s*(customer|customer\s*name)\s*$/i) ||
       findInputByHint(doc, /customer(\s*name)?|owner(\s*name)?/i);
     if (full) {
       const parsed = lastNameFromFull(full);
       if (parsed) return parsed;
     }
 
-    const nameOnly = labeledValue(doc, /^\s*name\s*:?\s*$/i);
+    const nameOnly = labeledValue(doc, /^\s*name\s*$/i);
     if (nameOnly) return lastNameFromFull(nameOnly);
     return "";
   }
