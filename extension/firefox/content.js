@@ -7,13 +7,15 @@
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
   const api = globalThis.AllDataRoLabels || {};
-  const SUCCESS_WAIT_MS = api.SUCCESS_WAIT_MS || 12000;
+  const SUCCESS_WAIT_MS = api.SUCCESS_WAIT_MS || 18000;
 
   let armed = false;
   let armedAt = 0;
   let armedBaselineRo = "";
   let armedHadUpdate = false;
   let armedHadCreate = false;
+  let armedCreateEl = null;
+  let armedFields = { lastName: "", model: "", roNumber: "" };
   let createArmId = "";
   let pendingTimer = null;
   /** createArmId values that already got a print attempt — never key on customer/person. */
@@ -33,6 +35,8 @@
     armedBaselineRo = "";
     armedHadUpdate = false;
     armedHadCreate = false;
+    armedCreateEl = null;
+    armedFields = { lastName: "", model: "", roNumber: "" };
     // keep createArmId until print finishes so requestPrint can mark it
     if (pendingTimer) {
       clearTimeout(pendingTimer);
@@ -43,11 +47,20 @@
   function snapshotAtArm() {
     const fields = typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
     armedBaselineRo = String(fields.roNumber || "").trim();
+    armedFields = {
+      lastName: String(fields.lastName || "").trim(),
+      model: String(fields.model || "").trim(),
+      roNumber: armedBaselineRo,
+    };
+    const present =
+      typeof api.createControlPresent === "function" && api.createControlPresent();
+    // Click path sees shadow DOM; global scan might miss — trust the armed element.
+    armedHadCreate = present || Boolean(armedCreateEl);
     armedHadUpdate = typeof api.updateControlPresent === "function" && api.updateControlPresent();
-    armedHadCreate = typeof api.createControlPresent === "function" && api.createControlPresent();
   }
 
-  function armFromCreate() {
+  function armFromCreate(createEl) {
+    armedCreateEl = createEl && createEl.nodeType === 1 ? createEl : null;
     snapshotAtArm();
     createArmId = newCreateArmId();
     armed = true;
@@ -92,6 +105,14 @@
       model: scraped.model,
       roNumber,
       createArmId: armId || "",
+    };
+  }
+
+  function mergeScrapedWithArm(scraped) {
+    return {
+      lastName: String(scraped.lastName || armedFields.lastName || "").trim(),
+      model: String(scraped.model || armedFields.model || "").trim(),
+      roNumber: String(scraped.roNumber || "").trim(),
     };
   }
 
@@ -159,22 +180,33 @@
 
   function tryCompleteAfterCreate() {
     if (!armed) return;
-    const createStillThere = typeof api.createControlPresent === "function" && api.createControlPresent();
-    const updateThere = typeof api.updateControlPresent === "function" && api.updateControlPresent();
-    const scraped = typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
-    const roChanged =
-      Boolean(scraped.roNumber) &&
-      String(scraped.roNumber).trim() !== armedBaselineRo;
-    const createGone = armedHadCreate && !createStillThere;
-    // When an open RO already shows Update, do not treat that as Create success.
-    const updateAppeared = !armedHadUpdate && updateThere;
+    const scrapedRaw = typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
+    const scraped = mergeScrapedWithArm(scrapedRaw);
+    const createStillThere =
+      typeof api.createControlPresent === "function" && api.createControlPresent();
+    const updateThere =
+      typeof api.updateControlPresent === "function" && api.updateControlPresent();
+    const pageSuccess =
+      typeof api.pageShowsCreateSuccess === "function" && api.pageShowsCreateSuccess();
 
-    const success =
-      (createGone && Boolean(scraped.lastName && scraped.model)) ||
-      (updateAppeared && Boolean(scraped.lastName && scraped.model)) ||
-      (roChanged && Boolean(scraped.lastName && scraped.model) && Date.now() - armedAt > 400);
+    const result =
+      typeof api.evaluateCreateSuccess === "function"
+        ? api.evaluateCreateSuccess({
+            armedHadCreate,
+            armedHadUpdate,
+            armedBaselineRo,
+            armedAt,
+            armedCreateEl,
+            scraped,
+            createStillThere,
+            updateThere,
+            pageSuccess,
+            now: Date.now(),
+          })
+        : { confirmed: false };
 
-    if (!success) return;
+    if (!result.confirmed) return;
+
     if (!scraped.lastName || !scraped.model) {
       disarm();
       toast("Label skipped — could not read last name or model.", "skip");
@@ -187,7 +219,7 @@
   }
 
   function scheduleSuccessChecks() {
-    const delays = [300, 800, 1500, 2500, 4000, 6500, 9000, 11500];
+    const delays = [200, 500, 900, 1500, 2500, 4000, 6500, 9000, 12000, 15000, 17500];
     for (const ms of delays) {
       setTimeout(() => {
         if (armed) tryCompleteAfterCreate();
@@ -215,7 +247,7 @@
         return;
       }
       if (typeof api.isCreateControl === "function" && api.isCreateControl(node)) {
-        armFromCreate();
+        armFromCreate(node);
         return;
       }
     }
@@ -231,5 +263,11 @@
   const mo = new MutationObserver(() => {
     if (armed) tryCompleteAfterCreate();
   });
-  mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  mo.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["disabled", "aria-disabled", "aria-busy", "class"],
+  });
 })();
