@@ -84,5 +84,6 @@ test("stageHubUploadZip copies self-dist pack to Desktop", async () => {
     await rm(fakeRoot, { recursive: true, force: true });
     await rm(fakeHome, { recursive: true, force: true });
   }
+  // silence unused import warning if bundlers care
   assert.equal(typeof homedir, "function");
 });
