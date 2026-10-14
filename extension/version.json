@@ -1,5 +1,5 @@
 {
   "version": "0.1.24",
-  "message": "Update applies Hub-signed via Firefox requestUpdateCheck + reload; Tools\u2194website unlock/lock watches :8788 (~1s edge push). Staged Desktop \u2260 installed. Install 0.1.24 once (Hub On your own \u2192 Install from File).",
+  "message": "Update applies Hub-signed via Firefox requestUpdateCheck + reload. Instant Tools\u2194website sync: yes \u2014 local :8788 bridge edge-push (~1s); a ~3 min lag is the old alarm/poll bug, not a rework. Staged Desktop \u2260 installed. Install 0.1.24 once (Hub On your own \u2192 Install from File).",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
