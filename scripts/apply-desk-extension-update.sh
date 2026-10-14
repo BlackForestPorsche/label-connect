@@ -49,5 +49,5 @@ fi
 
 chmod +x "$ROOT/scripts/"*.sh 2>/dev/null || true
 bash "$ROOT/scripts/update-desk-extension.sh" --quiet
-VER="$(python3 -c 'import json; print(json.load(open("'$ROOT'/extension/version.json"))["version"])' 2>/dev/null || echo '?')"
+VER="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/extension/version.json"))["version"])' 2>/dev/null || echo '?')"
 log "Desk v${VER} applied"
