@@ -1,5 +1,5 @@
 {
-  "version": "0.1.19",
-  "message": "Update: Firefox signed feed / Install-from-File staging success UX (fixes false failed toast on Hub-signed desks).",
+  "version": "0.1.20",
+  "message": "Update: bidirectional website↔Tools lock/unlock (site lock clears Tools jar; unlock publishes to :8788; no remint against locked site).",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
