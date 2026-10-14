@@ -76,7 +76,6 @@
   function paintUpdateState({ available, appliedVersion } = {}) {
     const version = available?.version;
     const installed = installedVersion();
-    // Stale storage after Hub Install from File of the same feed version.
     if (!version || !isNewerVersion(version, installed)) {
       showApply(false);
       setUpdate("Desk extension is up to date.", "ok");
@@ -311,7 +310,6 @@
             "ok",
           );
         } else if (response?.mode === "hub_upload" || response?.error === "hub_signed_kept") {
-          // Actionable Hub path — not a hard "failed" (unsigned cannot overwrite Hub-signed).
           setUpdate(response?.message || "Hub On your own → Install from File.", "warn");
           showApply(true);
         } else {
