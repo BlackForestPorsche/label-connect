@@ -113,6 +113,7 @@
             title: `Black Forest Desk — update ${stored.deskUpdateAvailable.version} ready`,
           });
         } else {
+          // Unlocked: empty badge (no PIN). Title signals session is live.
           await runtime.action.setBadgeText({ text: "" });
           await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
           await runtime.action.setTitle?.({
@@ -130,6 +131,7 @@
     return Boolean(token && expiresAt > Date.now() + minTtlMs);
   }
 
+  /** Refresh toolbar badge from stored token (does not hit the network). */
   async function refreshUnlockBadge() {
     const fresh = await hasFreshWidgetToken(0);
     await setPinBadge(!fresh);
@@ -173,6 +175,7 @@
     return { ok: true, person: normalized, source: source || "pin" };
   }
 
+  /** Read bf_shop_gate from the default browser profile. Never logs the value. */
   async function readShopGateCookie() {
     const base = await shopBaseUrl();
     const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
@@ -188,6 +191,10 @@
     }
   }
 
+  /**
+   * Website shop session → Desk Bearer via POST /api/widget/session/from-gate.
+   * Degrades cleanly when the route is missing (404/406): falls back to Tools/PIN.
+   */
   async function importSiteGateSession() {
     const gate = await readShopGateCookie();
     if (!gate.present) {
@@ -359,6 +366,11 @@
     return { needsAuth: true };
   }
 
+  /**
+   * Background happy path: from-gate (shop cookie) then Tools :8788.
+   * Throttled so alarms / tab loads / idle do not spam the shop (~20/min cap).
+   * Does not open the popup; Sync / PIN remain as manual fallbacks.
+   */
   let autoUnlockInFlight = null;
   async function tryAutoUnlock({ force = false, reason = "" } = {}) {
     if (autoUnlockInFlight) return autoUnlockInFlight;
