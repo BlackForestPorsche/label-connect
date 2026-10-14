@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prefer Black Forest Tools 1.5.9+ (Labels → status / restart): Tools owns :8080.
+# Prefer Black Forest Tools 1.5.7+ (Labels → status / restart): Tools owns :8080.
 # This script remains for transition / manual bench use.
 # Launch Labels (LabelWriter 550 bench) as a desktop app.
 set -euo pipefail
