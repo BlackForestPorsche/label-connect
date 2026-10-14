@@ -45,7 +45,7 @@ In-extension checker (badge `↑` + popup “Check for extension update”) stil
 ## Requirements
 
 1. Labels running locally (`http://127.0.0.1:8080` by default, or set `labelsBaseUrl` in extension storage).
-2. For SSF lot names: shop widget person + PIN (extension popup) → Bearer to `GET /api/widget/views/lot` (never `book-today`).
+2. For SSF lot names: background auto unlock prefers shop `from-gate` (same Firefox profile cookie) then Tools `127.0.0.1:8788`; popup Sync / Person+PIN are fallbacks → Bearer to `GET /api/widget/views/lot` (never `book-today`).
 3. Browser: Firefox, Chrome, or Edge.
 4. Desk OS: Manjaro/Linux (CUPS `LabelWriter550`) or Windows (PrintTo to LabelWriter/DYMO / `LABELS_PRINTER`).
 
