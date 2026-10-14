@@ -3,8 +3,9 @@
  * Heuristic AllData Manage Online scrape. Fail closed — empty fields mean skip.
  * Tighten selectors after a live DevTools pass (no Manjaro GUI automation).
  *
- * Label payload is lastName + model only. Never scrape VIN into either field.
- * Last name strips first initial ("J. Whatcott", "LWhatcott" → "Whatcott").
+ * Label payload is lastName + model only. Never scrape VIN, license plate, or
+ * account # into either field. Last name strips first initial
+ * ("J. Whatcott", "LWhatcott" → "Whatcott").
  */
 (function (root) {
   const api = root.AllDataRoLabels || (root.AllDataRoLabels = {});
@@ -25,6 +26,12 @@
     "GT4",
     "GTS",
   ];
+
+  /** Labels/values that must never become lastName or model (AllData Work screen). */
+  const FIELD_NOISE_LABEL_RE =
+    /^\s*(license\s*plate|lic(?:ense)?\.?\s*pl(?:ate)?\.?|plate\s*#?|tag\s*#?|account\s*(?:#|no\.?|number)?|acct\.?\s*#?|stock\s*#?|phone|cell|mobile|email|e-?mail|vin|mileage|odometer|unit\s*#?)\s*:?\s*$/i;
+  const FIELD_NOISE_HINT_RE =
+    /\b(license\s*plate|lic(?:ense)?\.?\s*pl(?:ate)?|plate\s*#|account\s*#|acct\.?\s*#|stock\s*#|vin)\b/i;
 
   function visibleText(el) {
     if (!el) return "";
@@ -51,6 +58,14 @@
     return bits.filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
   }
 
+  function isKnownPorscheModel(value) {
+    const text = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return false;
+    return PORSCHE_MODELS.some((model) => new RegExp(`^${model}$`, "i").test(text));
+  }
+
   /** VIN label or 17-char VIN — never treat as last name or model. */
   function isVinNoise(value) {
     const text = String(value || "")
@@ -65,6 +80,30 @@
   }
 
   /**
+   * License plate / account # / similar Work-screen fields — never lastName or model.
+   * Broad `[class*='row']` association was picking these as Customer/Model values.
+   */
+  function isPlateOrAccountNoise(value) {
+    const text = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return false;
+    if (FIELD_NOISE_LABEL_RE.test(text)) return true;
+    if (/^(license\s*plate|account\s*#?|acct\.?\s*#?)\b/i.test(text)) return true;
+    if (isKnownPorscheModel(text)) return false;
+    const compact = text.replace(/[\s-]/g, "");
+    // Account-like: optional letter prefix + 4+ digits, or pure digit id.
+    if (/^[A-Z]?\d{4,}$/i.test(compact)) return true;
+    // Plate-like: 5–8 alnum with at least one digit (not a known model).
+    if (/^(?=.*\d)[A-Z0-9]{5,8}$/i.test(compact)) return true;
+    return false;
+  }
+
+  function isScrapeNoise(value) {
+    return isVinNoise(value) || isPlateOrAccountNoise(value);
+  }
+
+  /**
    * Last name only — strip "LAST, FIRST", leading "J." / "J ", trailing bare
    * initial, and glued shop codes like "LWhatcott" → "Whatcott".
    */
@@ -73,7 +112,7 @@
       .replace(/\s+/g, " ")
       .trim();
     if (!text) return "";
-    if (isVinNoise(text)) return "";
+    if (isScrapeNoise(text)) return "";
     if (text.includes(",")) {
       text = text.split(",")[0].trim();
     }
@@ -88,8 +127,16 @@
       parts.pop();
     }
     const last = parts[parts.length - 1] || "";
-    if (isVinNoise(last) || /^vin:?$/i.test(last)) return "";
+    if (isScrapeNoise(last) || /^vin:?$/i.test(last)) return "";
+    // Last names are letters (hyphen/apostrophe ok) — reject digit codes.
+    if (/\d/.test(last)) return "";
     return last;
+  }
+
+  function acceptFieldValue(v) {
+    const text = String(v || "").trim();
+    if (!text || isScrapeNoise(text)) return "";
+    return text;
   }
 
   function labeledValue(doc, labelRe) {
@@ -97,43 +144,52 @@
     for (const node of nodes) {
       const label = visibleText(node);
       if (!label || !labelRe.test(label)) continue;
-      // Never take a VIN row even if the label regex somehow matched nearby text.
-      if (/^\s*vin\b/i.test(label)) continue;
+      // Never take VIN / plate / account rows even if a nearby regex matched.
+      if (/^\s*vin\b/i.test(label) || FIELD_NOISE_LABEL_RE.test(label) || FIELD_NOISE_HINT_RE.test(label)) {
+        continue;
+      }
       const forId = node.getAttribute?.("for");
       if (forId) {
         const input = doc.getElementById(forId);
         if (input && "value" in input && String(input.value || "").trim()) {
-          const v = String(input.value).trim();
-          if (!isVinNoise(v)) return v;
+          const v = acceptFieldValue(input.value);
+          if (v) return v;
         }
       }
-      const sibling =
-        node.nextElementSibling ||
-        node.parentElement?.querySelector("input, select, textarea, .value, [class*='value']");
+      // Prefer immediate next sibling — parent.querySelector can jump to License Plate / Account.
+      const sibling = node.nextElementSibling;
       if (sibling) {
         if ("value" in sibling && String(sibling.value || "").trim()) {
-          const v = String(sibling.value).trim();
-          if (!isVinNoise(v)) return v;
+          const v = acceptFieldValue(sibling.value);
+          if (v) return v;
         }
         const text = visibleText(sibling);
         if (text && text !== label) {
-          const stripped = text.replace(new RegExp("^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[:\\s]*", "i"), "").trim();
-          if (stripped && !isVinNoise(stripped) && !/^vin:?$/i.test(stripped)) return stripped;
+          const stripped = text
+            .replace(new RegExp("^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[:\\s]*", "i"), "")
+            .trim();
+          const v = acceptFieldValue(stripped);
+          if (v) return v;
         }
       }
-      const row = node.closest("tr, li, .form-group, .field, [class*='row']");
+      // Tight field wrappers only — avoid broad [class*='row'] (wraps plate + account).
+      const row = node.closest("tr, li, .form-group, .field, [class*='form-field'], [class*='FormField']");
       if (row) {
-        if (/^\s*vin\b/i.test(visibleText(row).slice(0, 40))) {
-          // Row is a VIN field — skip.
-        } else {
-          const input = row.querySelector("input, select, textarea");
-          if (input && String(input.value || "").trim()) {
-            const v = String(input.value).trim();
-            if (!isVinNoise(v)) return v;
-          }
-          const text = visibleText(row).replace(label, "").replace(/^[:\s]+/, "").trim();
-          if (text && !isVinNoise(text) && !/^vin:?$/i.test(text)) return text;
+        const rowHead = visibleText(row).slice(0, 48);
+        if (/^\s*vin\b/i.test(rowHead) || FIELD_NOISE_HINT_RE.test(rowHead)) {
+          continue;
         }
+        const input = row.querySelector("input, select, textarea");
+        if (input && String(input.value || "").trim()) {
+          const hint = controlLabel(input);
+          if (!FIELD_NOISE_HINT_RE.test(hint) && !/vin/i.test(hint)) {
+            const v = acceptFieldValue(input.value);
+            if (v) return v;
+          }
+        }
+        const text = visibleText(row).replace(label, "").replace(/^[:\s]+/, "").trim();
+        const v = acceptFieldValue(text);
+        if (v) return v;
       }
     }
     return "";
@@ -143,10 +199,10 @@
     const inputs = collectMatching(doc, "input, select, textarea");
     for (const input of inputs) {
       const hint = controlLabel(input);
-      if (/vin/i.test(hint)) continue;
+      if (/vin/i.test(hint) || FIELD_NOISE_HINT_RE.test(hint)) continue;
       if (hintRe.test(hint) && String(input.value || "").trim()) {
-        const v = String(input.value).trim();
-        if (!isVinNoise(v)) return v;
+        const v = acceptFieldValue(input.value);
+        if (v) return v;
       }
     }
     return "";
@@ -156,15 +212,19 @@
     let text = String(raw || "")
       .replace(/\s+/g, " ")
       .trim();
-    if (!text || isVinNoise(text)) return "";
+    if (!text || isScrapeNoise(text)) return "";
     text = text.replace(/^vin\s*:\s*/i, "").trim();
-    if (!text || isVinNoise(text)) return "";
+    if (!text || isScrapeNoise(text)) return "";
     for (const model of PORSCHE_MODELS) {
       const re = new RegExp(`\\b${model}\\b`, "i");
       if (re.test(text)) return model;
     }
+    // Do not fall back to arbitrary last tokens (Account # / plate bleed).
+    // Only accept a clean alphabetic model word with no digits.
     const token = text.split(/[\s,/|]+/).filter(Boolean).pop();
-    if (!token || isVinNoise(token) || /^vin:?$/i.test(token)) return "";
+    if (!token || isScrapeNoise(token) || /^vin:?$/i.test(token)) return "";
+    if (/\d/.test(token) && !isKnownPorscheModel(token)) return "";
+    if (!/^[A-Za-z][A-Za-z0-9-]{1,20}$/.test(token)) return "";
     return token;
   }
 
@@ -378,6 +438,7 @@
   api.scrapeWorkScreen = scrapeWorkScreen;
   api.lastNameFromFull = lastNameFromFull;
   api.isVinNoise = isVinNoise;
+  api.isPlateOrAccountNoise = isPlateOrAccountNoise;
   api.isCreateControl = isCreateControl;
   api.isForbiddenControl = isForbiddenControl;
   api.createControlPresent = createControlPresent;
