@@ -127,7 +127,6 @@ test("evaluateCreateSuccess: page success banner confirms", () => {
     scraped: { lastName: "Whatcott", model: "Boxster", roNumber: "J100" },
     createStillThere: true,
     updateThere: true,
-    pageSuccess: false,
     pageSuccess: true,
     now: Date.now(),
   });
