@@ -39,6 +39,9 @@ jobs:
           test -f extension/dist/Black.Forest.Desk.xpi
           test -f extension/dist/Black.Forest.Desk-chromium.zip
           test -f extension/dist/updates.json
+          # AMO Hub “On this site” pack (no update_url) — versioned name from extension/version.json
+          VER="$(python3 -c "import json; print(json.load(open('extension/version.json'))['version'])")"
+          test -f "extension/dist/Black.Forest.Desk-${VER}-amo-hosted.xpi"
       - name: Sign Firefox XPI (AMO unlisted) when secrets exist
         id: sign
         env:

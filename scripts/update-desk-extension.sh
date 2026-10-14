@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
-# Refresh Black Forest Desk from the label-connect git tree and reinstall Firefox copy.
+# Local desk refresh only — NOT Firefox durable auto-update.
+#
+# What this does: sync-extension → pack XPI → sideload into the existing Firefox
+# default profile (extensions/ + user.js prefs) via install-desk-extension-firefox.sh.
 # Chromium/Edge: keep Load unpacked pointed at extension/chromium (files refresh in place).
-# Safe to call from update-labels.sh or by hand. No GUI tour.
+# Safe to call from update-labels.sh or by hand. No GUI tour. Never creates profiles.
+#
+# Prefer durable auto-update instead:
+#   A) AMO-hosted (“On this site”) — upload *-amo-hosted.xpi (no update_url) to Hub;
+#      Firefox updates from AMO on later Hub versions.
+#   B) Self-dist — Mozilla-signed XPI with gecko.update_url → GitHub updates.json.
+# See docs/desk-extension-signing.md and extension/README.md.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
