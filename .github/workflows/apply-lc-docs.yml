@@ -1,0 +1,34 @@
+name: apply-lc-docs
+on:
+  push:
+    branches: [cursor/labels-tools-handoff-155-main-7d7c]
+    paths: ['tmp/lc-docs.b64.json']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/labels-tools-handoff-155-main-7d7c
+      - name: Apply docs
+        run: |
+          python3 <<'PY'
+          import json, base64, gzip, pathlib
+          meta=json.loads(pathlib.Path('tmp/lc-docs.b64.json').read_text())
+          for path, b64 in meta['files'].items():
+              data=gzip.decompress(base64.b64decode(b64))
+              p=pathlib.Path(path)
+              p.parent.mkdir(parents=True, exist_ok=True)
+              p.write_bytes(data)
+              print('wrote', path, len(data))
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- README.md scripts/start-labels.sh || true
+          if git diff --staged --quiet; then echo No changes; else
+            git commit -m "docs: Tools 1.5.5+ owns Labels :8080; adopt transitional service"
+            git push origin HEAD:cursor/labels-tools-handoff-155-main-7d7c
+          fi
