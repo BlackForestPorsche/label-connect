@@ -197,6 +197,7 @@
         body: "{}",
       });
     } catch {
+      // Labels down — still offer Hub path via browser download (no unsigned sideload).
       const remote = await checkForUpdate(true);
       const version = remote?.version || "";
       const dl = version ? await downloadHubUploadZip(version) : null;
@@ -223,6 +224,7 @@
     const code = data?.error || `http_${response.status}`;
     const mode = data?.mode || "";
 
+    // Hub-signed kept / staged upload — never claim sideload success.
     if (mode === "hub_upload" || code === "hub_signed_kept" || code === "update_outcome_unclear") {
       const version = String(data?.version || "");
       if (!data?.hubUploadPath && version) {
@@ -253,6 +255,7 @@
       };
     }
 
+    // Only mark applied when Labels truly sideloaded (unsigned path).
     if (data.applied === false || data.mode === "hub_upload") {
       await openAboutAddons();
       return {
