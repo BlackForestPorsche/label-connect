@@ -171,9 +171,22 @@ const server = createServer(async (req, res) => {
         send(res, 403, { error: "localhost_only", message: "Desk updates are only available from this machine." });
         return;
       }
-      const result = await exclusive(() => applyDeskExtensionUpdate(root));
+      let body = {};
+      try {
+        const raw = await readBody(req, 64_000);
+        body = JSON.parse(raw.toString("utf8") || "{}");
+      } catch {
+        body = {};
+      }
+      const localVersion =
+        typeof body?.localVersion === "string"
+          ? body.localVersion
+          : typeof body?.version === "string"
+            ? body.version
+            : null;
+      const result = await exclusive(() => applyDeskExtensionUpdate(root, { localVersion }));
       let status = 500;
-      if (result.ok) status = 200;
+      if (result.ok || result.upToDate || result.mode === "up_to_date") status = 200;
       else if (result.mode === "hub_upload" || result.error === "hub_signed_kept") status = 409;
       send(res, status, result);
       return;
