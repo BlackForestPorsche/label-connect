@@ -4,6 +4,7 @@
  * - AllData Create RO → POST local Labels /api/print-ro
  * - SSF → On the Lot last names (widget lot API, never book-today)
  * - Soft auto-update check against label-connect extension/version.json
+ * - Auto unlock: shop from-gate (preferred) then Tools :8788 — no popup / Sync click
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
@@ -11,6 +12,9 @@
   const VERSION_URL =
     "https://raw.githubusercontent.com/BlackForestPorsche/label-connect/main/extension/version.json";
   const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
+  const AUTO_UNLOCK_ALARM = "desk-auto-unlock";
+  const AUTO_UNLOCK_PERIOD_MIN = 2;
+  const SHOP_HOST_RE = /^https:\/\/shop\.blackforestautomotive\.com(\/|$)/i;
 
   // Chromium MV3 service worker: pull shared helpers.
   if (typeof importScripts === "function") {
@@ -129,20 +133,31 @@
         deskUpdateCheckedAt: Date.now(),
         deskUpdateAvailable: available,
       });
+      // Preserve PIN / unlocked badge state; only force ↑ when an update is ready.
+      const api = globalThis.AllDataRoLabels;
       if (available && runtime.action?.setBadgeText) {
         await runtime.action.setBadgeText({ text: "↑" });
         await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
         await runtime.action.setTitle?.({
           title: `Black Forest Desk — update ${available.version} ready`,
         });
-      } else if (runtime.action?.setBadgeText) {
-        await runtime.action.setBadgeText({ text: "" });
-        await runtime.action.setTitle?.({ title: "Black Forest Desk" });
+      } else if (api?.refreshUnlockBadge) {
+        await api.refreshUnlockBadge();
       }
       return available;
     } catch {
       return null;
     }
+  }
+
+  function tryAutoUnlock(reason, force) {
+    const api = globalThis.AllDataRoLabels;
+    if (!api?.tryAutoUnlock) return;
+    void api.tryAutoUnlock({ force: Boolean(force), reason: reason || "" });
+  }
+
+  function isShopTabUrl(url) {
+    return typeof url === "string" && SHOP_HOST_RE.test(url);
   }
 
   runtime.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -208,19 +223,58 @@
       checkForUpdate(Boolean(message.force)).then((available) => sendResponse({ available }));
       return true;
     }
+    if (message.type === "auto-unlock") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.tryAutoUnlock) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.tryAutoUnlock({ force: Boolean(message.force), reason: message.reason || "message" }).then(sendResponse);
+      return true;
+    }
     return false;
   });
 
   // Soft update check on worker start + daily-ish alarm when available.
   void checkForUpdate(false);
+  // Happy path: mint widget token without opening the popup / pressing Sync.
+  tryAutoUnlock("startup", true);
+
   if (runtime.alarms?.create) {
     try {
       runtime.alarms.create("desk-update-check", { periodInMinutes: 360 });
+      runtime.alarms.create(AUTO_UNLOCK_ALARM, { periodInMinutes: AUTO_UNLOCK_PERIOD_MIN });
       runtime.alarms.onAlarm.addListener((alarm) => {
         if (alarm?.name === "desk-update-check") void checkForUpdate(false);
+        if (alarm?.name === AUTO_UNLOCK_ALARM) tryAutoUnlock("alarm", false);
       });
     } catch {
       // alarms permission optional
+    }
+  }
+
+  // After idle / lock, retry from-gate + Tools when the user is back.
+  if (runtime.idle?.onStateChanged?.addListener) {
+    try {
+      runtime.idle.onStateChanged.addListener((state) => {
+        if (state === "active") tryAutoUnlock("idle-active", false);
+      });
+    } catch {
+      // idle permission optional
+    }
+  }
+
+  // Shop tab finished loading → from-gate (cookie present) then Tools fallback.
+  if (runtime.tabs?.onUpdated?.addListener) {
+    try {
+      runtime.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+        if (changeInfo.status !== "complete") return;
+        const url = tab?.url || changeInfo.url || "";
+        if (!isShopTabUrl(url)) return;
+        tryAutoUnlock("shop-tab-complete", false);
+      });
+    } catch {
+      // tabs permission optional
     }
   }
 })();
