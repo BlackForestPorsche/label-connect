@@ -1,0 +1,86 @@
+name: seed-desk-026-hub-chunks
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/seed-desk-026-hub-chunks.yml"
+      - "tmp/desk-026-apply/.seed-trigger"
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/desk-026-hub-ship-b196
+      - name: Fetch thrash sources and write chunks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64, gzip, hashlib, json, pathlib, subprocess, urllib.request
+
+          owner_repo = "BlackForestPorsche/label-connect"
+          thrash = "cursor/desk-tools-to-site-thrash-39db"
+          token = __import__("os").environ["GH_TOKEN"]
+
+          def get_file(path: str) -> bytes:
+              url = f"https://api.github.com/repos/{owner_repo}/contents/{path}?ref={thrash}"
+              req = urllib.request.Request(url, headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "User-Agent": "seed-desk-026",
+              })
+              with urllib.request.urlopen(req) as resp:
+                  meta = json.load(resp)
+              return base64.b64decode(meta["content"])
+
+          items = [
+            ("extension/version.json", "extension__version.json"),
+            ("extension/shared/lot-names.js", "extension__shared__lot-names.js"),
+            ("extension/firefox/lot-names.js", "extension__firefox__lot-names.js"),
+            ("extension/chromium/lot-names.js", "extension__chromium__lot-names.js"),
+            ("extension/shared/content-shop.js", "extension__shared__content-shop.js"),
+            ("extension/firefox/content-shop.js", "extension__firefox__content-shop.js"),
+            ("extension/chromium/content-shop.js", "extension__chromium__content-shop.js"),
+            ("test/tools-site-sync.test.mjs", "test__tools-site-sync.test.mjs"),
+          ]
+          optional = [
+            ("package.json", "package.json"),
+            ("package-lock.json", "package-lock.json"),
+            ("README.md", "README.md"),
+            ("shared/desk-update.mjs", "shared__desk-update.mjs"),
+          ]
+          root = pathlib.Path("tmp/desk-026-apply")
+          root.mkdir(parents=True, exist_ok=True)
+          man = []
+          for path, prefix in items + optional:
+              try:
+                  raw = get_file(path)
+              except Exception as e:
+                  print("skip", path, e)
+                  continue
+              b64 = base64.b64encode(gzip.compress(raw, mtime=0)).decode()
+              out = root / f"{prefix}.00"
+              out.write_text(b64 + "\n")
+              man.append({
+                  "path": path,
+                  "prefix": prefix,
+                  "chunks": 1,
+                  "sha256": hashlib.sha256(raw).hexdigest(),
+              })
+              print("wrote", out, len(b64), man[-1]["sha256"][:12])
+          (root / "manifest.json").write_text(json.dumps(man, indent=2) + "\n")
+          print("manifest", len(man))
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tmp/desk-026-apply
+          if git diff --cached --quiet; then echo no changes; else
+            git commit -m "ci(desk): seed desk-026-apply chunks from thrash lot-names"
+            git push origin HEAD:cursor/desk-026-hub-ship-b196
+          fi
