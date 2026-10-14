@@ -38,6 +38,11 @@ jobs:
                       path = pathlib.Path(op["path"])
                       text = path.read_text()
                       count = text.count(op["old"])
+                      if count == 0:
+                          if op["new"] in text:
+                              print("sed already applied", op["path"])
+                              continue
+                          raise AssertionError(f"{fp} {op['path']} old not found")
                       expect = op.get("count", count)
                       if count != expect:
                           raise AssertionError(f"{fp} {op['path']} count {count} != {expect}")
