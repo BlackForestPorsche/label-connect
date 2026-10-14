@@ -1,0 +1,52 @@
+name: repair-desk026-b64
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/repair-desk026-b64.yml"
+      - "payloads/desk-026/.repair-trigger"
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/desk-tools-to-site-thrash-39db
+      - name: Apply exact byte repairs
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          fixes = [
+            ("payloads/desk-026/batch2-content-shop.gz.b64.00", "NFkmpRhM+B0AXPrI", "NFkmpRhM/B0AXPrI"),
+            ("payloads/desk-026/batch7-tests.gz.b64.00", "EgPVh3L7JLTOPcv", "EgPVh3L6JLTOPcv"),
+            ("payloads/desk-026/batch4-lot-shared.gz.b64.00", "rlDbhtgml7BdPEEW", "rlDbhtNpc7BdPEEW"),
+            ("payloads/desk-026/batch5-lot-firefox.gz.b64.00", "rlDbhtgml7BdPEEW", "rlDbhtNpc7BdPEEW"),
+          ]
+          for path, wrong, right in fixes:
+              p = Path(path)
+              text = p.read_text()
+              n = text.count(wrong)
+              if n != 1:
+                  raise SystemExit(f"{path}: expected 1 occurrence of {wrong!r}, found {n}")
+              p.write_text(text.replace(wrong, right, 1))
+              print("fixed", path)
+          for suf in ("00", "01", "02"):
+              src = Path(f"payloads/desk-026/batch4-lot-shared.gz.b64.{suf}")
+              dst = Path(f"payloads/desk-026/batch6-lot-chromium.gz.b64.{suf}")
+              dst.write_text(src.read_text())
+              print("copied", src, "->", dst)
+          print("repair-ok")
+          PY
+      - name: Commit repairs
+        run: |
+          git config user.name "desk026-repair"
+          git config user.email "desk026-repair@users.noreply.github.com"
+          git add payloads/desk-026/*.gz.b64.*
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "fix(desk): exact b64 repair desk-026 thrash payloads"
+            git push origin HEAD:cursor/desk-tools-to-site-thrash-39db
+          fi
