@@ -1,6 +1,10 @@
 /**
  * AllData Create RO → Labels: last name + model on 30252.
  * Rejects Update / Schedule / Assign. Real print is owned by the server route.
+ *
+ * Label layout (Create RO only):
+ *   Whatcott - Boxster
+ *   Out Mileage _____________
  */
 
 import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
@@ -14,6 +18,9 @@ const MAX_LEN = {
   customerName: 48,
 };
 
+/** Handwriting blank on line 2 — never filled from AllData. */
+export const OUT_MILEAGE_LINE = "Out Mileage _____________";
+
 const FORBIDDEN_EVENT_RE = /update|schedule|assign|new[\s_-]*r\/?o/i;
 
 function clean(value, max) {
@@ -24,27 +31,61 @@ function clean(value, max) {
   return text.slice(0, max);
 }
 
+/** True for VIN labels / VIN numbers — never print these as name or model. */
+export function isVinNoise(value) {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  if (/^vin:?$/i.test(text)) return true;
+  if (/^vin\s*:/i.test(text)) return true;
+  const compact = text.replace(/[\s-]/g, "");
+  // ISO-style VIN: 17 chars, no I/O/Q.
+  if (/^[A-HJ-NPR-Z0-9]{17}$/i.test(compact)) return true;
+  return false;
+}
+
 /**
  * Customer last name only — never first name or first initial.
- * Handles "LAST, FIRST", "J. LAST", "J LAST", "J.LAST", and "FIRST LAST".
+ * Handles "LAST, FIRST", "J. LAST", "J LAST", "J.LAST", "FIRST LAST",
+ * and glued shop codes like "LWhatcott" → "Whatcott".
  * Same heuristic as the extension scrape.
  */
 export function extractLastName(fullName) {
   let text = clean(fullName, MAX_LEN.customerName);
   if (!text) return "";
+  if (isVinNoise(text)) return "";
   // "LAST, FIRST" / "LAST, F." → LAST
   if (text.includes(",")) {
     text = text.split(",")[0].trim();
   }
   // Leading first initial: "J. Smith", "J Smith", "J.Smith"
   text = text.replace(/^[A-Za-z]\.?\s+/, "").replace(/^[A-Za-z]\.(?=[A-Za-z])/, "");
+  // Glued initial + PascalCase last: "LWhatcott" → "Whatcott" (not "McDonald")
+  if (/^[A-Z][A-Z][a-z]/.test(text) && !/\s/.test(text)) {
+    text = text.slice(1);
+  }
   const parts = text.split(" ").filter(Boolean);
   if (!parts.length) return "";
   // Drop a trailing bare initial if anything remains ("Smith J" → "Smith").
   if (parts.length > 1 && /^[A-Za-z]\.?$/.test(parts[parts.length - 1])) {
     parts.pop();
   }
-  return parts[parts.length - 1] || "";
+  const last = parts[parts.length - 1] || "";
+  if (isVinNoise(last) || /^vin:?$/i.test(last)) return "";
+  return last;
+}
+
+/** Drop VIN / empty junk; keep a short vehicle model token. */
+export function cleanModel(value) {
+  let model = clean(value, MAX_LEN.model);
+  if (!model) return "";
+  if (isVinNoise(model)) return "";
+  if (/^vin:?$/i.test(model)) return "";
+  // Strip a leading "VIN:" if a scraper glued it onto the model field.
+  model = model.replace(/^vin\s*:\s*/i, "").trim();
+  if (!model || isVinNoise(model)) return "";
+  return model.slice(0, MAX_LEN.model);
 }
 
 /**
@@ -64,13 +105,16 @@ export function normalizeRoPayload(raw) {
     return { ok: false, error: "Only Create R/O may auto-print. Unknown event was rejected." };
   }
 
-  // Always run through extractLastName so "J. Owner" / "Owner, J" never print an initial.
+  // Always run through extractLastName so "J. Owner" / "LWhatcott" never print an initial.
   let lastName = extractLastName(raw.lastName ?? raw.last_name);
   const customerName = clean(raw.customerName ?? raw.customer ?? raw.name, MAX_LEN.customerName);
-  if (!lastName && customerName) lastName = extractLastName(customerName);
+  if (!lastName && customerName && !isVinNoise(customerName)) {
+    lastName = extractLastName(customerName);
+  }
   lastName = clean(lastName, MAX_LEN.lastName);
+  if (isVinNoise(lastName)) lastName = "";
 
-  const model = clean(raw.model, MAX_LEN.model);
+  const model = cleanModel(raw.model);
   const roNumber = clean(raw.roNumber ?? raw.ro ?? raw.documentNumber, MAX_LEN.roNumber);
   // Per-Create click id from the Desk extension — never used as a customer/person key.
   const createArmId = clean(raw.createArmId ?? raw.create_arm_id ?? raw.createId, 64);
@@ -96,9 +140,17 @@ export function normalizeRoPayload(raw) {
   };
 }
 
-/** Label content: last name, then model — nothing else. */
+/**
+ * Label content — exactly two lines:
+ *   {LastName} - {Model}
+ *   Out Mileage _____________
+ * Never VIN, RO#, mileage value, or first initial.
+ */
 export function roLabelLines(fields) {
-  return [String(fields.lastName || "").trim(), String(fields.model || "").trim()].filter(Boolean);
+  const lastName = String(fields.lastName || "").trim();
+  const model = String(fields.model || "").trim();
+  if (!lastName || !model) return [];
+  return [`${lastName} - ${model}`, OUT_MILEAGE_LINE];
 }
 
 function textBlock(id, text, x, y, w, h, size, bold) {
@@ -144,7 +196,7 @@ export function buildRoLabelDoc(fields, mediaList = FALLBACK_MEDIA) {
       y0 + rowH * index,
       innerW,
       Math.max(10, rowH * 0.92),
-      index === 0 ? 18 : 14,
+      index === 0 ? 16 : 12,
       index === 0,
     ),
   );
@@ -220,7 +272,7 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
         return approxTextWidth(t, size);
       }
     };
-    const layout = fitTextLayout(text, row.w, row.h, measure, { min: 8, max: i === 0 ? 28 : 22 });
+    const layout = fitTextLayout(text, row.w, row.h, measure, { min: 7, max: i === 0 ? 22 : 14 });
     layout.lines.forEach((line, lineIndex) => {
       const textW = measure(line, layout.size);
       const vx = row.x + (row.w - textW) / 2;

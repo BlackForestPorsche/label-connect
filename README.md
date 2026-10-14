@@ -2,6 +2,8 @@
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
+**0.1.12** - Create RO label layout: `{LastName} - {Model}` then `Out Mileage _____________`. Strips glued first initial (`LWhatcott` → `Whatcott`); never prints VIN / `VIN:`. Still prints on every Create (dedupe unchanged).
+
 **0.1.11** - Black Forest Desk: **background auto unlock** from shop `from-gate` (startup, alarm, idle→active, shop tab complete) with Tools `:8788` fallback. No need to open the popup and press Sync for the happy path; Sync buttons + Person/PIN remain.
 
 **0.1.10** - Create RO labels: **last name only** + model; print on **every** Create (same customer / open RO OK). Dedupe per Create click or new RO id — not person. Open/baseline RO# is not sent to Labels (fixes “already printed this RO” on a new Create).
@@ -21,7 +23,7 @@ This public repo is the **release remote** for the shop PC install at `~/label-c
 Hard rules:
 
 - **Only Create R/O** prints. Never Update R/O, Schedule New R/O, or Assign R/O.
-- Label lines: **last name** + **model** (e.g. `Owner` / `Macan`). No first initial, no RO# on the label.
+- Label lines: `{LastName} - {Model}` then `Out Mileage _____________` (handwriting blank). No first initial, no VIN / `VIN:`, no RO# on the label.
 - Print on every Create R/O success, including when an open RO already exists for that customer.
 - Local Labels URL: `http://127.0.0.1:8080` (or `PORT` / extension `labelsBaseUrl`).
 

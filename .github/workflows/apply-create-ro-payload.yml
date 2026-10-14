@@ -1,0 +1,97 @@
+name: apply-create-ro-payload
+on:
+  push:
+    branches: [cursor/create-ro-label-text-012-947d]
+    paths:
+      - "payloads/create-ro-012-*.json"
+      - "payloads/create-ro-012-*.hex"
+      - "payloads/create-ro-012-*.part*"
+      - "payloads/create-ro-012-*.meta.json"
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode payloads and commit
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import gzip, base64, json, hashlib, pathlib, glob, subprocess
+          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+          for meta_fp in sorted(glob.glob("payloads/create-ro-012-*.meta.json")):
+              meta = json.loads(pathlib.Path(meta_fp).read_text())
+              prefix = meta["prefix"]
+              parts = [pathlib.Path(f"{prefix}{i}").read_text().strip() for i in range(meta["parts"])]
+              hexdata = "".join(parts)
+              assert hashlib.md5(hexdata.encode()).hexdigest() == meta["md5"]
+              pathlib.Path(meta["out"]).write_text(hexdata)
+              print("assembled", meta["out"], len(hexdata))
+          for fp in sorted(glob.glob("payloads/create-ro-012-*.hex")):
+              raw = pathlib.Path(fp).read_text().strip()
+              if not raw:
+                  print("skip empty hex", fp)
+                  continue
+              try:
+                  text = bytes.fromhex(raw).decode()
+                  json.loads(text)  # validate
+              except Exception as e:
+                  print("skip bad hex", fp, e)
+                  continue
+              out = fp[:-4] + ".json"
+              pathlib.Path(out).write_text(text)
+              print("hex->json", fp, out)
+          for fp in sorted(glob.glob("payloads/create-ro-012-*.json")):
+              if fp.endswith(".meta.json"):
+                  continue
+              payload = json.loads(pathlib.Path(fp).read_text())
+              changed = []
+              try:
+                  if "sed" in payload:
+                      if not payload["sed"]:
+                          print("noop sed", fp)
+                          continue
+                      for op in payload["sed"]:
+                          path = pathlib.Path(op["path"])
+                          text = path.read_text()
+                          count = text.count(op["old"])
+                          assert count == op.get("count", count), (op["path"], count)
+                          path.write_text(text.replace(op["old"], op["new"]))
+                          changed.append(op["path"])
+                          print("sed", op["path"], count)
+                  elif "items" in payload:
+                      for item in payload["items"]:
+                          raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
+                          assert hashlib.md5(raw).hexdigest() == item["md5"], item["path"]
+                          pathlib.Path(item["path"]).parent.mkdir(parents=True, exist_ok=True)
+                          pathlib.Path(item["path"]).write_bytes(raw)
+                          changed.append(item["path"])
+                          print("wrote", item["path"], len(raw))
+                  elif "gzipBase64" in payload:
+                      raw = gzip.decompress(base64.b64decode(payload["gzipBase64"]))
+                      assert hashlib.md5(raw).hexdigest() == payload["md5"], fp
+                      for path in payload["paths"]:
+                          pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+                          pathlib.Path(path).write_bytes(raw)
+                          changed.append(path)
+                          print("wrote", path, len(raw))
+                  else:
+                      print("skip unknown", fp)
+                      continue
+              except Exception as e:
+                  print("ERROR applying", fp, e)
+                  raise
+              if not changed:
+                  continue
+              subprocess.check_call(["git", "add", "--"] + changed)
+              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
+                  print("no change for", fp)
+                  continue
+              msg = payload.get("message") or f"Apply {fp}"
+              subprocess.check_call(["git", "commit", "-m", msg])
+              print("committed", msg)
+          subprocess.check_call(["git", "push"])
+          PY

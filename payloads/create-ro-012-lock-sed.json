@@ -1,0 +1,11 @@
+{
+  "message": "chore(desk): package-lock.json bump 0.1.12",
+  "sed": [
+    {
+      "path": "package-lock.json",
+      "old": "\"version\": \"0.1.11\"",
+      "new": "\"version\": \"0.1.12\"",
+      "count": 2
+    }
+  ]
+}
