@@ -1,0 +1,11 @@
+{
+  "message": "Desk 0.1.17 apply package-lock version bump",
+  "sed": [
+    {
+      "path": "package-lock.json",
+      "old": "0.1.16",
+      "new": "0.1.17",
+      "count": 2
+    }
+  ]
+}

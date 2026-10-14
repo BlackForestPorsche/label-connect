@@ -1,7 +1,9 @@
 /* global chrome, browser */
 /**
- * Shop site → Desk: capture unlock JSON widgetToken when present; nudge
- * background to try from-gate when the shop page loads (same Firefox profile).
+ * Shop site ↔ Desk:
+ * - Capture unlock JSON widgetToken when present
+ * - On shop page load: Tools→website unlock (Bearer :8788 → exchange → bf_shop_gate)
+ *   and from-gate nudge when the jar already has a gate (Desk lot names)
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
@@ -38,8 +40,27 @@
     }
   }
 
-  function trySiteImportQuiet() {
+  function onShopLoadSync() {
     if (!runtime?.runtime?.sendMessage) return;
+    try {
+      // Tools unlock → Firefox jar (exchange). Also clears gate when Tools is locked.
+      runtime.runtime
+        .sendMessage({ type: "tools-to-site-unlock" })
+        .then((response) => {
+          if (!response) return;
+          const onUnlock = /\/unlock\b/i.test(location.pathname || "");
+          if (response.ok && response.shouldReload && onUnlock) {
+            location.reload();
+            return;
+          }
+          if (response.locked && response.shouldReload && !onUnlock) {
+            location.reload();
+          }
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
     try {
       runtime.runtime.sendMessage({ type: "site-session-import" });
     } catch {
@@ -82,8 +103,8 @@
   };
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", trySiteImportQuiet, { once: true });
+    document.addEventListener("DOMContentLoaded", onShopLoadSync, { once: true });
   } else {
-    trySiteImportQuiet();
+    onShopLoadSync();
   }
 })();

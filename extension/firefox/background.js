@@ -4,7 +4,8 @@
  * - AllData Create RO → POST local Labels /api/print-ro
  * - SSF → On the Lot last names (widget lot API, never book-today)
  * - Soft auto-update check against label-connect extension/version.json
- * - Auto unlock: shop from-gate (preferred) then Tools :8788 — no popup / Sync click
+ * - Auto unlock: Tools :8788 → exchange into Firefox bf_shop_gate; from-gate fallback
+ * - Tools lock (bridge up, no session) clears stale site gate in this browser
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
@@ -343,13 +344,18 @@
       api.importSiteGateSession().then(sendResponse);
       return true;
     }
-    if (message.type === "tools-session-import") {
+    if (message.type === "tools-session-import" || message.type === "tools-to-site-unlock") {
       const api = globalThis.AllDataRoLabels;
-      if (!api?.importToolsWidgetSession) {
+      if (!api?.syncToolsSessionToSite) {
         sendResponse({ error: "Lot helper missing." });
         return false;
       }
-      api.importToolsWidgetSession().then(sendResponse);
+      // Sync Tools / shop-tab: deposit bf_shop_gate into this browser (website unlock).
+      // Popup Sync Tools uses tools-session-import → force exchange to heal stale gates.
+      const forceExchange = message.type === "tools-session-import" || Boolean(message.force);
+      api
+        .syncToolsSessionToSite({ reloadUnlockTabs: true, forceExchange })
+        .then(sendResponse);
       return true;
     }
     if (message.type === "shop-site-session") {
