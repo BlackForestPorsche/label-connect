@@ -1,0 +1,79 @@
+name: apply-desk-018
+on:
+  push:
+    branches: [cursor/desk-update-failed-toast-e3a6]
+    paths:
+      - "payloads/desk-018-*.json"
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode desk-018 payloads and commit
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import gzip, base64, json, hashlib, pathlib, glob, subprocess
+          subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
+          subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
+
+          def write_bytes(path_str, raw):
+              path = pathlib.Path(path_str)
+              path.parent.mkdir(parents=True, exist_ok=True)
+              if path.exists() and path.read_bytes() == raw:
+                  print("unchanged", path_str)
+                  return False
+              path.write_bytes(raw)
+              print("wrote", path_str, len(raw))
+              return True
+
+          for fp in sorted(glob.glob("payloads/desk-018-*.json")):
+              payload = json.loads(pathlib.Path(fp).read_text())
+              changed = []
+              if "sed" in payload:
+                  for op in payload.get("sed") or []:
+                      path = pathlib.Path(op["path"])
+                      text = path.read_text()
+                      count = text.count(op["old"])
+                      if count == 0:
+                          if op["new"] in text:
+                              print("sed already applied", op["path"])
+                              continue
+                          raise AssertionError(f"{fp} {op['path']} old not found")
+                      expect = op.get("count", count)
+                      if count != expect:
+                          raise AssertionError(f"{fp} {op['path']} count {count} != {expect}")
+                      path.write_text(text.replace(op["old"], op["new"]))
+                      changed.append(op["path"])
+                      print("sed", op["path"], count)
+              elif "items" in payload:
+                  for item in payload["items"]:
+                      raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
+                      assert hashlib.md5(raw).hexdigest() == item["md5"], item["path"]
+                      if write_bytes(item["path"], raw):
+                          changed.append(item["path"])
+              elif "gzipBase64" in payload and "paths" in payload:
+                  raw = gzip.decompress(base64.b64decode(payload["gzipBase64"]))
+                  assert hashlib.md5(raw).hexdigest() == payload["md5"], fp
+                  for path in payload["paths"]:
+                      if write_bytes(path, raw):
+                          changed.append(path)
+              else:
+                  print("skip unknown", fp)
+                  continue
+              if not changed:
+                  print("no change for", fp)
+                  continue
+              subprocess.check_call(["git", "add", "--"] + changed)
+              if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
+                  continue
+              subprocess.check_call(["git", "commit", "-m", payload.get("message") or f"Apply {fp}"])
+              print("committed", fp)
+          r = subprocess.run(["git", "status", "-sb"], capture_output=True, text=True)
+          print(r.stdout)
+          subprocess.check_call(["git", "push", "origin", "HEAD"])
+          print("push done")
+          PY

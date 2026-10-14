@@ -4,9 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   isLocalClient,
+  isNewerVersion,
   readDeskVersion,
   resolveLabelConnectRoot,
   stageHubUploadZip,
+  fetchDeskUpdateFeed,
+  stageSignedXpiFromFeed,
 } from "../shared/desk-update.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -47,8 +50,69 @@ test("popup and background no longer tell users to run bash update script", asyn
   assert.equal(/\/api\/update-desk-extension/.test(background), true);
   assert.equal(/run update-desk-extension\.sh/.test(background), false);
   assert.equal(/hub_signed_kept/.test(background), true);
-  assert.equal(/Hub On your own/.test(popup), true);
-  assert.equal(/mode !== "hub_upload"/.test(popup) || /mode === "hub_upload"/.test(popup), true);
+  assert.equal(/signed_staged/.test(background), true);
+  assert.equal(/requestUpdateCheck/.test(background), true);
+  assert.equal(/updates\.json/.test(background), true);
+  assert.equal(/signed_staged/.test(popup), true);
+  assert.equal(/Desk update failed/.test(popup), false);
+  assert.equal(/mode !== "hub_upload"/.test(popup) || /mode === "hub_upload"/.test(popup) || /signed_staged/.test(popup), true);
+});
+
+test("isNewerVersion compares semver-ish strings", () => {
+  assert.equal(isNewerVersion("0.1.18", "0.1.17"), true);
+  assert.equal(isNewerVersion("0.1.17", "0.1.17"), false);
+  assert.equal(isNewerVersion("0.1.16", "0.1.17"), false);
+});
+
+test("fetchDeskUpdateFeed + stageSignedXpiFromFeed write Desktop XPI", async () => {
+  const { mkdtemp, rm, readFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const fakeHome = await mkdtemp(path.join(tmpdir(), "desk-feed-home-"));
+  const prevHome = process.env.HOME;
+  process.env.HOME = fakeHome;
+  const payload = Buffer.from("PK\x03\x04fakeMETA-INF/mozilla.rsa\x00signed-bytes");
+  const hash = (await import("node:crypto")).createHash("sha256").update(payload).digest("hex");
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u.includes("updates.json")) {
+      return {
+        ok: true,
+        async json() {
+          return {
+            addons: {
+              "black-forest-desk@blackforestautomotive.com": {
+                updates: [
+                  {
+                    version: "9.9.8",
+                    update_link: "https://example.test/Black.Forest.Desk-9.9.8.xpi",
+                    update_hash: `sha256:${hash}`,
+                  },
+                ],
+              },
+            },
+          };
+        },
+      };
+    }
+    return {
+      ok: true,
+      async arrayBuffer() {
+        return payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+      },
+    };
+  };
+  try {
+    const feed = await fetchDeskUpdateFeed(fetchImpl);
+    assert.equal(feed.version, "9.9.8");
+    const staged = await stageSignedXpiFromFeed(feed, { fetchImpl });
+    assert.equal(staged.signed, true);
+    assert.equal(staged.path, path.join(fakeHome, "Desktop", "Black.Forest.Desk-9.9.8.xpi"));
+    const copied = await readFile(staged.path);
+    assert.equal(Buffer.compare(copied, payload), 0);
+  } finally {
+    process.env.HOME = prevHome;
+    await rm(fakeHome, { recursive: true, force: true });
+  }
 });
 
 test("stageHubUploadZip copies self-dist pack to Desktop", async () => {
