@@ -10,7 +10,7 @@ Temporary add-ons (`about:debugging`) **cannot** auto-update. Do **not** create 
 | --- | --- | --- |
 | **A. AMO-hosted (preferred now)** | Developer Hub → **On this site** with `Black.Forest.Desk-<ver>-amo-hosted.xpi` (**no** `gecko.update_url`) | **Yes** — Firefox updates from AMO when you upload a newer version to the **same** add-on |
 | **B. Self-dist + GitHub `update_url`** | Main pack keeps `update_url` → release `updates.json` + versioned XPI; needs a **Mozilla-signed** install once | **Yes** — after signed Install from File (Hub “On your own” or CI `web-ext sign`) |
-| **C. Local script** | `bash scripts/update-desk-extension.sh` (also from `update-labels.sh`) | **No** — packs + sideloads into the existing profile; Release Firefox may ignore unsigned sideloads. Fallback / Dev Edition only |
+| **C. Local script** | `bash scripts/update-desk-extension.sh` (also from `update-labels.sh`) | **No** — packs + optional unsigned sideload; **skips** when a Mozilla-signed Hub/AMO Desk is already in the default profile (avoids clobber → vanish-on-restart). Fallback / Dev Edition only; `--force-sideload` overrides |
 
 ### Preferred for Logan (extensions approved)
 
