@@ -20,7 +20,36 @@ jobs:
           subprocess.check_call(["git", "config", "user.name", "github-actions[bot]"])
           subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
           errors = []
+
+          # sed payloads first (tiny, safe)
+          for fp in sorted(glob.glob("payloads/desk-017-*.sed.json")):
+              try:
+                  payload = json.loads(pathlib.Path(fp).read_text())
+                  changed = []
+                  for op in payload.get("sed") or []:
+                      path = pathlib.Path(op["path"])
+                      text = path.read_text()
+                      count = text.count(op["old"])
+                      expect = op.get("count", count)
+                      if count != expect:
+                          raise AssertionError(f"{fp} {op['path']} count {count} != {expect}")
+                      path.write_text(text.replace(op["old"], op["new"]))
+                      changed.append(op["path"])
+                      print("sed", op["path"], count)
+                  if not changed:
+                      continue
+                  subprocess.check_call(["git", "add", "--"] + changed)
+                  if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode != 0:
+                      subprocess.check_call(["git", "commit", "-m", payload.get("message") or f"Apply {fp}"])
+              except Exception as e:
+                  print("ERROR", fp, e)
+                  errors.append(str(e))
+
           for meta_fp in sorted(glob.glob("payloads/desk-017-*.meta.json")):
+              # Skip package-lock group if sed handled it
+              if meta_fp.endswith("desk-017-02.meta.json") and pathlib.Path("payloads/desk-017-02.sed.json").exists():
+                  print("skip meta", meta_fp, "(sed present)")
+                  continue
               try:
                   meta = json.loads(pathlib.Path(meta_fp).read_text())
                   parts = [pathlib.Path(f"{meta['prefix']}{i}").read_text().strip() for i in range(meta["parts"])]
@@ -51,9 +80,7 @@ jobs:
               except Exception as e:
                   print("ERROR", meta_fp, e)
                   errors.append(str(e))
-          r = subprocess.run(["git", "status", "-sb"], capture_output=True, text=True)
-          print(r.stdout)
-          # Always try push if we have commits ahead
+          print(subprocess.run(["git", "status", "-sb"], capture_output=True, text=True).stdout)
           subprocess.check_call(["git", "push"])
           if errors:
               print("ERRORS:", errors)
