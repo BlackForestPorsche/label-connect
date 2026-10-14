@@ -5,7 +5,12 @@
 # Hard rule: NEVER create or switch Firefox profiles. Only install into the
 # existing default profile that Firefox already uses.
 #
-# Strategy (unsigned / no AMO):
+# Durable path (preferred): Mozilla-signed Hub / AMO install via about:addons →
+# Install Add-on From File. This script must NOT overwrite that with an unsigned
+# git-tree sideload (Release Firefox removes/disables unsigned XPIs on restart).
+#
+# Sideload strategy (fallback only — Dev Edition / Nightly / unbranded, or
+# --force-sideload):
 # 1) Pack XPI from git tree
 # 2) Resolve the existing default profile (fail if none)
 # 3) Drop XPI into that profile's extensions/ folder
@@ -19,9 +24,11 @@ PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export PATH
 
 NOTIFY=1
+FORCE_SIDELOAD=0
 for arg in "$@"; do
   case "$arg" in
     --quiet) NOTIFY=0 ;;
+    --force-sideload) FORCE_SIDELOAD=1 ;;
   esac
 done
 
@@ -159,8 +166,169 @@ case "$(basename "$profile_dir")" in
 esac
 
 ext_dir="$profile_dir/extensions"
+profile_xpi="$ext_dir/${ID}.xpi"
+
+# Detect a Mozilla-signed Hub/AMO install already in this profile.
+# Unsigned git sideloads must not overwrite those — Release Firefox drops them on restart.
+signed_state="$(
+  FORCE_SIDELOAD="$FORCE_SIDELOAD" ID="$ID" PROFILE_DIR="$profile_dir" PROFILE_XPI="$profile_xpi" DIST_XPI="$XPI" python3 - <<'PY'
+import json
+import os
+import sys
+import zipfile
+from pathlib import Path
+
+addon_id = os.environ["ID"]
+profile = Path(os.environ["PROFILE_DIR"])
+profile_xpi = Path(os.environ["PROFILE_XPI"])
+force = os.environ.get("FORCE_SIDELOAD", "0") == "1"
+
+
+def xpi_mozilla_signed(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+    except (OSError, zipfile.BadZipFile):
+        return False
+    # Hub / AMO / web-ext sign layout
+    if "META-INF/mozilla.rsa" in names or "META-INF/mozilla.sf" in names:
+        return True
+    return any(
+        n.startswith("META-INF/") and n.endswith(".rsa") for n in names
+    )
+
+
+def extensions_json_signed() -> tuple[bool, str]:
+    path = profile / "extensions.json"
+    if not path.is_file():
+        return False, ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, ""
+    addons = data.get("addons") or []
+    for addon in addons:
+        if addon.get("id") != addon_id:
+            continue
+        # Skip stale disabled entries that are not actually present
+        signed = addon.get("signedState")
+        # 2=SIGNED, 3=SYSTEM, 4=PRIVILEGED (AMO/Hub installs use 2+)
+        if isinstance(signed, int) and signed >= 2:
+            loc = str(addon.get("location") or "")
+            src = str(addon.get("sourceURI") or addon.get("rootURI") or "")
+            detail = f"signedState={signed}"
+            if loc:
+                detail += f" location={loc}"
+            if src:
+                detail += f" source={src}"
+            return True, detail
+    return False, ""
+
+
+xpi_signed = xpi_mozilla_signed(profile_xpi)
+json_signed, json_detail = extensions_json_signed()
+signed = xpi_signed or json_signed
+
+if signed and not force:
+    why = []
+    if xpi_signed:
+        why.append(f"signed XPI at {profile_xpi}")
+    if json_signed:
+        why.append(json_detail or "extensions.json signedState>=2")
+    print("SIGNED|" + "; ".join(why))
+    raise SystemExit(0)
+
+if signed and force:
+    print("FORCE_OVER_SIGNED|" + (json_detail or str(profile_xpi)))
+    raise SystemExit(0)
+
+print("UNSIGNED_OR_MISSING|ok")
+PY
+)"
+
+if [[ "$signed_state" == SIGNED\|* ]]; then
+  # Drop local force_installed policies that re-point Desk at an unsigned git XPI.
+  policies_json="$HOME/.mozilla/firefox/policies/policies.json"
+  if [[ -f "$policies_json" ]]; then
+    ID="$ID" DIST_XPI="$XPI" POLICIES="$policies_json" python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+addon_id = os.environ["ID"]
+dist = Path(os.environ["DIST_XPI"]).resolve()
+path = Path(os.environ["POLICIES"])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(0)
+policies = data.get("policies") or {}
+changed = False
+
+ext_settings = policies.get("ExtensionSettings") or {}
+entry = ext_settings.get(addon_id)
+if isinstance(entry, dict):
+    url = str(entry.get("install_url") or "")
+    local = False
+    if url.startswith("file:"):
+        parsed = urlparse(url)
+        file_path = Path(unquote(parsed.path)).resolve()
+        if file_path == dist or str(file_path).endswith(f"/{addon_id}.xpi"):
+            local = True
+    if local or entry.get("installation_mode") == "force_installed":
+        # Only strip when it looks like our unsigned sideload policy
+        if local or (isinstance(entry.get("install_url"), str) and "label-connect" in entry.get("install_url", "")):
+            ext_settings.pop(addon_id, None)
+            changed = True
+if ext_settings:
+    policies["ExtensionSettings"] = ext_settings
+elif "ExtensionSettings" in policies:
+    policies.pop("ExtensionSettings", None)
+    changed = True
+
+installs = (policies.get("Extensions") or {}).get("Install")
+if isinstance(installs, list):
+    kept = []
+    for item in installs:
+        s = str(item)
+        if addon_id in s or "label-connect" in s and s.startswith("file:"):
+            changed = True
+            continue
+        kept.append(item)
+    if kept:
+        policies.setdefault("Extensions", {})["Install"] = kept
+    else:
+        ext = policies.get("Extensions") or {}
+        ext.pop("Install", None)
+        if ext:
+            policies["Extensions"] = ext
+        else:
+            policies.pop("Extensions", None)
+
+if changed:
+    if policies:
+        data["policies"] = policies
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    else:
+        # Leave an empty policies shell rather than delete the file unexpectedly
+        path.write_text(json.dumps({"policies": {}}, indent=2) + "\n", encoding="utf-8")
+PY
+  fi
+  detail="${signed_state#SIGNED|}"
+  notify "Black Forest Desk unchanged" "Mozilla-signed install kept ($detail). Not sideloading unsigned git XPI. Prefer Hub/AMO updates."
+  printf 'profile=%s\nskipped=signed-amo\ndetail=%s\n' "$profile_dir" "$detail"
+  exit 0
+fi
+
+if [[ "$signed_state" == FORCE_OVER_SIGNED\|* ]]; then
+  notify "Black Forest Desk force sideload" "Overwriting Mozilla-signed install (--force-sideload). May vanish on Firefox restart."
+fi
+
 mkdir -p "$ext_dir"
-cp -f "$XPI" "$ext_dir/${ID}.xpi"
+cp -f "$XPI" "$profile_xpi"
 
 # user.js: allow sideload + keep extensions enabled (Dev/Nightly/unbranded; harmless elsewhere)
 user_js="$profile_dir/user.js"
@@ -188,6 +356,8 @@ PY
 
 # Optional policies (per-user) — force_installed from file URL.
 # Policies do not create or switch profiles.
+# Note: on stock Firefox Release this often still fails for unsigned XPIs and can
+# fight a later Hub install — prefer Hub/AMO; use --force-sideload consciously.
 policies_dir="$HOME/.mozilla/firefox/policies"
 mkdir -p "$policies_dir"
 cat >"$policies_dir/policies.json" <<EOF
@@ -215,5 +385,5 @@ if [[ -d "$(dirname "$dist_ext")" ]] && [[ -w "$(dirname "$dist_ext")" ]]; then
   cp -f "$XPI" "$dist_ext/${ID}.xpi" || true
 fi
 
-notify "Black Forest Desk installed" "Firefox profile: $profile_dir — restart Firefox to load (no GUI tour)."
-printf 'profile=%s\nxpi=%s\n' "$profile_dir" "$ext_dir/${ID}.xpi"
+notify "Black Forest Desk sideloaded" "Firefox profile: $profile_dir — unsigned local XPI; may not persist on Release restart. Prefer Hub-signed Install from File."
+printf 'profile=%s\nxpi=%s\nmode=unsigned-sideload\n' "$profile_dir" "$profile_xpi"

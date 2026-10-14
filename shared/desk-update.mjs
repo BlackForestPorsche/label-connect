@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
@@ -88,8 +88,43 @@ function runCommand(command, args, { cwd, timeoutMs = 180_000 } = {}) {
 }
 
 /**
- * Pull latest (ff-only when possible) and sideload Desk via update-desk-extension.sh.
- * Idempotent when already current.
+ * Stage self-dist pack (keeps gecko.update_url) on the Desktop for Hub
+ * “On your own” re-upload. Never claims this applied the Firefox install.
+ */
+export async function stageHubUploadZip(root, version) {
+  if (!root || !version) return null;
+  const candidates = [
+    path.join(root, "extension", "dist", `Black.Forest.Desk-${version}.xpi`),
+    path.join(root, "extension", "dist", "Black.Forest.Desk.xpi"),
+    path.join(root, "extension", "dist", "black-forest-desk@blackforestautomotive.com.xpi"),
+  ];
+  let src = null;
+  for (const file of candidates) {
+    if (await pathExists(file)) {
+      src = file;
+      break;
+    }
+  }
+  if (!src) return null;
+
+  const desktop = path.join(homedir(), "Desktop");
+  await mkdir(desktop, { recursive: true });
+  const dest = path.join(desktop, `Black.Forest.Desk-${version}-hub-upload.zip`);
+  await copyFile(src, dest);
+  return dest;
+}
+
+function parseInstallMode(combinedOutput) {
+  const text = String(combinedOutput || "");
+  if (/^skipped=signed-amo/m.test(text)) return "signed_skipped";
+  if (/^mode=unsigned-sideload/m.test(text)) return "unsigned_sideload";
+  return "unknown";
+}
+
+/**
+ * Pull latest (ff-only when possible) and refresh Desk.
+ * Hub-signed Firefox installs are never overwritten with an unsigned sideload.
+ * When signed is kept: stage Desktop hub-upload.zip and return ok:false (actionable).
  */
 export async function applyDeskExtensionUpdate(serverRoot, { pull = true } = {}) {
   const root = await resolveLabelConnectRoot(serverRoot);
@@ -109,6 +144,8 @@ export async function applyDeskExtensionUpdate(serverRoot, { pull = true } = {})
 
   const result = await runCommand("bash", [script, ...args], { cwd: root });
   const version = (await readDeskVersion(root)) || "?";
+  const combined = `${result.stdout || ""}\n${result.stderr || ""}`;
+  const mode = parseInstallMode(combined);
 
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout || "Update script failed.").trim().slice(0, 400);
@@ -119,14 +156,53 @@ export async function applyDeskExtensionUpdate(serverRoot, { pull = true } = {})
       version,
       root,
       code: result.code,
+      mode,
     };
   }
 
+  // Mozilla-signed Hub/AMO install kept — never report sideload success.
+  if (mode === "signed_skipped") {
+    const hubUploadPath = await stageHubUploadZip(root, version);
+    return {
+      ok: false,
+      error: "hub_signed_kept",
+      mode: "hub_upload",
+      version,
+      root,
+      hubUploadPath,
+      restartRequired: false,
+      applied: false,
+      message: hubUploadPath
+        ? `Hub-signed Desk kept (unsigned sideload skipped). Pack saved to ${hubUploadPath} — Hub On your own → Upload New Version, then about:addons → Install Add-on From File (Hub-signed XPI).`
+        : "Hub-signed Desk kept (unsigned sideload skipped). Upload the self-dist XPI via Hub On your own, then about:addons → Install Add-on From File.",
+    };
+  }
+
+  if (mode === "unsigned_sideload") {
+    return {
+      ok: true,
+      version,
+      root,
+      mode: "unsigned_sideload",
+      restartRequired: true,
+      applied: true,
+      message: `Desk ${version} sideloaded (unsigned) — restart Firefox. Prefer Hub-signed Install from File for durable installs.`,
+    };
+  }
+
+  // Unknown install outcome after exit 0 — stage Hub pack and do not claim success.
+  const hubUploadPath = await stageHubUploadZip(root, version);
   return {
-    ok: true,
+    ok: false,
+    error: "update_outcome_unclear",
+    mode: "hub_upload",
     version,
     root,
-    restartRequired: true,
-    message: `Desk ${version} applied — restart Firefox to finish.`,
+    hubUploadPath,
+    restartRequired: false,
+    applied: false,
+    message: hubUploadPath
+      ? `Could not confirm Firefox apply. Pack saved to ${hubUploadPath} — Hub On your own → Upload, then Install Add-on From File.`
+      : "Could not confirm Firefox apply. Prefer Hub On your own → Install from File.",
   };
 }

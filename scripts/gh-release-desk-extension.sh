@@ -21,12 +21,13 @@ fi
 VER="$(python3 -c "import json; print(json.load(open('$ROOT/extension/version.json'))['version'])")"
 XPI_VERSIONED="$DIST/Black.Forest.Desk-${VER}.xpi"
 XPI_AMO="$DIST/Black.Forest.Desk-${VER}-amo-hosted.xpi"
+XPI_HUB_ZIP="$DIST/Black.Forest.Desk-${VER}-hub-upload.zip"
 
 if [[ ! -f "$XPI_VERSIONED" ]]; then
   cp -f "$XPI" "$XPI_VERSIONED"
 fi
 
-if [[ ! -f "$XPI_AMO" ]]; then
+if [[ ! -f "$XPI_AMO" || ! -f "$XPI_HUB_ZIP" ]]; then
   bash "$ROOT/scripts/pack-desk-extension.sh" >/dev/null
 fi
 
@@ -34,14 +35,14 @@ if [[ ! -f "$UPDATES" ]]; then
   bash "$ROOT/scripts/generate-desk-updates-json.sh" >/dev/null
 fi
 
-if [[ ! -f "$XPI" || ! -f "$CHROME" || ! -f "$UPDATES" || ! -f "$XPI_AMO" ]]; then
+if [[ ! -f "$XPI" || ! -f "$CHROME" || ! -f "$UPDATES" || ! -f "$XPI_AMO" || ! -f "$XPI_HUB_ZIP" ]]; then
   echo "Missing packed assets under $DIST" >&2
   exit 1
 fi
 
-SIGNED_NOTE="Unsigned build (AMO credentials not used for this publish). Prefer Developer Hub upload of the *-amo-hosted.xpi (“On this site”) for stock Firefox auto-update, or add AMO JWT secrets for CI signing + GitHub update_url."
+SIGNED_NOTE="Unsigned build (AMO credentials not used for this publish). Hub “On your own” must re-sign the self-dist pack; unsigned GitHub update_link will not replace a Hub-signed install. Add AMO JWT secrets for CI signing."
 if unzip -l "$XPI" 2>/dev/null | grep -qiE 'META-INF/(mozilla|manifest|cose)'; then
-  SIGNED_NOTE="Mozilla-signed (unlisted / self-distribution). Install once from File; later versions auto-update via updates.json."
+  SIGNED_NOTE="Mozilla-signed (unlisted / self-distribution). Install once from File; later versions auto-update via updates.json when the update_link XPI is also signed."
 fi
 
 NOTES_FILE="$(mktemp)"
@@ -51,8 +52,9 @@ cat >"$NOTES_FILE" <<NOTES
 Black Forest Desk browser extension **v${VER}**
 
 ## Downloads (stable names)
-- **Firefox (AMO Hub “On this site”):** [Black.Forest.Desk-${VER}-amo-hosted.xpi](https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk-${VER}-amo-hosted.xpi) — no \`update_url\`; preferred after Hub approval
+- **Firefox Hub “On your own” upload:** [Black.Forest.Desk-${VER}-hub-upload.zip](https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk-${VER}-hub-upload.zip) — self-dist with \`update_url\` (same bytes as \`.xpi\`)
 - **Firefox (self-dist + update_url):** [Black.Forest.Desk.xpi](https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk.xpi) / [Black.Forest.Desk-${VER}.xpi](https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk-${VER}.xpi)
+- **Firefox (AMO Hub “On this site”):** [Black.Forest.Desk-${VER}-amo-hosted.xpi](https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk-${VER}-amo-hosted.xpi) — no \`update_url\`
 - **Firefox update manifest:** [updates.json](https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/updates.json)
 - **Chrome / Edge:** [Black.Forest.Desk-chromium.zip](https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk-chromium.zip)
 
@@ -60,17 +62,16 @@ Signing: ${SIGNED_NOTE}
 
 Latest: https://github.com/BlackForestPorsche/label-connect/releases/latest
 
-### Firefox — preferred durable auto-update (AMO-hosted)
-1. Upload \`Black.Forest.Desk-${VER}-amo-hosted.xpi\` to the **same** approved add-on in Developer Hub → **On this site**.
-2. Install the Hub-signed build once on the **normal** Firefox profile (no new profile; remove any Temporary Add-on).
-3. Later versions: upload a higher version to that same Hub add-on; Firefox auto-updates from AMO.
+### Firefox — Hub “On your own” (shop path)
+1. Upload \`Black.Forest.Desk-${VER}-hub-upload.zip\` (or \`.xpi\`) to Developer Hub → **On your own** (keeps \`update_url\`).
+2. Download the **Mozilla-signed** XPI from Hub → \`about:addons\` → gear → **Install Add-on From File…**.
+3. Until CI AMO JWT signs release XPIs, each version jump needs Hub re-sign + Install from File (unsigned GitHub \`update_link\` will not apply over Hub-signed).
 
-### Firefox — alternate (self-dist + GitHub \`update_url\`)
-1. Needs a **Mozilla-signed** XPI (Hub “On your own”, or CI \`web-ext sign\` when AMO JWT secrets exist). Stock Firefox rejects unsigned Install from File.
-2. \`about:addons\` → gear → **Install Add-on From File…** → pick the signed XPI **once**.
-3. Later Desk releases: Firefox reads \`updates.json\` via \`gecko.update_url\`.
+### Firefox — alternate AMO-hosted (“On this site”)
+1. Upload \`Black.Forest.Desk-${VER}-amo-hosted.xpi\` → **On this site**.
+2. Install Hub-signed once; later versions auto-update from AMO.
 
-**Temporary add-ons** and \`scripts/update-desk-extension.sh\` sideloads are **not** durable auto-update.
+**Temporary add-ons** and unsigned \`update-desk-extension.sh\` sideloads are **not** durable auto-update. Sideload **skips** when a Hub-signed Desk is already installed.
 
 ### Chrome / Edge
 Unzip → Load unpacked (Developer mode). No Chrome Web Store listing yet — reload the card after a zip refresh, or keep Load unpacked pointed at \`extension/chromium/\` after git pull.
@@ -82,6 +83,7 @@ delete_named_assets() {
     "Black.Forest.Desk.xpi" \
     "Black.Forest.Desk-${VER}.xpi" \
     "Black.Forest.Desk-${VER}-amo-hosted.xpi" \
+    "Black.Forest.Desk-${VER}-hub-upload.zip" \
     "updates.json" \
     "Black.Forest.Desk-chromium.zip"
   do
@@ -96,7 +98,7 @@ delete_named_assets() {
 }
 
 upload_assets() {
-  gh release upload "$TAG" "$XPI" "$XPI_VERSIONED" "$XPI_AMO" "$UPDATES" "$CHROME" --clobber
+  gh release upload "$TAG" "$XPI" "$XPI_VERSIONED" "$XPI_AMO" "$XPI_HUB_ZIP" "$UPDATES" "$CHROME" --clobber
 }
 
 if gh release view "$TAG" >/dev/null 2>&1; then

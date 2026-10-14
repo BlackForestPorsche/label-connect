@@ -16,10 +16,12 @@
   const AUTO_UNLOCK_PERIOD_MIN = 2;
   const SHOP_HOST_RE = /^https:\/\/shop\.blackforestautomotive\.com(\/|$)/i;
 
+  // Chromium MV3 service worker: pull shared helpers.
   if (typeof importScripts === "function") {
     try {
       importScripts("config.js", "lot-names.js");
     } catch {
+      // Firefox loads scripts via manifest background.scripts instead.
     }
   }
 
@@ -31,6 +33,7 @@
         return value.trim().replace(/\/$/, "");
       }
     } catch {
+      // storage may be unavailable in some test loads
     }
     return DEFAULT_BASE;
   }
@@ -120,7 +123,9 @@
         ? {
             version: remoteVersion,
             local,
-            message: remote.message || "Use Update in the Desk popup (Labels applies it on this machine).",
+            message:
+              remote.message ||
+              "Hub On your own → Upload New Version, then about:addons → Install Add-on From File (Hub-signed XPI).",
             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
@@ -146,6 +151,42 @@
     }
   }
 
+  const RELEASE_XPI_BASE =
+    "https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension";
+
+  async function openAboutAddons() {
+    try {
+      if (runtime.tabs?.create) {
+        await runtime.tabs.create({ url: "about:addons" });
+      }
+    } catch {
+      // about:addons open is best-effort
+    }
+  }
+
+  async function downloadHubUploadZip(version) {
+    const ver = String(version || "").trim();
+    if (!ver || !runtime.downloads?.download) return null;
+    const url = `${RELEASE_XPI_BASE}/Black.Forest.Desk-${ver}.xpi`;
+    try {
+      const downloadId = await runtime.downloads.download({
+        url,
+        filename: `Black.Forest.Desk-${ver}-hub-upload.zip`,
+        saveAs: false,
+        conflictAction: "overwrite",
+      });
+      return { downloadId, filename: `Black.Forest.Desk-${ver}-hub-upload.zip`, url };
+    } catch {
+      return null;
+    }
+  }
+
+  function hubUploadMessage(version, pathHint) {
+    const ver = version ? ` ${version}` : "";
+    const where = pathHint ? ` Saved: ${pathHint}.` : " Check Downloads / Desktop.";
+    return `Update${ver}: Hub On your own → Upload New Version, then about:addons → Install Add-on From File (Hub-signed XPI).${where} Unsigned GitHub XPIs cannot overwrite a Hub-signed install.`;
+  }
+
   async function applyDeskUpdate() {
     const base = await labelsBaseUrl();
     let response;
@@ -156,10 +197,21 @@
         body: "{}",
       });
     } catch {
+      // Labels down — still offer Hub path via browser download (no unsigned sideload).
+      const remote = await checkForUpdate(true);
+      const version = remote?.version || "";
+      const dl = version ? await downloadHubUploadZip(version) : null;
+      await openAboutAddons();
       return {
         ok: false,
         error: "labels_unreachable",
-        message: "Labels isn’t running. Open Labels (or Black Forest Tools), then try Update again.",
+        mode: "hub_upload",
+        version,
+        applied: false,
+        restartRequired: false,
+        message: dl
+          ? hubUploadMessage(version, dl.filename)
+          : "Labels isn’t running. Open Labels/Tools, or Hub On your own → Install from File with the self-dist pack.",
       };
     }
     let data = null;
@@ -168,8 +220,30 @@
     } catch {
       data = null;
     }
+
+    const code = data?.error || `http_${response.status}`;
+    const mode = data?.mode || "";
+
+    // Hub-signed kept / staged upload — never claim sideload success.
+    if (mode === "hub_upload" || code === "hub_signed_kept" || code === "update_outcome_unclear") {
+      const version = String(data?.version || "");
+      if (!data?.hubUploadPath && version) {
+        await downloadHubUploadZip(version);
+      }
+      await openAboutAddons();
+      return {
+        ok: false,
+        error: code,
+        mode: "hub_upload",
+        version,
+        hubUploadPath: data?.hubUploadPath || null,
+        applied: false,
+        restartRequired: false,
+        message: data?.message || hubUploadMessage(version, data?.hubUploadPath),
+      };
+    }
+
     if (!response.ok || !data?.ok) {
-      const code = data?.error || `http_${response.status}`;
       if (response.status === 403 || code === "localhost_only") {
         return { ok: false, error: code, message: "Desk update refused — Labels only accepts updates from this machine." };
       }
@@ -177,8 +251,24 @@
         ok: false,
         error: code,
         message: data?.message || "Desk update failed.",
+        applied: false,
       };
     }
+
+    // Only mark applied when Labels truly sideloaded (unsigned path).
+    if (data.applied === false || data.mode === "hub_upload") {
+      await openAboutAddons();
+      return {
+        ok: false,
+        error: data.error || "hub_upload",
+        mode: "hub_upload",
+        version: String(data.version || ""),
+        applied: false,
+        restartRequired: false,
+        message: data.message || hubUploadMessage(data.version, data.hubUploadPath),
+      };
+    }
+
     const version = String(data.version || "");
     await runtime.storage.local.set({
       deskUpdateAppliedVersion: version || true,
@@ -203,7 +293,9 @@
     return {
       ok: true,
       version,
+      mode: data.mode || "unsigned_sideload",
       restartRequired: true,
+      applied: true,
       message: data.message || (version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox."),
     };
   }
