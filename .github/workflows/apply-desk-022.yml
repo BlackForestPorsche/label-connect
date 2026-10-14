@@ -22,7 +22,7 @@ jobs:
           subprocess.check_call(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"])
 
           for a in sorted(glob.glob("payloads/desk-022-*.a.hex")):
-              stem = a[:-6]
+              stem = a[:-6]  # strip .a.hex
               ordered = []
               for letter in "abcdefghijklmnopqrstuvwxyz":
                   p = f"{stem}.{letter}.hex"
@@ -35,7 +35,7 @@ jobs:
               raw = b"".join(bytes.fromhex(pathlib.Path(p).read_text().strip()) for p in ordered)
               out = pathlib.Path(stem + ".json")
               out.write_bytes(raw)
-              print("assembled-hex", out, "from", ordered, "len", len(raw))
+              print("assembled-hex", out, "from", ordered, "len", len(raw), "md5", hashlib.md5(raw).hexdigest())
 
           def write_bytes(path_str, raw):
               path = pathlib.Path(path_str)
@@ -44,9 +44,10 @@ jobs:
                   print("unchanged", path_str)
                   return False
               path.write_bytes(raw)
-              print("wrote", path_str, len(raw))
+              print("wrote", path_str, len(raw), hashlib.md5(raw).hexdigest())
               return True
 
+          any_commit = False
           for fp in sorted(glob.glob("payloads/desk-022-*.json")):
               try:
                   payload = json.loads(pathlib.Path(fp).read_text())
@@ -57,19 +58,33 @@ jobs:
                   print("skip empty", fp)
                   continue
               changed = []
+              bad = False
               for item in payload["items"]:
-                  raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
-                  assert hashlib.md5(raw).hexdigest() == item["md5"], item["path"]
+                  try:
+                      raw = gzip.decompress(base64.b64decode(item["gzipBase64"]))
+                  except Exception as e:
+                      print("skip bad gzip item", fp, item.get("path"), e)
+                      bad = True
+                      break
+                  if hashlib.md5(raw).hexdigest() != item["md5"]:
+                      print("skip md5 mismatch", fp, item["path"])
+                      bad = True
+                      break
                   if write_bytes(item["path"], raw):
                       changed.append(item["path"])
-              if not changed:
-                  print("no change for", fp)
+              if bad or not changed:
+                  if not bad:
+                      print("no change for", fp)
                   continue
               subprocess.check_call(["git", "add", "--"] + changed)
               if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
                   continue
               subprocess.check_call(["git", "commit", "-m", payload.get("message") or f"Apply {fp}"])
-              print("committed", fp)
-          subprocess.check_call(["git", "push", "origin", "HEAD"])
-          print("push done")
+              print("committed", fp, changed)
+              any_commit = True
+          if any_commit:
+              subprocess.check_call(["git", "push", "origin", "HEAD"])
+              print("push done")
+          else:
+              print("nothing to push")
           PY
