@@ -1,1 +1,1 @@
-$file:/home/ubuntu/repos/label-connect/extension/shared/lot-names.js
+$file:/tmp/lot0-content-only.txt
