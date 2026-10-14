@@ -1,0 +1,26 @@
+name: fix-lock-023
+on:
+  workflow_dispatch:
+  push:
+    branches: [cursor/label-skipped-could-not-read-14e9]
+    paths: [".agent-push/NEED_LOCK"]
+permissions:
+  contents: write
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/label-skipped-could-not-read-14e9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install
+      - run: |
+          git config user.name "cursoragent"
+          git config user.email "cursoragent@cursor.com"
+          git add package-lock.json
+          if git diff --cached --quiet; then echo no changes; exit 0; fi
+          git commit -m "chore(desk): npm install lock with linkedom (0.1.23)"
+          git push
