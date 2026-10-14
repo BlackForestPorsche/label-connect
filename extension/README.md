@@ -9,39 +9,38 @@ One MV3 package for desk browsers (**Firefox**, **Chrome**, **Edge**) on **Windo
 
 Lives in this repo under `extension/` so desk installs stay one git pull with Labels.
 
-## Download (install yourself — preferred)
+## Download
 
 Stable GitHub Release assets (tag `desk-extension`):
 
 | Browser | File | URL |
 | --- | --- | --- |
-| **Firefox** | `Black.Forest.Desk.xpi` | https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk.xpi |
+| **Firefox (AMO Hub)** | `Black.Forest.Desk-<ver>-amo-hosted.xpi` | https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/ (versioned `*-amo-hosted.xpi`) |
+| **Firefox (self-dist)** | `Black.Forest.Desk.xpi` / `Black.Forest.Desk-<ver>.xpi` | https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk.xpi |
+| **Firefox updates.json** | `updates.json` | https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/updates.json |
 | **Chrome / Edge** | `Black.Forest.Desk-chromium.zip` | https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk-chromium.zip |
 
 Release page / latest: https://github.com/BlackForestPorsche/label-connect/releases/latest
 
-**Firefox:** open your normal profile → `about:addons` → gear → **Install Add-on From File…** → pick the XPI. Do **not** create a new Firefox profile.
-
-**Chrome / Edge:** unzip the zip → `chrome://extensions` / `edge://extensions` → Developer mode → **Load unpacked** → select the unzipped folder.
-
-Pack locally: `bash scripts/pack-desk-extension.sh` → `extension/dist/Black.Forest.Desk.xpi` (+ chromium zip).
+Pack locally: `bash scripts/pack-desk-extension.sh` → `extension/dist/` (main XPI with `update_url`, `*-amo-hosted.xpi` without it, chromium zip, `updates.json`).
 
 ---
 
-## Auto-update (shop path)
+## Auto-update (durable vs local script)
 
-AMO / Chrome Web Store signing is **not** required for the desk.
+| Path | How | Durable? |
+| --- | --- | --- |
+| **A. AMO-hosted (preferred)** | Upload `*-amo-hosted.xpi` (no `update_url`) to Developer Hub → **On this site** on the **same** approved add-on; install Hub-signed once | **Yes** — Firefox updates from AMO on later Hub versions |
+| **B. Self-dist + `update_url`** | Mozilla-signed main XPI once; CI publishes `updates.json` + versioned XPI on tag `desk-extension` | **Yes** — after signed Install from File (needs Hub “On your own” or CI AMO JWT) |
+| **C. Local script** | `bash scripts/update-desk-extension.sh` (also from `update-labels.sh`) | **No** — sideload refresh only; not a substitute for A/B |
 
-| Piece | Behavior |
-| --- | --- |
-| Source of truth | `~/label-connect` git tree (same as Labels) |
-| Refresh script | `bash scripts/update-desk-extension.sh` |
-| Tied to Labels update | `scripts/update-labels.sh` also runs the desk extension refresh |
-| In-extension checker | Background fetches `extension/version.json` from GitHub `main`; badge `↑` + popup “Check for extension update” when newer |
-| Firefox | Packs XPI → profile `extensions/` + `user.js` sideload prefs + optional `~/.mozilla/firefox/policies/policies.json` |
-| Chrome / Edge | Keep **Load unpacked** pointed at `extension/chromium/` (git pull refreshes files; click Reload on the extensions page after a big bump) |
+Details / secrets: [docs/desk-extension-signing.md](../docs/desk-extension-signing.md).
 
-Desk does **not** need to browse GitHub releases. Pull Labels / run the update script.
+**Firefox durable install:** normal profile only → Hub-signed or Install from File → remove Temporary Add-ons. Do **not** create a new Firefox profile.
+
+**Chrome / Edge:** unzip → Load unpacked (or keep Load unpacked on `extension/chromium/` after git pull / Reload).
+
+In-extension checker (badge `↑` + popup “Check for extension update”) still fetches `extension/version.json` from GitHub `main` as a nudge — it does not replace A or B.
 
 ## Requirements
 
@@ -50,7 +49,18 @@ Desk does **not** need to browse GitHub releases. Pull Labels / run the update s
 3. Browser: Firefox, Chrome, or Edge.
 4. Desk OS: Manjaro/Linux (CUPS `LabelWriter550`) or Windows (PrintTo to LabelWriter/DYMO / `LABELS_PRINTER`).
 
-## Install — Manjaro Firefox (shell, no GUI tour)
+## Install — Firefox durable (preferred after Hub approval)
+
+1. Download `Black.Forest.Desk-<ver>-amo-hosted.xpi` from the `desk-extension` release (or pack with `bash scripts/pack-desk-extension.sh`).
+2. [Developer Hub](https://addons.mozilla.org/developers/) → your **Black Forest Desk** add-on → **Upload New Version** → **On this site**.
+3. Install the Hub-signed build once on the **normal** profile (`about:addons` or Hub download). Remove any Temporary Desk add-on.
+4. Later versions: upload a higher `*-amo-hosted.xpi` to the same add-on — Firefox auto-updates.
+
+Gecko id: `black-forest-desk@blackforestautomotive.com`.
+
+## Install — Manjaro Firefox (local sideload fallback)
+
+Use only when Hub signing is unavailable (Dev Edition / Nightly / unbranded) — **not** the durable auto-update path:
 
 ```bash
 cd ~/label-connect
@@ -60,7 +70,7 @@ bash scripts/install-desk-extension-firefox.sh
 # restart Firefox once so the profile picks up the XPI
 ```
 
-Later updates:
+Later local refreshes (still not AMO/GitHub auto-update):
 
 ```bash
 bash scripts/update-labels.sh
@@ -68,9 +78,7 @@ bash scripts/update-labels.sh
 bash scripts/update-desk-extension.sh
 ```
 
-Gecko id: `black-forest-desk@blackforestautomotive.com`.
-
-**Note:** Release Firefox may still ignore unsigned sideloads. The install script sets profile prefs used by Developer Edition / Nightly / unbranded builds, drops the XPI into the default profile, and writes policies. If the add-on does not appear after restart, use **Load Temporary Add-on** (below) until AMO self-distribution exists — Create RO print still works the same.
+**Note:** Release Firefox may ignore unsigned sideloads. Prefer Hub **On this site** (amo-hosted pack) or a Mozilla-signed self-dist XPI.
 
 ## Install — Chrome / Edge (Chromium MV3)
 
