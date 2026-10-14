@@ -80,8 +80,12 @@
 
   function onShopLoadSync() {
     if (!runtime?.runtime?.sendMessage) return;
+    // Locked SPA (/unlock): only sync Tools→site lock/clear. Never from-gate →
+    // POST :8788 (that remints Tools after a locked-site refresh).
     const onUnlock = /\/unlock\b/i.test(location.pathname || "");
     try {
+      // Tools unlock → Firefox jar (exchange). Force when already on /unlock so a
+      // stale gate / post-lock quiet cannot leave the SPA stuck.
       runtime.runtime
         .sendMessage({ type: "tools-to-site-unlock", forceExchange: onUnlock })
         .then((response) => {
