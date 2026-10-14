@@ -1,11 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-/**
- * Pure decision helpers mirroring Desk Tools↔website lock/unlock sync.
- * (Extension lot-names.js is an IIFE; keep the contract covered here.)
- */
-
 function toolsSiteSyncAction({
   bridgeReachable,
   hasSession,
@@ -14,7 +9,6 @@ function toolsSiteSyncAction({
   siteLockQuiet,
 }) {
   if (siteLockQuiet && !forceExchange) {
-    // Tools live again after a website lock → clear quiet and exchange (never re-DELETE).
     if (bridgeReachable && hasSession) return "clear_quiet_and_exchange";
     if (bridgeReachable && hasSession === false) return "site_lock_hold";
     return "site_lock_pending";
@@ -33,7 +27,6 @@ function websiteLockAction({ bridgeReachable, hasSession }) {
 }
 
 function popupToolsSyncAction() {
-  // Button label "Sync Tools → website" must exchange, not only import lot token.
   return "tools_to_site_unlock_force";
 }
 
@@ -135,7 +128,6 @@ test("Popup Sync Tools → website must force exchange", () => {
 });
 
 function lockedSiteRefreshAction({ onUnlockPath, siteLockQuiet }) {
-  // content-shop on /unlock: tools-to-site only — never site-session-import/from-gate publish.
   if (onUnlockPath) return "tools_to_site_only";
   if (siteLockQuiet) return "skip_from_gate_publish";
   return "tools_to_site_and_site_import";
@@ -152,5 +144,33 @@ test("Unlocked shop load may import site gate", () => {
   assert.equal(
     lockedSiteRefreshAction({ onUnlockPath: false, siteLockQuiet: false }),
     "tools_to_site_and_site_import",
+  );
+});
+
+function toolsLockedGateAction({ gatePresent, unlockHoldActive, siteLockQuiet }) {
+  if (gatePresent && unlockHoldActive && !siteLockQuiet) return "keep_site_gate";
+  if (gatePresent) return "clear_gate";
+  return "already_clear";
+}
+
+test("Tools flap keeps Firefox gate during site unlock hold", () => {
+  assert.equal(
+    toolsLockedGateAction({
+      gatePresent: true,
+      unlockHoldActive: true,
+      siteLockQuiet: false,
+    }),
+    "keep_site_gate",
+  );
+});
+
+test("Intentional Tools lock still clears Firefox gate", () => {
+  assert.equal(
+    toolsLockedGateAction({
+      gatePresent: true,
+      unlockHoldActive: false,
+      siteLockQuiet: false,
+    }),
+    "clear_gate",
   );
 });
