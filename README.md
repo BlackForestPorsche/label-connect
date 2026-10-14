@@ -10,6 +10,8 @@ From **shop-desktop 1.5.11+**, Black Forest Tools **owns** the Labels HTTP serve
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
+**0.1.26** - Firefox unlock sticks: gateToken `cookies.set` + unlock-hold (no site-lock during exchange). Instant `:8788` sync.
+
 **0.1.25** - Instant `:8788` lock/unlock + fun on/off (~400ms bridge poll). Locked `/unlock` refresh: Tools→site clear first; **skip** `site-session-import` / from-gate publish (locked-refresh-remint). Fold with Update-apply into one Hub ship.
 
 **0.1.24** - Sticky lock: refresh on `/unlock` must not auto-login Tools; fun mode **on and off** sync Tools↔website via `:8788` (2s poll + push on change). Keeps 0.1.23 gateToken/jar-gate.
