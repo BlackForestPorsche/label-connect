@@ -34,6 +34,13 @@ jobs:
               if not ordered:
                   continue
               text = "".join(pathlib.Path(p).read_text() for p in ordered)
+              # Strip accidental trailing characters until JSON parses
+              while text:
+                  try:
+                      json.loads(text)
+                      break
+                  except json.JSONDecodeError:
+                      text = text[:-1]
               out = pathlib.Path(stem + ".json")
               out.write_text(text)
               print("assembled", out, "from", ordered, "len", len(text))
