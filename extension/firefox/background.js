@@ -417,10 +417,16 @@
     };
   }
 
-  function tryAutoUnlock(reason, force) {
+  function tryAutoUnlock(reason, force, tabUrl) {
     const api = globalThis.AllDataRoLabels;
     if (!api?.tryAutoUnlock) return;
-    void api.tryAutoUnlock({ force: Boolean(force), reason: reason || "" });
+    const onUnlock = /\/unlock\b/i.test(String(tabUrl || ""));
+    void api.tryAutoUnlock({
+      force: Boolean(force),
+      reason: reason || "",
+      allowSitePublish: !onUnlock,
+      tabUrl: tabUrl || "",
+    });
   }
 
   function isShopTabUrl(url) {
@@ -457,7 +463,12 @@
         sendResponse({ error: "Lot helper missing." });
         return false;
       }
-      api.importSiteGateSession().then(sendResponse);
+      // skipSitePublish: locked /unlock refresh must not from-gate → :8788.
+      api
+        .importSiteGateSession({
+          publishToTools: message.skipSitePublish ? false : true,
+        })
+        .then(sendResponse);
       return true;
     }
     if (message.type === "tools-session-import") {
@@ -500,6 +511,26 @@
         .syncToolsSessionToSite({
           reloadUnlockTabs: true,
           forceExchange: Boolean(message.forceExchange),
+        })
+        .then((result) => {
+          // Pull Tools funMode on/off immediately after unlock sync.
+          if (api.applyToolsPersonSettingsToSite) {
+            void api.applyToolsPersonSettingsToSite();
+          }
+          sendResponse(result);
+        });
+      return true;
+    }
+    if (message.type === "site-person-settings") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.publishPersonSettingsToToolsBridge) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api
+        .publishPersonSettingsToToolsBridge({
+          person: message.person,
+          settings: message.settings,
         })
         .then(sendResponse);
       return true;
@@ -564,17 +595,18 @@
         if (changeInfo.status !== "complete") return;
         const url = tab?.url || changeInfo.url || "";
         if (!isShopTabUrl(url)) return;
-        tryAutoUnlock("shop-tab-complete", false);
+        tryAutoUnlock("shop-tab-complete", false, url);
       });
     } catch {
     }
   }
 
   // Website lock that only clears bf_shop_gate (no lockShop body) still must lock Tools.
-  // Debounce remove→set during exchange so we do not false-lock.
+  // Arm quiet immediately on remove so /unlock tab-load cannot exchange+remint Tools.
+  // Short debounce cancel on remove→set during exchange.
   if (runtime.cookies?.onChanged?.addListener) {
     let gateRemovalTimer = null;
-    const GATE_REMOVAL_MS = 700;
+    const GATE_REMOVAL_MS = 120;
     try {
       runtime.cookies.onChanged.addListener((changeInfo) => {
         const cookie = changeInfo?.cookie;
@@ -587,16 +619,20 @@
           }
           return;
         }
+        const api = globalThis.AllDataRoLabels;
+        // Skip cookie churn during intentional unlock (exchange / cookies.set).
+        if (api?.unlockHoldActive?.()) return;
         if (gateRemovalTimer) clearTimeout(gateRemovalTimer);
         gateRemovalTimer = setTimeout(() => {
           gateRemovalTimer = null;
-          const api = globalThis.AllDataRoLabels;
           if (!api?.readShopGateCookie || !api?.syncSiteLockToTools) return;
+          if (api.unlockHoldActive?.()) return;
           void api.readShopGateCookie().then((gate) => {
             if (gate.present) return null;
-            // Skip if Tools already locked (Tools→site clear path owns this).
             return api.probeToolsBridgeHealth().then((health) => {
+              // Tools already locked → nothing to publish (avoid lock storms).
               if (health.reachable && health.hasSession === false) return null;
+              if (api.armSiteLockQuiet) api.armSiteLockQuiet();
               return api.syncSiteLockToTools({ reloadShopTabs: true });
             });
           });
