@@ -494,8 +494,14 @@
         sendResponse({ error: "Lot helper missing." });
         return false;
       }
-      // Tools unlock → Firefox gate (exchange). Also clears gate when Tools locked.
-      api.syncToolsSessionToSite({ reloadUnlockTabs: true }).then(sendResponse);
+      // Tools unlock → Firefox gate (exchange). forceExchange heals stale gate /
+      // post-lock quiet. Also clears gate when Tools locked.
+      api
+        .syncToolsSessionToSite({
+          reloadUnlockTabs: true,
+          forceExchange: Boolean(message.forceExchange),
+        })
+        .then(sendResponse);
       return true;
     }
     if (message.type === "site-lock") {

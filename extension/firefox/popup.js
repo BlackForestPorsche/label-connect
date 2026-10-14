@@ -216,8 +216,9 @@
   if (siteBtn) {
     siteBtn.addEventListener("click", async () => {
       siteBtn.disabled = true;
-      setStatus("Using shop site session…");
+      setStatus("Using shop site session (also unlocks Tools)…");
       try {
+        // from-gate → Desk storage + POST :8788 (website unlock → Tools unlock).
         await tryImport("site-session-import", { quiet: false });
       } finally {
         siteBtn.disabled = false;
@@ -228,9 +229,30 @@
   if (toolsBtn) {
     toolsBtn.addEventListener("click", async () => {
       toolsBtn.disabled = true;
-      setStatus("Asking Black Forest Tools…");
+      setStatus("Syncing Tools → website cookie…");
       try {
-        await tryImport("tools-session-import", { quiet: false });
+        // Must exchange Bearer → bf_shop_gate (not only import lot-name token).
+        const response = await runtime.runtime.sendMessage({
+          type: "tools-to-site-unlock",
+          forceExchange: true,
+        });
+        if (response?.ok && response.siteGate) {
+          if (response.person) fillPersonSelect(response.person);
+          setStatus(
+            response.shouldReload
+              ? "Website unlocked from Tools — refresh if the tab is still on /unlock."
+              : "Website cookie already matches Tools.",
+            "ok",
+          );
+          return;
+        }
+        if (response?.locked) {
+          setStatus(response.error || "Tools is locked — website cookie cleared.", "err");
+          return;
+        }
+        setStatus(humanizeUnlockError(response?.error), "err");
+      } catch {
+        setStatus("Extension background unavailable. Reload the add-on.", "err");
       } finally {
         toolsBtn.disabled = false;
       }
