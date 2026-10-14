@@ -2,6 +2,8 @@
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
+**0.1.15** - Black Forest Desk: Create R/O success confirm fixed (armed Create control, shadow DOM, disabled/busy, success banner, arm-time field fallback). Version skips **0.1.14** (Update button draft). Label layout unchanged.
+
 **0.1.13** - Black Forest Desk Hub re-upload version (AMO rejected reusing 0.1.12 after delete). Same Create RO label layout + auto unlock; self-dist pack keeps `gecko.update_url` → GitHub `updates.json`.
 
 **0.1.12** - Create RO label layout: `{LastName} - {Model}` then `Out Mileage _____________`. Strips glued first initial (`LWhatcott` → `Whatcott`); never prints VIN / `VIN:`. Still prints on every Create (dedupe unchanged).
