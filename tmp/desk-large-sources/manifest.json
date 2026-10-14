@@ -1,19 +1,19 @@
 [
   {
     "path": "extension/shared/lot-names.js",
-    "prefix": "lot-names.js.gz.b64",
+    "prefix": "extension__shared__lot-names.js.gz.b64",
     "chunks": 4,
     "sha256": "609b2bbb4b2566df74bdb55745bc5fd3e405e6ac219413137637bb8139465928"
   },
   {
     "path": "extension/firefox/lot-names.js",
-    "prefix": "lot-names.js.gz.b64",
+    "prefix": "extension__firefox__lot-names.js.gz.b64",
     "chunks": 4,
     "sha256": "609b2bbb4b2566df74bdb55745bc5fd3e405e6ac219413137637bb8139465928"
   },
   {
     "path": "extension/chromium/lot-names.js",
-    "prefix": "lot-names.js.gz.b64",
+    "prefix": "extension__chromium__lot-names.js.gz.b64",
     "chunks": 4,
     "sha256": "609b2bbb4b2566df74bdb55745bc5fd3e405e6ac219413137637bb8139465928"
   }
