@@ -1,0 +1,6 @@
+{
+  "parts": 8,
+  "prefix": "payloads/create-ro-batch4-scrape.part",
+  "out": "payloads/create-ro-batch4-scrape.json",
+  "message": "Create RO label text 0.1.11 — batch 4 (scrape shared+chromium+firefox)"
+}
