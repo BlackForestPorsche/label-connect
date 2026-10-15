@@ -1,5 +1,17 @@
 [
   {
+    "path": "extension/shared/background.js",
+    "prefix": "extension__shared__background.js",
+    "chunks": 1,
+    "sha256": "be39197ee6fe27a4706cd358ba87f4b19fb0cf10f384080b60cdb27867efbd3e"
+  },
+  {
+    "path": "extension/shared/lot-names.js",
+    "prefix": "extension__shared__lot-names.js",
+    "chunks": 2,
+    "sha256": "f7cf42c65e12b1870f779136bc67aaabadc263d7b62b7ed1eac55281ad2ad4b5"
+  },
+  {
     "path": "extension/shared/content-shop.js",
     "prefix": "extension__shared__content-shop.js",
     "chunks": 1,
@@ -12,6 +24,18 @@
     "sha256": "a1fb6297682dea16c8f4f84829d57e4ff9f3310332446a578519e358102b7a8b"
   },
   {
+    "path": "extension/firefox/background.js",
+    "prefix": "extension__firefox__background.js",
+    "chunks": 1,
+    "sha256": "4d3d9008d845cc69c975b463ff74976dd4e1033314535cde023ae19e315d102c"
+  },
+  {
+    "path": "extension/firefox/lot-names.js",
+    "prefix": "extension__firefox__lot-names.js",
+    "chunks": 2,
+    "sha256": "f7cf42c65e12b1870f779136bc67aaabadc263d7b62b7ed1eac55281ad2ad4b5"
+  },
+  {
     "path": "extension/firefox/content-shop.js",
     "prefix": "extension__firefox__content-shop.js",
     "chunks": 1,
@@ -22,6 +46,18 @@
     "prefix": "extension__firefox__popup.js",
     "chunks": 1,
     "sha256": "a1fb6297682dea16c8f4f84829d57e4ff9f3310332446a578519e358102b7a8b"
+  },
+  {
+    "path": "extension/chromium/background.js",
+    "prefix": "extension__chromium__background.js",
+    "chunks": 1,
+    "sha256": "4d3d9008d845cc69c975b463ff74976dd4e1033314535cde023ae19e315d102c"
+  },
+  {
+    "path": "extension/chromium/lot-names.js",
+    "prefix": "extension__chromium__lot-names.js",
+    "chunks": 2,
+    "sha256": "f7cf42c65e12b1870f779136bc67aaabadc263d7b62b7ed1eac55281ad2ad4b5"
   },
   {
     "path": "extension/chromium/content-shop.js",
