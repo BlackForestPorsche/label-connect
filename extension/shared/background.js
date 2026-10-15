@@ -126,7 +126,7 @@
             local,
             message:
               remote.message ||
-              "Hub On your own → Upload New Version, then about:addons → Install Add-on From File (Hub-signed XPI).",
+              "Firefox installs Hub-signed updates by itself; click Update to apply it now.",
             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
@@ -157,16 +157,6 @@
   const UPDATES_JSON_URL = `${RELEASE_XPI_BASE}/updates.json`;
   const DESK_ADDON_ID = "black-forest-desk@blackforestautomotive.com";
 
-  async function openAboutAddons() {
-    try {
-      if (runtime.tabs?.create) {
-        await runtime.tabs.create({ url: "about:addons" });
-      }
-    } catch {
-      // about:addons open is best-effort
-    }
-  }
-
   async function fetchSignedFeedUpdate() {
     try {
       const response = await fetch(`${UPDATES_JSON_URL}?t=${Date.now()}`, { cache: "no-store" });
@@ -187,72 +177,17 @@
     }
   }
 
-  async function downloadSignedXpi(version, updateLink) {
-    const ver = String(version || "").trim();
-    const url = String(updateLink || "").trim() || `${RELEASE_XPI_BASE}/Black.Forest.Desk-${ver}.xpi`;
-    if (!ver || !runtime.downloads?.download) return null;
-    try {
-      const downloadId = await runtime.downloads.download({
-        url,
-        filename: `Black.Forest.Desk-${ver}.xpi`,
-        saveAs: false,
-        conflictAction: "overwrite",
-      });
-      return { downloadId, filename: `Black.Forest.Desk-${ver}.xpi`, url };
-    } catch {
-      return null;
-    }
-  }
-
-  /** @deprecated name kept for older call sites — downloads the signed feed XPI. */
-  async function downloadHubUploadZip(version) {
-    return downloadSignedXpi(version, `${RELEASE_XPI_BASE}/Black.Forest.Desk-${version}.xpi`);
-  }
-
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  function signedStagedMessage(localVer, stagedVer, pathHint) {
-    const installed = localVer || localVersion();
-    const staged = stagedVer || "?";
-    const where = pathHint ? ` File: ${pathHint}.` : "";
-    return `Still Installed ${installed} · Staged ${staged} (NOT applied).${where} about:addons → gear → Install Add-on From File… — Desktop is not an upgrade.`;
-  }
-
-  /** Resolve once Firefox has downloaded a signed update (then we reload). */
-  let updateAvailableWaiters = [];
+  /**
+   * Firefox fires onUpdateAvailable when it has a newer signed Desk (daily background check,
+   * about:addons → Check for Updates, or the install prompt). Listening postpones the swap, so
+   * reload right away to apply it. runtime.requestUpdateCheck is NOT implemented in Firefox
+   * (Bugzilla 1740508 — the schema marks it unsupported), so it cannot be used to force a check.
+   */
   let pendingUpdateDetails = null;
-
-  function waitForUpdateAvailable(timeoutMs) {
-    if (pendingUpdateDetails) return Promise.resolve(pendingUpdateDetails);
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        updateAvailableWaiters = updateAvailableWaiters.filter((w) => w !== onReady);
-        resolve(null);
-      }, timeoutMs);
-      function onReady(details) {
-        clearTimeout(timer);
-        resolve(details || pendingUpdateDetails || { version: "" });
-      }
-      updateAvailableWaiters.push(onReady);
-    });
-  }
-
   if (runtime.runtime.onUpdateAvailable?.addListener) {
     try {
       runtime.runtime.onUpdateAvailable.addListener((details) => {
         pendingUpdateDetails = details || { version: "" };
-        const waiters = updateAvailableWaiters.slice();
-        updateAvailableWaiters = [];
-        for (const w of waiters) {
-          try {
-            w(pendingUpdateDetails);
-          } catch {
-            // ignore
-          }
-        }
-        // Hub-signed → Hub-signed: apply immediately (do not wait for browser restart).
         try {
           runtime.runtime.reload();
         } catch {
@@ -262,39 +197,6 @@
     } catch {
       // onUpdateAvailable unavailable
     }
-  }
-
-  async function requestFirefoxSignedUpdateOnce() {
-    if (typeof runtime.runtime.requestUpdateCheck !== "function") return null;
-    try {
-      const result = await runtime.runtime.requestUpdateCheck();
-      if (typeof result === "string") return result;
-      if (Array.isArray(result) && typeof result[0] === "string") return result[0];
-      if (result && typeof result.status === "string") return result.status;
-      return result == null ? null : String(result);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Prefer Firefox applying the signed updates.json / AMO XPI.
-   * Retries throttled checks; races onUpdateAvailable → reload.
-   */
-  async function requestFirefoxSignedUpdate({ retries = 4 } = {}) {
-    let last = null;
-    for (let i = 0; i < retries; i += 1) {
-      if (pendingUpdateDetails) return "update_available";
-      last = await requestFirefoxSignedUpdateOnce();
-      if (last === "update_available") return last;
-      if (last === "throttled") {
-        await sleep(1500 * (i + 1));
-        continue;
-      }
-      // no_update / null — brief retry; feed can race the AddonManager cache.
-      if (i < retries - 1) await sleep(800 * (i + 1));
-    }
-    return last;
   }
 
   async function markFirefoxApplying(version) {
@@ -322,198 +224,88 @@
     };
   }
 
-  async function tryFirefoxApply(feed, { waitMs = 10_000 } = {}) {
-    if (!feed?.version) return null;
+  async function openSignedXpiPrompt(feed) {
+    const url =
+      String(feed?.updateLink || "").trim() ||
+      `${RELEASE_XPI_BASE}/Black.Forest.Desk-${feed?.version}.xpi`;
+    if (!runtime.tabs?.create) return false;
+    try {
+      await runtime.tabs.create({ url, active: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Apply a Hub/AMO-signed Desk upgrade through Firefox itself. Never stages a Desktop XPI and
+   * never calls Labels: Firefox only upgrades a signed install from a signed XPI, and the
+   * onUpdateAvailable listener above reloads the add-on the moment Firefox has the new version
+   * (daily background check, about:addons → Check for Updates, or the install prompt below).
+   */
+  async function applyDeskUpdate() {
     const local = localVersion();
-    if (!isNewer(feed.version, local)) return null;
+    const feed = await fetchSignedFeedUpdate();
+    if (!feed) {
+      return {
+        ok: false,
+        error: "feed_unreachable",
+        mode: "feed_unreachable",
+        applied: false,
+        message:
+          "Couldn’t reach the Desk update feed. Try again, or open about:addons → ⚙ → Check for Updates.",
+      };
+    }
+    if (!isNewer(feed.version, local)) {
+      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+      return {
+        ok: true,
+        mode: "up_to_date",
+        applied: false,
+        version: local,
+        message: `Desk ${local} is already the newest version.`,
+      };
+    }
+
+    if (typeof runtime.runtime.getBrowserInfo !== "function") {
+      return {
+        ok: false,
+        error: "chromium_manual",
+        mode: "chromium_manual",
+        applied: false,
+        version: feed.version,
+        message: `Desk ${feed.version} is ready. In Chrome/Edge open chrome://extensions and Reload the unpacked Desk folder after pulling label-connect.`,
+      };
+    }
 
     if (pendingUpdateDetails) {
       const ver = String(pendingUpdateDetails.version || feed.version);
       try {
         runtime.runtime.reload();
       } catch {
-        // ignore
+        // reload may throw if already shutting down
       }
       return markFirefoxApplying(ver);
     }
 
-    const pending = waitForUpdateAvailable(waitMs);
-    const ffStatus = await requestFirefoxSignedUpdate();
-    if (ffStatus === "update_available") {
-      // Wait for download to finish, then onUpdateAvailable → reload (also nudge).
-      const details = (await pending) || pendingUpdateDetails;
-      const ver = String(details?.version || feed.version);
-      await sleep(300);
-      try {
-        runtime.runtime.reload();
-      } catch {
-        // ignore
-      }
-      return markFirefoxApplying(ver);
-    }
-
-    // no_update / throttled exhausted — do not block on the long waiter.
-    // Cancel waiter by resolving path: short race only (already-queued download).
-    const late = await Promise.race([pending, sleep(500).then(() => null)]);
-    // Drop remaining waiters so applyDeskUpdate is not stuck for waitMs.
-    updateAvailableWaiters = [];
-    if (late || pendingUpdateDetails) {
-      const ver = String(late?.version || pendingUpdateDetails?.version || feed.version);
-      try {
-        runtime.runtime.reload();
-      } catch {
-        // ignore
-      }
-      return markFirefoxApplying(ver);
-    }
-    return { status: ffStatus || "no_update" };
-  }
-
-  async function stageSignedFeedSuccess(detail, { openAddons = true } = {}) {
-    const feed = await fetchSignedFeedUpdate();
-    const version = feed?.version || "";
-    const local = localVersion();
-    const dl = version ? await downloadSignedXpi(version, feed?.updateLink) : null;
-    if (openAddons) await openAboutAddons();
-    return {
-      ok: true,
-      error: null,
-      mode: "signed_staged",
-      version,
-      staged: true,
-      applied: false,
-      restartRequired: false,
-      message: `${signedStagedMessage(local, version, dl?.filename || null)}${detail ? ` ${detail}` : ""}`,
-    };
-  }
-
-  async function applyDeskUpdate() {
-    const local = localVersion();
-    const feed = await fetchSignedFeedUpdate();
-
-    // 1) Prefer Firefox-native Hub/AMO signed apply (requestUpdateCheck → reload).
-    if (feed?.version && isNewer(feed.version, local)) {
-      const ff = await tryFirefoxApply(feed);
-      if (ff?.mode === "firefox_update") return ff;
-    }
-
-    // 2) Labels may pull + stage; never treat Desktop stage as Installed.
-    const base = await labelsBaseUrl();
-    let response;
-    try {
-      response = await fetch(`${base}/api/update-desk-extension`, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: "{}",
-      });
-    } catch {
-      if (feed?.version && isNewer(feed.version, local)) {
-        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
-        if (ff?.mode === "firefox_update") return ff;
-      }
-      return stageSignedFeedSuccess("(Labels wasn’t reachable; Firefox did not apply yet.)");
-    }
-
-    let data = null;
-    try {
-      data = await response.json();
-    } catch {
-      data = null;
-    }
-
-    const code = data?.error || `http_${response.status}`;
-    const mode = data?.mode || "";
-
-    async function afterStageFallback(version, pathHint, detail) {
-      // 3) After Labels stages Desktop XPI, nudge Firefox updater again before admitting defeat.
-      if (feed?.version && isNewer(feed.version, local)) {
-        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
-        if (ff?.mode === "firefox_update") return ff;
-      }
-      if (!pathHint && version) {
-        const dl = await downloadSignedXpi(version, feed?.updateLink);
-        pathHint = dl?.filename || null;
-      }
-      await openAboutAddons();
+    const opened = await openSignedXpiPrompt(feed);
+    if (opened) {
       return {
         ok: true,
-        error: null,
-        mode: "signed_staged",
-        version,
-        signedXpiPath: data?.signedXpiPath || null,
-        hubUploadPath: data?.hubUploadPath || null,
-        staged: true,
+        mode: "firefox_xpi_prompt",
+        version: feed.version,
         applied: false,
-        restartRequired: false,
-        message: `${signedStagedMessage(local, version, pathHint)}${detail ? ` ${detail}` : ""}`,
+        awaitingFirefox: true,
+        message: `Firefox is asking to install Desk ${feed.version}. Click Allow, then Add — Desk reloads itself. Still Installed ${local} until you do.`,
       };
     }
-
-    if (mode === "signed_staged" || data?.staged === true) {
-      const version = String(data?.version || feed?.version || "");
-      return afterStageFallback(
-        version,
-        data?.signedXpiPath || data?.hubUploadPath || null,
-        "Unsigned sideload skipped (Hub/AMO signed install kept).",
-      );
-    }
-
-    if (mode === "hub_upload" || code === "hub_signed_kept" || code === "update_outcome_unclear") {
-      const version = String(data?.version || feed?.version || "");
-      return afterStageFallback(version, data?.hubUploadPath || null, "Hub-signed keep — Install from File only if Firefox did not apply.");
-    }
-
-    if (!response.ok || !data?.ok) {
-      if (response.status === 403 || code === "localhost_only") {
-        return { ok: false, error: code, message: "Desk update refused — Labels only accepts updates from this machine." };
-      }
-      if (feed?.version && isNewer(feed.version, local)) {
-        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
-        if (ff?.mode === "firefox_update") return ff;
-      }
-      if (response.status === 404 || code === "update_failed" || code.startsWith("http_")) {
-        return stageSignedFeedSuccess(
-          response.status === 404
-            ? "(Labels has no update endpoint yet — pull label-connect / restart Labels.)"
-            : "(Labels apply failed; Firefox did not apply; staged for Install from File.)",
-        );
-      }
-      return stageSignedFeedSuccess(data?.message || "(Labels error; Firefox did not apply; staged.)");
-    }
-
-    if (data.applied === false || data.mode === "hub_upload") {
-      const version = String(data.version || feed?.version || "");
-      return afterStageFallback(version, data.hubUploadPath || null, data.message || "");
-    }
-
-    const version = String(data.version || "");
-    await runtime.storage.local.set({
-      deskUpdateAppliedVersion: version || true,
-      deskUpdateAvailable: version
-        ? {
-            version,
-            local: localVersion(),
-            message: "Restart Firefox to finish.",
-            applied: true,
-          }
-        : null,
-    });
-    if (runtime.action?.setBadgeText) {
-      await runtime.action.setBadgeText({ text: "↻" });
-      await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
-      await runtime.action.setTitle?.({
-        title: version
-          ? `Black Forest Desk — v${version} ready; restart Firefox`
-          : "Black Forest Desk — restart Firefox to finish update",
-      });
-    }
     return {
-      ok: true,
-      version,
-      mode: data.mode || "unsigned_sideload",
-      restartRequired: true,
-      applied: true,
-      message: data.message || (version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox."),
+      ok: false,
+      error: "firefox_check_needed",
+      mode: "firefox_check_needed",
+      version: feed.version,
+      applied: false,
+      message: `Desk ${feed.version} is ready. Open about:addons → ⚙ → Check for Updates — Firefox applies it and Desk reloads itself.`,
     };
   }
 
