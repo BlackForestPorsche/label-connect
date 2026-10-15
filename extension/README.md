@@ -90,6 +90,12 @@ Package folder: `extension/chromium/` (same sibling layout as Firefox: `manifest
 2. `chrome://extensions` / `edge://extensions` → Developer mode → **Load unpacked** → `label-connect/extension/chromium` (the folder that contains `manifest.json` and `popup.html`)
 3. Leave that path forever; after `git pull` / `update-desk-extension.sh`, click **Reload** on the card when the version badge shows `↑`
 
+**From the release zip (no git):** download `Black.Forest.Desk-chromium.zip`, unzip into a permanent folder (manifest at its root), Load unpacked on that folder. Update from the popup: **Check for extension update** → **Download update** → unzip over the same folder → **Reload Desk**. Chromium has no signed self-update until a Chrome Web Store / Edge Add-ons listing exists.
+
+Desk behaves the same as Firefox on Chrome/Edge (Create RO print, SSF lot dropdown, Tools :8788 login/lock sync, sticky lock latch, green/red toolbar icon). The MV3 service worker is woken every 30s (`desk-bridge-wake` alarm) so the Tools bridge poll resumes after Chromium suspends it.
+
+Tests: `npm test` (unit + manifest parity) and `npm run test:chromium` (drives real Chrome/Edge with the unpacked extension; skips when no browser is installed). Regenerate the static fallback icons with `node scripts/gen-chromium-icons.mjs`.
+
 ## Install — Firefox temporary (debug only — clears on restart)
 
 **Do not use for day-to-day Desk.** Temporary Add-ons from `about:debugging` are always unloaded when Firefox quits.
