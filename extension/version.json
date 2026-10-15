@@ -1,5 +1,5 @@
 {
-  "version": "0.1.29",
-  "message": "Logged in: the popup shows plain \u201cLogged in as <name>\u201d (no sync / PIN boxes) and the toolbar icon turns green (red when logged out). Update now works: Firefox has no requestUpdateCheck, so Update opens the signed Desk install prompt (Allow, then Add) and Desk reloads itself. Sticky website lock from 0.1.28 unchanged.",
+  "version": "0.1.30",
+  "message": "No more surprise re-locks while you are signed in: a website session that simply runs out, or Tools\u2019 Bearer expiring, no longer locks the other side \u2014 Desk quietly renews the website session before it lapses. Deliberate locks (site Lock, Tools Lock, 8pm) stay sticky exactly as in 0.1.28.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
