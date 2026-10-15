@@ -13,7 +13,8 @@
     "https://raw.githubusercontent.com/BlackForestPorsche/label-connect/main/extension/version.json";
   const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
   const AUTO_UNLOCK_ALARM = "desk-auto-unlock";
-  const AUTO_UNLOCK_PERIOD_MIN = 2;
+  /** Backup only — Tools↔site sync is edge-driven via :8788 health watch (~1s). */
+  const AUTO_UNLOCK_PERIOD_MIN = 5;
   const SHOP_HOST_RE = /^https:\/\/shop\.blackforestautomotive\.com(\/|$)/i;
 
   // Chromium MV3 service worker: pull shared helpers.
@@ -208,17 +209,67 @@
     return downloadSignedXpi(version, `${RELEASE_XPI_BASE}/Black.Forest.Desk-${version}.xpi`);
   }
 
-  function signedStagedMessage(version, pathHint) {
-    const ver = version ? ` ${version}` : "";
-    const where = pathHint ? ` Saved: ${pathHint}.` : " Check Downloads / Desktop.";
-    return `Signed Desk${ver} ready.${where} about:addons → gear → Install Add-on From File… (or Check for Updates). Not a failure.`;
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async function requestFirefoxSignedUpdate() {
+  function signedStagedMessage(localVer, stagedVer, pathHint) {
+    const installed = localVer || localVersion();
+    const staged = stagedVer || "?";
+    const where = pathHint ? ` File: ${pathHint}.` : "";
+    return `Still Installed ${installed} · Staged ${staged} (NOT applied).${where} about:addons → gear → Install Add-on From File… — Desktop is not an upgrade.`;
+  }
+
+  /** Resolve once Firefox has downloaded a signed update (then we reload). */
+  let updateAvailableWaiters = [];
+  let pendingUpdateDetails = null;
+
+  function waitForUpdateAvailable(timeoutMs) {
+    if (pendingUpdateDetails) return Promise.resolve(pendingUpdateDetails);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        updateAvailableWaiters = updateAvailableWaiters.filter((w) => w !== onReady);
+        resolve(null);
+      }, timeoutMs);
+      function onReady(details) {
+        clearTimeout(timer);
+        resolve(details || pendingUpdateDetails || { version: "" });
+      }
+      updateAvailableWaiters.push(onReady);
+    });
+  }
+
+  if (runtime.runtime.onUpdateAvailable?.addListener) {
+    try {
+      runtime.runtime.onUpdateAvailable.addListener((details) => {
+        pendingUpdateDetails = details || { version: "" };
+        const waiters = updateAvailableWaiters.slice();
+        updateAvailableWaiters = [];
+        for (const w of waiters) {
+          try {
+            w(pendingUpdateDetails);
+          } catch {
+            // ignore
+          }
+        }
+        // Hub-signed → Hub-signed: apply immediately (do not wait for browser restart).
+        try {
+          runtime.runtime.reload();
+        } catch {
+          // reload may throw if already shutting down
+        }
+      });
+    } catch {
+      // onUpdateAvailable unavailable
+    }
+  }
+
+  async function requestFirefoxSignedUpdateOnce() {
     if (typeof runtime.runtime.requestUpdateCheck !== "function") return null;
     try {
       const result = await runtime.runtime.requestUpdateCheck();
       if (typeof result === "string") return result;
+      if (Array.isArray(result) && typeof result[0] === "string") return result[0];
       if (result && typeof result.status === "string") return result.status;
       return result == null ? null : String(result);
     } catch {
@@ -226,11 +277,104 @@
     }
   }
 
-  async function stageSignedFeedSuccess(detail) {
+  /**
+   * Prefer Firefox applying the signed updates.json / AMO XPI.
+   * Retries throttled checks; races onUpdateAvailable → reload.
+   */
+  async function requestFirefoxSignedUpdate({ retries = 4 } = {}) {
+    let last = null;
+    for (let i = 0; i < retries; i += 1) {
+      if (pendingUpdateDetails) return "update_available";
+      last = await requestFirefoxSignedUpdateOnce();
+      if (last === "update_available") return last;
+      if (last === "throttled") {
+        await sleep(1500 * (i + 1));
+        continue;
+      }
+      // no_update / null — brief retry; feed can race the AddonManager cache.
+      if (i < retries - 1) await sleep(800 * (i + 1));
+    }
+    return last;
+  }
+
+  async function markFirefoxApplying(version) {
+    const local = localVersion();
+    await runtime.storage.local.set({
+      deskUpdateAppliedVersion: version,
+      deskUpdateAvailable: {
+        version,
+        local,
+        message: "Firefox is applying the signed update…",
+        applied: true,
+      },
+    });
+    if (runtime.action?.setBadgeText) {
+      await runtime.action.setBadgeText({ text: "↻" });
+      await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+    }
+    return {
+      ok: true,
+      mode: "firefox_update",
+      version,
+      applied: true,
+      restartRequired: false,
+      message: `Firefox is applying signed Desk ${version} (reload).`,
+    };
+  }
+
+  async function tryFirefoxApply(feed, { waitMs = 10_000 } = {}) {
+    if (!feed?.version) return null;
+    const local = localVersion();
+    if (!isNewer(feed.version, local)) return null;
+
+    if (pendingUpdateDetails) {
+      const ver = String(pendingUpdateDetails.version || feed.version);
+      try {
+        runtime.runtime.reload();
+      } catch {
+        // ignore
+      }
+      return markFirefoxApplying(ver);
+    }
+
+    const pending = waitForUpdateAvailable(waitMs);
+    const ffStatus = await requestFirefoxSignedUpdate();
+    if (ffStatus === "update_available") {
+      // Wait for download to finish, then onUpdateAvailable → reload (also nudge).
+      const details = (await pending) || pendingUpdateDetails;
+      const ver = String(details?.version || feed.version);
+      await sleep(300);
+      try {
+        runtime.runtime.reload();
+      } catch {
+        // ignore
+      }
+      return markFirefoxApplying(ver);
+    }
+
+    // no_update / throttled exhausted — do not block on the long waiter.
+    // Cancel waiter by resolving path: short race only (already-queued download).
+    const late = await Promise.race([pending, sleep(500).then(() => null)]);
+    // Drop remaining waiters so applyDeskUpdate is not stuck for waitMs.
+    updateAvailableWaiters = [];
+    if (late || pendingUpdateDetails) {
+      const ver = String(late?.version || pendingUpdateDetails?.version || feed.version);
+      try {
+        runtime.runtime.reload();
+      } catch {
+        // ignore
+      }
+      return markFirefoxApplying(ver);
+    }
+    return { status: ffStatus || "no_update" };
+  }
+
+  async function stageSignedFeedSuccess(detail, { openAddons = true } = {}) {
     const feed = await fetchSignedFeedUpdate();
     const version = feed?.version || "";
+    const local = localVersion();
     const dl = version ? await downloadSignedXpi(version, feed?.updateLink) : null;
-    await openAboutAddons();
+    if (openAddons) await openAboutAddons();
     return {
       ok: true,
       error: null,
@@ -239,10 +383,7 @@
       staged: true,
       applied: false,
       restartRequired: false,
-      message: dl
-        ? `${signedStagedMessage(version, dl.filename)}${detail ? ` ${detail}` : ""}`
-        : detail ||
-          "Open about:addons → Check for Updates, or Install Add-on From File from the desk-extension release.",
+      message: `${signedStagedMessage(local, version, dl?.filename || null)}${detail ? ` ${detail}` : ""}`,
     };
   }
 
@@ -250,34 +391,13 @@
     const local = localVersion();
     const feed = await fetchSignedFeedUpdate();
 
-    // Prefer Firefox-native apply when the signed feed is newer than this install.
+    // 1) Prefer Firefox-native Hub/AMO signed apply (requestUpdateCheck → reload).
     if (feed?.version && isNewer(feed.version, local)) {
-      const ffStatus = await requestFirefoxSignedUpdate();
-      if (ffStatus === "update_available") {
-        await runtime.storage.local.set({
-          deskUpdateAppliedVersion: feed.version,
-          deskUpdateAvailable: {
-            version: feed.version,
-            local,
-            message: "Restart Firefox to finish the signed update.",
-            applied: true,
-          },
-        });
-        if (runtime.action?.setBadgeText) {
-          await runtime.action.setBadgeText({ text: "↻" });
-          await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
-        }
-        return {
-          ok: true,
-          mode: "firefox_update",
-          version: feed.version,
-          applied: true,
-          restartRequired: true,
-          message: `Firefox is applying signed Desk ${feed.version}. Restart when prompted.`,
-        };
-      }
+      const ff = await tryFirefoxApply(feed);
+      if (ff?.mode === "firefox_update") return ff;
     }
 
+    // 2) Labels may pull + stage; never treat Desktop stage as Installed.
     const base = await labelsBaseUrl();
     let response;
     try {
@@ -287,21 +407,11 @@
         body: "{}",
       });
     } catch {
-      // Labels down — stage signed feed / Firefox path (never bare "failed").
       if (feed?.version && isNewer(feed.version, local)) {
-        const ffStatus = await requestFirefoxSignedUpdate();
-        if (ffStatus === "update_available") {
-          return {
-            ok: true,
-            mode: "firefox_update",
-            version: feed.version,
-            applied: true,
-            restartRequired: true,
-            message: `Firefox is applying signed Desk ${feed.version}. Restart when prompted.`,
-          };
-        }
+        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
+        if (ff?.mode === "firefox_update") return ff;
       }
-      return stageSignedFeedSuccess("(Labels wasn’t reachable.)");
+      return stageSignedFeedSuccess("(Labels wasn’t reachable; Firefox did not apply yet.)");
     }
 
     let data = null;
@@ -314,11 +424,15 @@
     const code = data?.error || `http_${response.status}`;
     const mode = data?.mode || "";
 
-    // Labels staged signed feed / Hub pack — success UX (not an error toast).
-    if (mode === "signed_staged" || data?.staged === true) {
-      const version = String(data?.version || feed?.version || "");
-      if (!data?.signedXpiPath && !data?.hubUploadPath && version) {
-        await downloadSignedXpi(version, feed?.updateLink);
+    async function afterStageFallback(version, pathHint, detail) {
+      // 3) After Labels stages Desktop XPI, nudge Firefox updater again before admitting defeat.
+      if (feed?.version && isNewer(feed.version, local)) {
+        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
+        if (ff?.mode === "firefox_update") return ff;
+      }
+      if (!pathHint && version) {
+        const dl = await downloadSignedXpi(version, feed?.updateLink);
+        pathHint = dl?.filename || null;
       }
       await openAboutAddons();
       return {
@@ -331,59 +445,45 @@
         staged: true,
         applied: false,
         restartRequired: false,
-        message: data?.message || signedStagedMessage(version, data?.signedXpiPath || data?.hubUploadPath),
+        message: `${signedStagedMessage(local, version, pathHint)}${detail ? ` ${detail}` : ""}`,
       };
     }
 
-    // Legacy hub_upload / hub_signed_kept — still actionable, not a hard fail toast.
+    if (mode === "signed_staged" || data?.staged === true) {
+      const version = String(data?.version || feed?.version || "");
+      return afterStageFallback(
+        version,
+        data?.signedXpiPath || data?.hubUploadPath || null,
+        "Unsigned sideload skipped (Hub/AMO signed install kept).",
+      );
+    }
+
     if (mode === "hub_upload" || code === "hub_signed_kept" || code === "update_outcome_unclear") {
       const version = String(data?.version || feed?.version || "");
-      if (!data?.hubUploadPath && version) {
-        await downloadSignedXpi(version, feed?.updateLink);
-      }
-      await openAboutAddons();
-      return {
-        ok: true,
-        error: null,
-        mode: "signed_staged",
-        version,
-        hubUploadPath: data?.hubUploadPath || null,
-        staged: true,
-        applied: false,
-        restartRequired: false,
-        message: data?.message || signedStagedMessage(version, data?.hubUploadPath),
-      };
+      return afterStageFallback(version, data?.hubUploadPath || null, "Hub-signed keep — Install from File only if Firefox did not apply.");
     }
 
     if (!response.ok || !data?.ok) {
       if (response.status === 403 || code === "localhost_only") {
         return { ok: false, error: code, message: "Desk update refused — Labels only accepts updates from this machine." };
       }
-      // Old Labels without the endpoint (404) or script failure — stage signed feed.
+      if (feed?.version && isNewer(feed.version, local)) {
+        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
+        if (ff?.mode === "firefox_update") return ff;
+      }
       if (response.status === 404 || code === "update_failed" || code.startsWith("http_")) {
         return stageSignedFeedSuccess(
           response.status === 404
             ? "(Labels has no update endpoint yet — pull label-connect / restart Labels.)"
-            : "(Labels apply failed; staged signed feed instead.)",
+            : "(Labels apply failed; Firefox did not apply; staged for Install from File.)",
         );
       }
-      return stageSignedFeedSuccess(data?.message || "(Labels returned an error; staged signed feed.)");
+      return stageSignedFeedSuccess(data?.message || "(Labels error; Firefox did not apply; staged.)");
     }
 
-    // Only mark applied when Labels truly sideloaded (unsigned path).
     if (data.applied === false || data.mode === "hub_upload") {
       const version = String(data.version || feed?.version || "");
-      await openAboutAddons();
-      return {
-        ok: true,
-        error: null,
-        mode: "signed_staged",
-        version,
-        staged: true,
-        applied: false,
-        restartRequired: false,
-        message: data.message || signedStagedMessage(version, data.hubUploadPath),
-      };
+      return afterStageFallback(version, data.hubUploadPath || null, data.message || "");
     }
 
     const version = String(data.version || "");
@@ -536,6 +636,12 @@
 
   void checkForUpdate(false);
   tryAutoUnlock("startup", true);
+  try {
+    globalThis.AllDataRoLabels?.startToolsBridgeWatch?.();
+    globalThis.AllDataRoLabels?.startPersonSettingsBridge?.();
+  } catch {
+    // bridge watch optional until lot-names loads
+  }
 
   if (runtime.alarms?.create) {
     try {

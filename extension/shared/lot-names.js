@@ -804,11 +804,167 @@
   }
 
   /**
+   * Watch local Tools :8788 /health and push unlock/lock to the website on change.
+   * Edge-triggered (not a multi-second “hope the alarm fires” poll for sync).
+   */
+  const BRIDGE_WATCH_MS = 1000;
+  let bridgeWatchTimer = null;
+  let lastBridgeHasSession = null;
+  let bridgeWatchInFlight = false;
+
+  async function tickToolsBridgeWatch() {
+    if (bridgeWatchInFlight) return;
+    bridgeWatchInFlight = true;
+    try {
+      const health = await probeToolsBridgeHealth();
+      if (!health.reachable) {
+        lastBridgeHasSession = null;
+        return;
+      }
+      const has = Boolean(health.hasSession);
+      if (lastBridgeHasSession === null) {
+        lastBridgeHasSession = has;
+        // Align Firefox jar with current Tools state once at watch start.
+        await syncToolsSessionToSite({ reloadUnlockTabs: true, forceExchange: has });
+        return;
+      }
+      if (lastBridgeHasSession === has) return;
+      lastBridgeHasSession = has;
+      // Unlock edge: force exchange even if a stale gate is present.
+      // Lock edge: syncToolsSessionToSite clears the Firefox jar.
+      await syncToolsSessionToSite({ reloadUnlockTabs: true, forceExchange: has });
+    } catch {
+      // ignore single tick failures
+    } finally {
+      bridgeWatchInFlight = false;
+    }
+  }
+
+
+  /**
+   * Partner (bc-0eb7ffe4) contract: Tools 1.5.14+ GET/POST /v1/person-settings.
+   * Push Firefox toggles immediately; pull Tools prefs on a short watch (~1.5s).
+   * No-op while the route is missing (404) — unlock sync does not depend on it.
+   */
+  const PERSON_SETTINGS_WATCH_MS = 1500;
+  const PERSON_SETTINGS_KEY = "bf-person-settings";
+  let personSettingsTimer = null;
+  let lastPersonSettingsJson = null;
+  let personSettingsBridgeMissing = false;
+
+  async function fetchToolsPersonSettings() {
+    if (personSettingsBridgeMissing) return null;
+    const base = await toolsBridgeBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/v1/person-settings`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+    } catch {
+      return null;
+    }
+    if (response.status === 404 || response.status === 405) {
+      personSettingsBridgeMissing = true;
+      return null;
+    }
+    if (!response.ok) return null;
+    try {
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async function publishPersonSettingsToTools(settings) {
+    if (!settings || personSettingsBridgeMissing) return { ok: false, reason: "missing" };
+    const base = await toolsBridgeBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/v1/person-settings`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+        cache: "no-store",
+      });
+    } catch {
+      return { ok: false, reason: "network" };
+    }
+    if (response.status === 404 || response.status === 405) {
+      personSettingsBridgeMissing = true;
+      return { ok: false, reason: "missing" };
+    }
+    return { ok: response.ok };
+  }
+
+  async function pushPersonSettingsToShopTabs(settings) {
+    if (!settings || !runtime?.tabs?.query) return { pushed: 0 };
+    let tabs = [];
+    try {
+      tabs = await runtime.tabs.query({ url: ["https://shop.blackforestautomotive.com/*"] });
+    } catch {
+      return { pushed: 0 };
+    }
+    const payload = JSON.stringify(settings);
+    let pushed = 0;
+    for (const tab of tabs || []) {
+      if (tab?.id == null) continue;
+      try {
+        await runtime.tabs.sendMessage(tab.id, {
+          type: "apply-person-settings",
+          payload: settings,
+        });
+        pushed += 1;
+      } catch {
+        // content script may be absent on this tab
+      }
+    }
+    await storageSet({ deskPersonSettingsCache: payload, deskPersonSettingsAt: Date.now() });
+    return { pushed };
+  }
+
+  async function tickPersonSettingsWatch() {
+    const data = await fetchToolsPersonSettings();
+    if (!data || typeof data !== "object") return;
+    const json = JSON.stringify(data);
+    if (json === lastPersonSettingsJson) return;
+    lastPersonSettingsJson = json;
+    await pushPersonSettingsToShopTabs(data);
+  }
+
+  function startPersonSettingsBridge() {
+    if (personSettingsTimer != null) return { ok: true, already: true };
+    try {
+      personSettingsTimer = setInterval(() => {
+        void tickPersonSettingsWatch();
+      }, PERSON_SETTINGS_WATCH_MS);
+      void tickPersonSettingsWatch();
+      return { ok: true, periodMs: PERSON_SETTINGS_WATCH_MS };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  function startToolsBridgeWatch() {
+    if (bridgeWatchTimer != null) return { ok: true, already: true };
+    try {
+      bridgeWatchTimer = setInterval(() => {
+        void tickToolsBridgeWatch();
+      }, BRIDGE_WATCH_MS);
+      void tickToolsBridgeWatch();
+      return { ok: true, periodMs: BRIDGE_WATCH_MS };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  /**
    * Background happy path:
    * 1) Tools bridge up + locked → clear Firefox bf_shop_gate (no stale website unlock)
    * 2) Tools bridge up + session → import Bearer + exchange into Firefox jar
    * 3) else from-gate (site cookie) then Tools :8788 for Desk lot names
-   * Throttled so alarms / tab loads / idle do not spam the shop (~20/min cap).
+   * Alarm/idle path is throttled; bridge-watch edges bypass this (push on change).
    */
   let autoUnlockInFlight = null;
   async function tryAutoUnlock({ force = false, reason = "" } = {}) {
@@ -817,7 +973,9 @@
       try {
         const stored = await storageGet(["deskAutoUnlockAt"]);
         const lastAt = Number(stored.deskAutoUnlockAt || 0);
-        const minGapMs = force ? 5_000 : 30_000;
+        const bridgeEdge = reason === "bridge-edge" || reason === "bridge-watch";
+        // Bridge edges must be near-instant; force clicks ~1s; alarm/idle backup ~8s.
+        const minGapMs = bridgeEdge ? 0 : force ? 1_000 : 8_000;
         if (lastAt && Date.now() - lastAt < minGapMs) {
           const health = await probeToolsBridgeHealth();
           if (health.reachable && health.hasSession === false) {
@@ -994,6 +1152,10 @@
   api.reloadShopUnlockTabs = reloadShopUnlockTabs;
   api.ensureWidgetToken = ensureWidgetToken;
   api.tryAutoUnlock = tryAutoUnlock;
+  api.startToolsBridgeWatch = startToolsBridgeWatch;
+  api.startPersonSettingsBridge = startPersonSettingsBridge;
+  api.publishPersonSettingsToTools = publishPersonSettingsToTools;
+  api.pushPersonSettingsToShopTabs = pushPersonSettingsToShopTabs;
   api.hasFreshWidgetToken = hasFreshWidgetToken;
   api.refreshUnlockBadge = refreshUnlockBadge;
   api.resolveLotLastNames = resolveLotLastNames;
