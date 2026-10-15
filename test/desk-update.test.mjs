@@ -60,7 +60,7 @@ test("popup Update never stages a Desktop XPI or tells Logan to Install from Fil
   assert.equal(/startToolsBridgeWatch/.test(await readFile(path.join(root, "extension/shared/lot-names.js"), "utf8")), true);
 });
 
-function loadBackground({ feedVersion, localVersion = "0.1.28", chromium = false, downloadFails = false }) {
+function loadBackground({ feedVersion, localVersion = "0.1.28", chromium = false, downloadFails = false, fetchImpl = null }) {
   const calls = { tabs: [], fetches: [], reloads: 0, downloads: [], alarms: [] };
   const noopEvent = { addListener() {} };
   const messageListeners = [];
@@ -129,8 +129,9 @@ function loadBackground({ feedVersion, localVersion = "0.1.28", chromium = false
     URL,
     Date,
     JSON,
-    fetch: async (url) => {
+    fetch: async (url, init) => {
       calls.fetches.push(String(url));
+      if (fetchImpl) return fetchImpl(String(url), init);
       if (String(url).includes("updates.json")) return { ok: true, status: 200, json: async () => feed };
       return { ok: false, status: 404, json: async () => ({}) };
     },
@@ -293,4 +294,82 @@ test("reload-extension asks the runtime to reload", async () => {
   assert.equal(result.ok, true);
   await new Promise((resolve) => setTimeout(resolve, 300));
   assert.equal(calls.reloads, 1);
+});
+
+const json = (body) => ({ ok: true, status: 200, json: async () => body });
+const blocked = () => {
+  throw new TypeError("NetworkError when attempting to fetch resource.");
+};
+
+test("apply-update still finds the signed XPI when updates.json is blocked (CORS / missing host permission)", async () => {
+  const { calls, send } = loadBackground({
+    feedVersion: "0.1.33",
+    fetchImpl: async (url) => {
+      if (url.includes("updates.json")) return blocked();
+      if (url.startsWith("https://api.github.com/")) {
+        return json({
+          assets: [
+            { name: "Black.Forest.Desk-0.1.32.xpi", browser_download_url: "https://example.test/Black.Forest.Desk-0.1.32.xpi" },
+            { name: "Black.Forest.Desk-0.1.33.xpi", browser_download_url: "https://example.test/Black.Forest.Desk-0.1.33.xpi" },
+            { name: "Black.Forest.Desk-0.1.33-amo-hosted.xpi", browser_download_url: "https://example.test/amo.xpi" },
+            { name: "updates.json", browser_download_url: "https://example.test/updates.json" },
+          ],
+        });
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    },
+  });
+  const result = await send({ type: "apply-update" });
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "firefox_xpi_prompt");
+  assert.equal(result.source, "github-api");
+  assert.deepEqual(
+    calls.tabs.map((t) => t.url),
+    ["https://example.test/Black.Forest.Desk-0.1.33.xpi"],
+  );
+});
+
+test("apply-update falls back to raw version.json and the versioned release XPI link", async () => {
+  const { calls, send } = loadBackground({
+    feedVersion: "0.1.33",
+    fetchImpl: async (url) => {
+      if (url.includes("updates.json")) return blocked();
+      if (url.startsWith("https://api.github.com/")) return { ok: false, status: 403, json: async () => ({}) };
+      if (url.includes("raw.githubusercontent.com")) return json({ version: "0.1.33" });
+      return { ok: false, status: 404, json: async () => ({}) };
+    },
+  });
+  const result = await send({ type: "apply-update" });
+  assert.equal(result.mode, "firefox_xpi_prompt");
+  assert.equal(result.source, "version.json");
+  assert.deepEqual(calls.tabs.map((t) => t.url), [
+    "https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension/Black.Forest.Desk-0.1.33.xpi",
+  ]);
+});
+
+test("apply-update reports which feed sources failed when every one is unreachable", async () => {
+  const { calls, send } = loadBackground({ feedVersion: "0.1.33", fetchImpl: async () => blocked() });
+  const result = await send({ type: "apply-update" });
+  assert.equal(result.ok, false);
+  assert.equal(result.mode, "feed_unreachable");
+  assert.match(result.message, /updates\.json blocked/);
+  assert.match(result.message, /GitHub API blocked/);
+  assert.match(result.message, /version\.json blocked/);
+  assert.match(result.message, /about:addons/);
+  assert.equal(calls.tabs.length, 0);
+});
+
+test("Chromium apply-update also survives a blocked updates.json", async () => {
+  const { calls, send } = loadBackground({
+    feedVersion: "0.1.33",
+    chromium: true,
+    fetchImpl: async (url) => {
+      if (url.includes("updates.json")) return blocked();
+      if (url.includes("raw.githubusercontent.com")) return json({ version: "0.1.33" });
+      return { ok: false, status: 404, json: async () => ({}) };
+    },
+  });
+  const result = await send({ type: "apply-update" });
+  assert.equal(result.mode, "chromium_zip");
+  assert.equal(calls.downloads.length, 1);
 });

@@ -163,24 +163,86 @@
   const UPDATES_JSON_URL = `${RELEASE_XPI_BASE}/updates.json`;
   const DESK_ADDON_ID = "black-forest-desk@blackforestautomotive.com";
 
-  async function fetchSignedFeedUpdate() {
+  const RELEASE_API_URL =
+    "https://api.github.com/repos/BlackForestPorsche/label-connect/releases/tags/desk-extension";
+  const XPI_ASSET_RE = /^Black\.Forest\.Desk-(\d+(?:\.\d+)*)\.xpi$/;
+
+  async function fetchFeedJson(url, label, errors) {
     try {
-      const response = await fetch(`${UPDATES_JSON_URL}?t=${Date.now()}`, { cache: "no-store" });
-      if (!response.ok) return null;
-      const data = await response.json();
-      const updates = data?.addons?.[DESK_ADDON_ID]?.updates;
-      if (!Array.isArray(updates) || !updates.length) return null;
-      let best = updates[0];
-      for (const entry of updates) {
-        if (entry?.version && isNewer(entry.version, best.version)) best = entry;
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) {
+        errors.push(`${label} HTTP ${response.status}`);
+        return null;
       }
-      const version = String(best.version || "");
-      const updateLink = String(best.update_link || "");
-      if (!version || !updateLink) return null;
-      return { version, updateLink, updateHash: best.update_hash ? String(best.update_hash) : null };
-    } catch {
+      return await response.json();
+    } catch (error) {
+      errors.push(`${label} ${error?.name === "TypeError" ? "blocked" : error?.name || "failed"}`);
       return null;
     }
+  }
+
+  function bestUpdate(items) {
+    let best = null;
+    for (const item of items) {
+      if (item?.version && (!best || isNewer(item.version, best.version))) best = item;
+    }
+    return best;
+  }
+
+  /**
+   * Resolve the newest signed Desk build. updates.json is canonical, but its GitHub download URL
+   * redirects to release-assets.githubusercontent.com, which sends no CORS header: Firefox blocks
+   * it whenever that host permission was not granted to this install (MV3 host permissions are
+   * user-grantable; a Hub-signed install can lack them). The GitHub API and raw.githubusercontent
+   * answer with Access-Control-Allow-Origin: *, so they work with no host permission at all.
+   */
+  async function fetchSignedFeedUpdate() {
+    const errors = [];
+    const stamp = Date.now();
+
+    const feed = await fetchFeedJson(`${UPDATES_JSON_URL}?t=${stamp}`, "updates.json", errors);
+    const entry = bestUpdate(feed?.addons?.[DESK_ADDON_ID]?.updates || []);
+    if (entry?.update_link) {
+      return {
+        version: String(entry.version),
+        updateLink: String(entry.update_link),
+        updateHash: entry.update_hash ? String(entry.update_hash) : null,
+        source: "updates.json",
+        errors,
+      };
+    }
+
+    const release = await fetchFeedJson(RELEASE_API_URL, "GitHub API", errors);
+    const assets = [];
+    for (const asset of Array.isArray(release?.assets) ? release.assets : []) {
+      const match = XPI_ASSET_RE.exec(String(asset?.name || ""));
+      if (match && asset.browser_download_url) {
+        assets.push({ version: match[1], url: String(asset.browser_download_url), digest: asset.digest });
+      }
+    }
+    const asset = bestUpdate(assets);
+    if (asset) {
+      return {
+        version: asset.version,
+        updateLink: asset.url,
+        updateHash: asset.digest ? String(asset.digest) : null,
+        source: "github-api",
+        errors,
+      };
+    }
+
+    const remote = await fetchFeedJson(`${VERSION_URL}?t=${stamp}`, "version.json", errors);
+    const remoteVersion = remote?.version ? String(remote.version) : "";
+    if (remoteVersion) {
+      return {
+        version: remoteVersion,
+        updateLink: `${RELEASE_XPI_BASE}/Black.Forest.Desk-${remoteVersion}.xpi`,
+        updateHash: null,
+        source: "version.json",
+        errors,
+      };
+    }
+    return { error: true, errors };
   }
 
   /**
@@ -251,15 +313,7 @@
    */
   async function chromiumFeedVersion() {
     const feed = await fetchSignedFeedUpdate();
-    if (feed) return feed.version;
-    try {
-      const response = await fetch(`${VERSION_URL}?t=${Date.now()}`, { cache: "no-store" });
-      if (!response.ok) return null;
-      const remote = await response.json();
-      return remote?.version ? String(remote.version) : null;
-    } catch {
-      return null;
-    }
+    return feed.error ? null : feed.version;
   }
 
   /**
@@ -318,14 +372,14 @@
     if (IS_CHROMIUM) return applyChromiumUpdate();
     const local = localVersion();
     const feed = await fetchSignedFeedUpdate();
-    if (!feed) {
+    if (feed.error) {
       return {
         ok: false,
         error: "feed_unreachable",
         mode: "feed_unreachable",
         applied: false,
-        message:
-          "Couldn’t reach the Desk update feed. Try again, or open about:addons → ⚙ → Check for Updates.",
+        detail: feed.errors,
+        message: `Couldn’t reach the Desk update feed (${feed.errors.join("; ") || "no response"}). Try again, or open about:addons → ⚙ → Check for Updates.`,
       };
     }
     if (!isNewer(feed.version, local)) {
@@ -355,9 +409,10 @@
         ok: true,
         mode: "firefox_xpi_prompt",
         version: feed.version,
+        source: feed.source,
         applied: false,
         awaitingFirefox: true,
-        message: `Firefox is asking to install Desk ${feed.version}. Click Allow, then Add — Desk reloads itself. Still Installed ${local} until you do.`,
+        message: `Firefox is asking to install Desk ${feed.version}. Click Allow, then Add — Desk reloads itself. Still Installed ${local} until you do. If Firefox only saves the file, open about:addons → ⚙ → Check for Updates.`,
       };
     }
     return {
