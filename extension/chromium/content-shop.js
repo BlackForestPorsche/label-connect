@@ -2,12 +2,28 @@
 /**
  * Shop site ↔ Desk:
  * - Capture unlock JSON widgetToken when present
- * - Capture lockShop / clearGateSession → lock Tools via :8788 DELETE
+ * - Capture website Lock → site-lock → Tools DELETE + POST /v1/lock
  * - On shop page load: Tools→website unlock (Bearer :8788 → exchange → bf_shop_gate)
  *   and from-gate nudge when the jar already has a gate (Desk lot names)
+ *
+ * Live shop Lock (beta 0.1.36+) posts to `/_serverFn/<hash>` — the client bundle has
+ * no `lockShop` string. Matching only lockShop|clearGateSession misses that path, so
+ * Tools stayed logged in after website Lock (#67 / website-lock-to-tools-fix.md).
+ * Detect the known lock hash, and also treat “recent /_serverFn POST → navigate to
+ * /unlock” (or sessionStorage bf_shop_gate clear) as Lock (survives hash churn).
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
+
+  /** Live shop lockShop serverFn id (beta 0.1.36 bundle). Redeploys may change this. */
+  const LIVE_LOCK_SERVERFN =
+    "462df016712e9460dba3b3206037fe5482e55863b0e6af87f8c2b89dff89fc9a";
+
+  /** Window after a /_serverFn POST during which /unlock navigation means Lock. */
+  const SERVERFN_UNLOCK_NAV_MS = 5_000;
+
+  let recentServerFnPostAt = 0;
+  let lastReportedSiteLockAt = 0;
 
   function extractUnlock(raw) {
     if (typeof raw !== "string" || raw.indexOf("widgetToken") === -1) return null;
@@ -34,11 +50,21 @@
 
   function looksLikeLock(url, method, body) {
     if (String(method || "GET").toUpperCase() !== "POST") return false;
-    const hay = `${url || ""}\n${body == null ? "" : String(body)}`;
-    if (/unlockShop|widgetToken|widgetExpiresAt/i.test(hay)) return false;
+    const urlText = String(url || "");
+    const hay = `${urlText}\n${body == null ? "" : String(body)}`;
+    // Never treat unlock / session mint as lock.
+    if (/unlockShop|widgetToken|widgetExpiresAt|from-gate|gateToken/i.test(hay)) return false;
     if (/widget\/logout/i.test(hay)) return true;
     if (/\/api\/widget\/session/i.test(hay)) return false;
-    return /lockShop|clearGateSession/i.test(hay);
+    // Hashed TanStack lock (name not present in minified client) — #67.
+    if (new RegExp(`/_serverFn/${LIVE_LOCK_SERVERFN}\\b`, "i").test(urlText)) {
+      return true;
+    }
+    if (/\/_serverFn\/[^/?#]*lockShop/i.test(urlText)) return true;
+    // Legacy / string-named server fns + RSC action names.
+    return /lockShop|clearGateSession|clear_gate_session|lock_shop|gate\.ts.*lockShop|\/lockShop\b|_serverFn_[^"'\s]*lockShop|action[^"'\s]*lockShop/i.test(
+      hay,
+    );
   }
 
   function requestUrl(input) {
@@ -57,19 +83,62 @@
     if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
       return body.toString();
     }
-    return "";
+    if (typeof FormData !== "undefined" && body instanceof FormData) {
+      try {
+        const parts = [];
+        body.forEach((value, key) => {
+          parts.push(`${key}=${typeof value === "string" ? value : ""}`);
+        });
+        return parts.join("&");
+      } catch {
+        return "FormData";
+      }
+    }
+    if (typeof Blob !== "undefined" && body instanceof Blob) {
+      return "";
+    }
+    try {
+      return String(body);
+    } catch {
+      return "";
+    }
+  }
+
+  /** lockShop often returns bare {ok:true} with empty body on the request. */
+  function looksLikeLockResponse(url, method, text) {
+    if (String(method || "GET").toUpperCase() !== "POST") return false;
+    if (looksLikeLock(url, method, text || "")) return true;
+    const bareOk =
+      typeof text === "string" &&
+      (/^\s*\{\s*"ok"\s*:\s*true\s*\}\s*$/.test(text) ||
+        /^\s*\{\s*"ok"\s*:\s*true\s*,\s*"result"\s*:\s*\{\s*"ok"\s*:\s*true\s*\}\s*\}\s*$/.test(
+          text,
+        ));
+    const urlHay = String(url || "");
+    return Boolean(
+      bareOk && /lockShop|clearGateSession|clear_gate_session|lock_shop/i.test(urlHay),
+    );
   }
 
   function publish(session) {
     if (!session || !runtime?.runtime?.sendMessage) return;
-    try {
+    const send = () =>
       runtime.runtime.sendMessage({ type: "shop-site-session", payload: session });
+    try {
+      // Website unlock JSON → Desk → POST :8788 (site→Tools). Retry once on reject.
+      Promise.resolve(send())
+        .catch(() => send())
+        .catch(() => {});
     } catch {
       // ignore
     }
   }
 
   function reportSiteLock() {
+    const now = Date.now();
+    // Soft-nav + fetch can both fire; debounce so Tools gets one DELETE.
+    if (now - lastReportedSiteLockAt < 800) return;
+    lastReportedSiteLockAt = now;
     if (!runtime?.runtime?.sendMessage) return;
     try {
       runtime.runtime.sendMessage({ type: "site-lock" }).catch(() => {});
@@ -78,30 +147,68 @@
     }
   }
 
+  function noteServerFnPost(url, method) {
+    if (String(method || "GET").toUpperCase() !== "POST") return;
+    if (!/\/_serverFn\//i.test(String(url || ""))) return;
+    recentServerFnPostAt = Date.now();
+  }
+
+  function maybeLockFromUnlockNavigation() {
+    try {
+      if (!/\/unlock\b/i.test(location.pathname || "")) return;
+      if (Date.now() - recentServerFnPostAt > SERVERFN_UNLOCK_NAV_MS) return;
+      reportSiteLock();
+    } catch {
+      // ignore
+    }
+  }
+
   function onShopLoadSync() {
     if (!runtime?.runtime?.sendMessage) return;
+    const onUnlock = /\/unlock\b/i.test(location.pathname || "");
     try {
-      // Tools unlock → Firefox jar (exchange). Force when already on /unlock so a
-      // stale gate / post-lock quiet cannot leave the SPA stuck.
-      const onUnlock = /\/unlock\b/i.test(location.pathname || "");
+      // Locked /unlock: Tools→site ONLY (never site-session-import remint).
+      // Unlocked pages: site→Tools FIRST so a fresh website unlock publishes to
+      // :8788 before tools-to-site can clear the Firefox gate (unlock flash).
+      if (onUnlock) {
+        // Delivery fallback: full /unlock load asks background to DELETE+POST
+        // if Tools still has a session (skipped during unlock-hold).
+        runtime.runtime
+          .sendMessage({ type: "site-unlock-page" })
+          .catch(() => {});
+        runtime.runtime
+          .sendMessage({
+            type: "tools-to-site-unlock",
+            forceExchange: false,
+            skipSitePublish: true,
+          })
+          .then((response) => {
+            if (response && response.ok && response.shouldReload) {
+              location.reload();
+            }
+          })
+          .catch(() => {});
+        return;
+      }
       runtime.runtime
-        .sendMessage({ type: "tools-to-site-unlock", forceExchange: onUnlock })
+        .sendMessage({ type: "site-session-import" })
+        .catch(() => {})
+        .then(() =>
+          runtime.runtime.sendMessage({
+            type: "tools-to-site-unlock",
+            forceExchange: false,
+          }),
+        )
         .then((response) => {
           if (!response) return;
-          if (response.ok && response.shouldReload && onUnlock) {
+          if (response.skipped === "unlock_hold" || response.reason === "unlock_hold") return;
+          if (response.locked && response.shouldReload) {
             location.reload();
-            return;
-          }
-          if (response.locked && response.shouldReload && !onUnlock) {
+          } else if (response.ok && response.shouldReload) {
             location.reload();
           }
         })
         .catch(() => {});
-    } catch {
-      // ignore
-    }
-    try {
-      runtime.runtime.sendMessage({ type: "site-session-import" });
     } catch {
       // ignore
     }
@@ -114,8 +221,11 @@
     const url = requestUrl(input);
     const method = init.method || (input && input.method) || "GET";
     try {
+      // Fire site-lock BEFORE await — /unlock navigation must not beat Tools DELETE.
       if (looksLikeLock(url, method, bodyText(init.body))) {
         reportSiteLock();
+      } else {
+        noteServerFnPost(url, method);
       }
     } catch {
       // ignore
@@ -128,8 +238,22 @@
         clone
           .text()
           .then((text) => {
+            try {
+              if (looksLikeLockResponse(url, method, text)) reportSiteLock();
+            } catch {
+              // ignore
+            }
             const session = extractUnlock(text);
             if (session) publish(session);
+            // Bare {ok:true} on known lock URL (Tools preload parity / #67).
+            if (
+              response.ok &&
+              looksLikeLock(url, method, "") &&
+              typeof text === "string" &&
+              /^\s*\{\s*"ok"\s*:\s*true/.test(text)
+            ) {
+              reportSiteLock();
+            }
           })
           .catch(() => {});
       }
@@ -150,12 +274,17 @@
     try {
       if (looksLikeLock(this.__bfUrl, this.__bfMethod, args[0])) {
         reportSiteLock();
+      } else {
+        noteServerFnPost(this.__bfUrl, this.__bfMethod);
       }
     } catch {
       // ignore
     }
     this.addEventListener("load", function onLoad() {
       try {
+        if (looksLikeLockResponse(this.__bfUrl, this.__bfMethod, this.responseText)) {
+          reportSiteLock();
+        }
         const session = extractUnlock(this.responseText);
         if (session) publish(session);
       } catch {
@@ -164,6 +293,185 @@
     });
     return xhrSend.apply(this, args);
   };
+
+  // Soft SPA Lock: await lockFn(); clear sessionStorage gate; router → /unlock.
+  // Only after a recent /_serverFn POST — bare /unlock must not lock Tools
+  // (unlock bounce / Tools→site heal).
+  try {
+    const wrapHistory = (fn) =>
+      function patchedHistory(...args) {
+        const result = fn.apply(this, args);
+        maybeLockFromUnlockNavigation();
+        return result;
+      };
+    if (typeof history !== "undefined") {
+      if (typeof history.pushState === "function") {
+        history.pushState = wrapHistory(history.pushState.bind(history));
+      }
+      if (typeof history.replaceState === "function") {
+        history.replaceState = wrapHistory(history.replaceState.bind(history));
+      }
+    }
+    window.addEventListener("popstate", () => maybeLockFromUnlockNavigation());
+  } catch {
+    // ignore
+  }
+
+  // sessionStorage bf_shop_gate cleared by Lock (client mirror of gate) — #67.
+  try {
+    let hadGate = false;
+    try {
+      hadGate = Boolean(sessionStorage.getItem("bf_shop_gate"));
+    } catch {
+      hadGate = false;
+    }
+    const originalRemove = sessionStorage.removeItem.bind(sessionStorage);
+    sessionStorage.removeItem = function removeItemPatched(key) {
+      const result = originalRemove(key);
+      try {
+        if (key === "bf_shop_gate" && hadGate) {
+          hadGate = false;
+          if (Date.now() - recentServerFnPostAt < SERVERFN_UNLOCK_NAV_MS) {
+            reportSiteLock();
+          }
+        }
+      } catch {
+        // ignore
+      }
+      return result;
+    };
+    const originalSet = sessionStorage.setItem.bind(sessionStorage);
+    sessionStorage.setItem = function setItemPatched(key, value) {
+      const result = originalSet(key, value);
+      if (key === "bf_shop_gate" && value) hadGate = true;
+      return result;
+    };
+  } catch {
+    // sessionStorage may be unavailable
+  }
+
+  const FUN_MODES = [
+    "pirate",
+    "west",
+    "alien",
+    "medieval",
+    "odyssey",
+    "tron",
+    "casino",
+    "arcade",
+    "dota",
+    "race",
+    "surfer",
+    "seasonal",
+  ];
+
+  function applyToolsPersonSettings(message) {
+    const person = message && message.person ? String(message.person) : "";
+    const settings =
+      message && message.settings && typeof message.settings === "object" ? message.settings : null;
+    if (!person || !settings) return { ok: false };
+    try {
+      const key = "bf-person-settings";
+      let all = {};
+      try {
+        all = JSON.parse(localStorage.getItem(key) || "{}") || {};
+      } catch {
+        all = {};
+      }
+      if (!all || typeof all !== "object") all = {};
+      const prev = all[person] && typeof all[person] === "object" ? all[person] : {};
+      all[person] = { ...prev, ...settings };
+      localStorage.setItem(key, JSON.stringify(all));
+      localStorage.setItem("bf-last-person", person);
+      const mode = settings.funMode || "off";
+      for (const name of FUN_MODES) {
+        document.documentElement.classList.toggle(name, name === mode);
+      }
+      if (mode === "off") {
+        for (const name of FUN_MODES) document.documentElement.classList.remove(name);
+      }
+      const until = Date.now() + 20_000;
+      const stamp = Number(message.updatedAt) || Date.now();
+      localStorage.setItem("bf-tools-prefs-at", String(stamp));
+      const hold = window.setInterval(() => {
+        if (Date.now() > until) {
+          window.clearInterval(hold);
+          return;
+        }
+        try {
+          const again = JSON.parse(localStorage.getItem(key) || "{}") || {};
+          const cur = again[person] && typeof again[person] === "object" ? again[person] : {};
+          if (cur.funMode !== mode) {
+            again[person] = { ...cur, ...settings, funMode: mode };
+            localStorage.setItem(key, JSON.stringify(again));
+            for (const name of FUN_MODES) {
+              document.documentElement.classList.toggle(name, name === mode);
+            }
+            if (mode === "off") {
+              for (const name of FUN_MODES) document.documentElement.classList.remove(name);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }, 500);
+      return { ok: true, funMode: mode };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  if (runtime?.runtime?.onMessage?.addListener) {
+    try {
+      runtime.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+        if (!message || message.type !== "apply-tools-person-settings") return false;
+        sendResponse(applyToolsPersonSettings(message));
+        return false;
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  // Immediate website → Tools fun on/off (last user action).
+  let prefsPushTimer = 0;
+  function pushLocalPrefsToTools() {
+    try {
+      const person = localStorage.getItem("bf-last-person") || "";
+      const all = JSON.parse(localStorage.getItem("bf-person-settings") || "{}") || {};
+      const settings = person && all[person] && typeof all[person] === "object" ? all[person] : null;
+      if (!person || !settings || !runtime?.runtime?.sendMessage) return;
+      const toolsAt = Number(localStorage.getItem("bf-tools-prefs-at") || 0);
+      if (toolsAt && Date.now() - toolsAt < 600) return;
+      runtime.runtime
+        .sendMessage({
+          type: "site-person-settings",
+          person,
+          settings,
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+  }
+  window.addEventListener("storage", (event) => {
+    if (event.key !== "bf-person-settings" && event.key !== "bf-last-person") return;
+    window.clearTimeout(prefsPushTimer);
+    prefsPushTimer = window.setTimeout(pushLocalPrefsToTools, 50);
+  });
+  let lastLocalPrefsFp = "";
+  window.setInterval(() => {
+    try {
+      const person = localStorage.getItem("bf-last-person") || "";
+      const raw = localStorage.getItem("bf-person-settings") || "";
+      const fp = `${person}|${raw}`;
+      if (fp === lastLocalPrefsFp) return;
+      lastLocalPrefsFp = fp;
+      pushLocalPrefsToTools();
+    } catch {
+      // ignore
+    }
+  }, 350);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", onShopLoadSync, { once: true });
