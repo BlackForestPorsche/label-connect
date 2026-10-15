@@ -50,8 +50,8 @@
       ],
       "js": [
         "config.js",
-        "toast.js",
         "scrape.js",
+        "toast.js",
         "content.js"
       ],
       "run_at": "document_idle"
