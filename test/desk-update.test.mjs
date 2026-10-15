@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import vm from "node:vm";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -39,28 +41,125 @@ test("resolveLabelConnectRoot finds this checkout", async () => {
   assert.match(String(version), /^\d+\.\d+\.\d+/);
 });
 
-test("popup and background no longer tell users to run bash update script", async () => {
+test("popup Update never stages a Desktop XPI or tells Logan to Install from File", async () => {
   const { readFile } = await import("node:fs/promises");
   const popup = await readFile(path.join(root, "extension/shared/popup.js"), "utf8");
   const background = await readFile(path.join(root, "extension/shared/background.js"), "utf8");
   assert.equal(/update-desk-extension\.sh/.test(popup), false);
-  assert.equal(/on the desk run/.test(popup), false);
-  assert.equal(/bash ~\/label-connect/.test(popup), false);
   assert.equal(/apply-update/.test(background), true);
-  assert.equal(/\/api\/update-desk-extension/.test(background), true);
-  assert.equal(/run update-desk-extension\.sh/.test(background), false);
-  assert.equal(/hub_signed_kept/.test(background), true);
-  assert.equal(/signed_staged/.test(background), true);
-  assert.equal(/requestUpdateCheck/.test(background), true);
+  assert.equal(/\/api\/update-desk-extension/.test(background), false);
+  assert.equal(/signed_staged/.test(background), false);
+  assert.equal(/signed_staged/.test(popup), false);
+  assert.equal(/NOT applied/.test(background), false);
+  assert.equal(/NOT applied/.test(popup), false);
+  assert.equal(/Install Add-on From File/.test(background), false);
   assert.equal(/onUpdateAvailable/.test(background), true);
-  assert.equal(/startToolsBridgeWatch/.test(background), true);
-  assert.equal(/NOT applied/.test(background), true);
-  assert.equal(/NOT applied/.test(popup), true);
-  assert.equal(/startToolsBridgeWatch/.test(await readFile(path.join(root, "extension/shared/lot-names.js"), "utf8")), true);
+  assert.equal(/requestUpdateCheck\(/.test(background), false);
+  assert.equal(/firefox_xpi_prompt/.test(background), true);
   assert.equal(/updates\.json/.test(background), true);
-  assert.equal(/signed_staged/.test(popup), true);
-  assert.equal(/Desk update failed/.test(popup), false);
-  assert.equal(/mode !== "hub_upload"/.test(popup) || /mode === "hub_upload"/.test(popup) || /signed_staged/.test(popup), true);
+  assert.equal(/startToolsBridgeWatch/.test(await readFile(path.join(root, "extension/shared/lot-names.js"), "utf8")), true);
+});
+
+function loadBackground({ feedVersion, localVersion = "0.1.28" }) {
+  const calls = { tabs: [], fetches: [], reloads: 0 };
+  const noopEvent = { addListener() {} };
+  const messageListeners = [];
+  const feed = {
+    addons: {
+      "black-forest-desk@blackforestautomotive.com": {
+        updates: [
+          {
+            version: feedVersion,
+            update_link: `https://example.test/Black.Forest.Desk-${feedVersion}.xpi`,
+          },
+        ],
+      },
+    },
+  };
+  const store = {};
+  const runtimeApi = {
+    getManifest: () => ({ version: localVersion }),
+    onMessage: { addListener: (fn) => messageListeners.push(fn) },
+    getBrowserInfo: async () => ({ name: "Firefox" }),
+    onUpdateAvailable: noopEvent,
+    onInstalled: noopEvent,
+    onStartup: noopEvent,
+    reload: () => {
+      calls.reloads += 1;
+    },
+  };
+  const browser = {
+    runtime: runtimeApi,
+    storage: {
+      local: {
+        get: async () => ({}),
+        set: async (patch) => Object.assign(store, patch),
+      },
+      onChanged: noopEvent,
+    },
+    tabs: {
+      create: async (opts) => {
+        calls.tabs.push(opts);
+        return { id: 1 };
+      },
+      onUpdated: noopEvent,
+      onRemoved: noopEvent,
+      onActivated: noopEvent,
+      query: async () => [],
+    },
+    alarms: { create() {}, onAlarm: noopEvent },
+    cookies: { onChanged: noopEvent, get: async () => null, set: async () => null, remove: async () => null },
+    idle: { onStateChanged: noopEvent, setDetectionInterval() {} },
+    action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {} },
+  };
+  const sandbox = {
+    browser,
+    console,
+    setTimeout,
+    clearTimeout,
+    setInterval: () => 0,
+    clearInterval() {},
+    URL,
+    Date,
+    JSON,
+    fetch: async (url) => {
+      calls.fetches.push(String(url));
+      if (String(url).includes("updates.json")) return { ok: true, status: 200, json: async () => feed };
+      return { ok: false, status: 404, json: async () => ({}) };
+    },
+  };
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(path.join(root, "extension/shared/background.js"), "utf8"), sandbox);
+  const send = (message) =>
+    new Promise((resolve) => {
+      for (const fn of messageListeners) {
+        if (fn(message, {}, resolve) === true) return;
+      }
+      resolve(undefined);
+    });
+  return { calls, send };
+}
+
+test("apply-update on Firefox without requestUpdateCheck opens the signed XPI prompt, no staging", async () => {
+  const { calls, send } = loadBackground({ feedVersion: "0.1.29" });
+  const result = await send({ type: "apply-update" });
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "firefox_xpi_prompt");
+  assert.equal(result.applied, false);
+  assert.deepEqual(
+    calls.tabs.map((t) => t.url),
+    ["https://example.test/Black.Forest.Desk-0.1.29.xpi"],
+  );
+  assert.equal(calls.fetches.some((u) => u.includes("/api/update-desk-extension")), false);
+  assert.equal(/NOT applied|Install Add-on From File|Desktop/.test(result.message), false);
+});
+
+test("apply-update says up to date when the feed is not newer", async () => {
+  const { calls, send } = loadBackground({ feedVersion: "0.1.28" });
+  const result = await send({ type: "apply-update" });
+  assert.equal(result.mode, "up_to_date");
+  assert.equal(calls.tabs.length, 0);
 });
 
 test("isNewerVersion compares semver-ish strings", () => {
