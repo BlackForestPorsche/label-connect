@@ -200,11 +200,13 @@
       const expiresIso = Number.isFinite(parsedExpiry)
         ? new Date(parsedExpiry).toISOString()
         : new Date(Date.now() + ttlMs).toISOString();
-      await publishSessionToToolsBridge({
+      const published = await publishSessionToToolsBridge({
         token,
         expiresAt: expiresIso,
         person: normalized,
       });
+      if (published.ok) armUnlockHold();
+      return { ok: true, person: normalized, source: src, toolsPublished: Boolean(published.ok) };
     }
     return { ok: true, person: normalized, source: src };
   }
@@ -281,10 +283,10 @@
         return { ok: false, reason: "bridge_unreachable" };
       }
     };
-    // Always DELETE then POST /v1/lock — DELETE-only reminted ~24s when Firefox gate stayed (Manjaro).
+    // POST /v1/lock first (SPA + Electron jar), then DELETE shared file (probe: both).
+    let locked = await tryOnce("POST", "/v1/lock");
     const deleted = await tryOnce("DELETE", "/v1/widget-session");
-    const locked = await tryOnce("POST", "/v1/lock");
-    if (locked.ok) return { ...locked, deleted: deleted.ok, via: "delete+post-lock" };
+    if (locked.ok) return { ...locked, deleted: deleted.ok, via: "post-lock+delete" };
     if (deleted.ok) return { ...deleted, via: "delete-only" };
     if (deleted.reason === "lock_unsupported" || locked.reason === "lock_unsupported") {
       return { ok: false, reason: "lock_unsupported" };
@@ -314,14 +316,15 @@
       shopWidgetTokenSource: "",
     });
     await setPinBadge(true);
-    const locked = await lockToolsViaBridge();
-    if (locked.ok) {
-      const health = await probeToolsBridgeHealth();
-      if (health.reachable && health.hasSession) {
-        await lockToolsViaBridge();
+    // POST+DELETE; retry while Tools still shows a session (gate republish ~24s).
+    let locked = await lockToolsViaBridge();
+    for (let i = 0; i < 4; i += 1) {
+      if (unlockHoldActive()) {
+        return { ok: false, skipped: "unlock_hold", reason: "unlock_hold" };
       }
-    } else {
-      await lockToolsViaBridge();
+      const health = await probeToolsBridgeHealth();
+      if (!health.reachable || health.hasSession === false) break;
+      locked = await lockToolsViaBridge();
     }
     if (hadGate && reloadShopTabs && runtime?.tabs?.query && runtime?.tabs?.reload) {
       try {
