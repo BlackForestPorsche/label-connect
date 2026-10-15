@@ -1,0 +1,49 @@
+name: assemble-hub-026-slices
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "tmp/desk-026-slices/**"
+      - ".github/workflows/assemble-hub-026-slices.yml"
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/desk-026-hub-ship-b196
+      - name: Assemble unique slices to hub paths
+        run: |
+          python3 <<'PY'
+          import hashlib, pathlib
+          targets = [(['tmp/desk-026-apply/extension__shared__lot-names.js.00', 'tmp/desk-026-apply/extension__firefox__lot-names.js.00', 'tmp/desk-026-apply/extension__chromium__lot-names.js.00'], 21, '1ab1f2d139f9d3a420818e55e64e5fb5d0ea8302bedceb6b0cf3eafe9af798bf', 'c00'), (['tmp/desk-026-apply/extension__shared__content-shop.js.00', 'tmp/desk-026-apply/extension__firefox__content-shop.js.00', 'tmp/desk-026-apply/extension__chromium__content-shop.js.00'], 7, '32d00be989e187eb35c3515f51151b1f3e04f448bf627a8ca623f91b9d942d53', 'c01'), (['tmp/desk-026-apply/test__tools-site-sync.test.mjs.00'], 4, 'd29a9bac46a24896498d4b3b001f8cfd14964984f645918791bb897b6ce57d2d', 'c02'), (['tmp/desk-026-apply/extension__version.json.00'], 1, '35f687099da1bc4c0fb49e0cb7c34d390069a4b8b65cb1da3ebf84dd4e823855', 'c03')]
+          root = pathlib.Path("tmp/desk-026-slices")
+          for paths, n, digest, key in targets:
+              parts=[]
+              for i in range(n):
+                  p = root / f"{key}.{i:03d}"
+                  if not p.exists():
+                      print("incomplete", p); raise SystemExit(0)
+                  parts.append(p.read_text())
+              content="".join(parts)
+              got=hashlib.sha256(content.encode()).hexdigest()
+              if got!=digest:
+                  raise SystemExit(f"sha mismatch {key}: {got} != {digest}")
+              for path in paths:
+                  dest=pathlib.Path(path)
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  dest.write_text(content)
+                  print("ok", path, len(content))
+          print("assemble-ok")
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tmp/desk-026-apply
+          if git diff --cached --quiet; then echo no changes; else
+            git commit -m "ci(desk): assemble hub-00..04 exact desk-026-apply chunks"
+            git push origin HEAD:cursor/desk-026-hub-ship-b196
+          fi
