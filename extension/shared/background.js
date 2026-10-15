@@ -115,25 +115,42 @@
     try {
       const stored = await runtime.storage.local.get(["deskUpdateCheckedAt", "deskUpdateAvailable"]);
       const checkedAt = Number(stored.deskUpdateCheckedAt || 0);
-      if (!force && checkedAt && Date.now() - checkedAt < UPDATE_CHECK_MS && stored.deskUpdateAvailable) {
-        return stored.deskUpdateAvailable;
+      const cached = stored.deskUpdateAvailable;
+      if (
+        !force &&
+        checkedAt &&
+        Date.now() - checkedAt < UPDATE_CHECK_MS &&
+        cached &&
+        isNewer(cached.version, localVersion())
+      ) {
+        return cached;
       }
-      const response = await fetch(`${VERSION_URL}?t=${Date.now()}`, { cache: "no-store" });
-      if (!response.ok) throw new Error(`version.json ${response.status}`);
-      const remote = await response.json();
-      const remoteVersion = String(remote.version || "");
+      // The badge and the Update button must agree: both go by the signed release feed, not by
+      // version.json on main. version.json flips the moment a bump merges, but the signed XPI and
+      // updates.json land minutes later (publish-desk-extension), so a version.json-driven badge
+      // sent Update to a feed that still said "already the newest".
+      const feed = await fetchSignedFeedUpdate();
+      if (feed.error) throw new Error(feed.errors.join("; ") || "feed unreachable");
       const local = localVersion();
-      const available = remoteVersion && isNewer(remoteVersion, local)
+      let announced = null;
+      try {
+        const response = await fetch(`${VERSION_URL}?t=${Date.now()}`, { cache: "no-store" });
+        if (response.ok) announced = await response.json();
+      } catch {
+        // version.json only supplies the release note
+      }
+      const useNote = announced && String(announced.version || "") === feed.version;
+      const available = isNewer(feed.version, local)
         ? {
-            version: remoteVersion,
+            version: feed.version,
             local,
             message:
-              (IS_CHROMIUM && remote.chromiumMessage) ||
-              remote.message ||
+              (useNote && IS_CHROMIUM && announced.chromiumMessage) ||
+              (useNote && announced.message) ||
               (IS_CHROMIUM
                 ? "Click Download update, unzip over the Desk folder, then Reload Desk."
                 : "Firefox installs Hub-signed updates by itself; click Update to apply it now."),
-            url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
+            url: (useNote && announced.url) || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
       const patch = {
@@ -317,6 +334,41 @@
   }
 
   /**
+   * The signed feed has nothing newer than this install. If version.json on main already names a
+   * newer Desk, that build is merged but not signed/published yet (the release workflow lags the
+   * merge by a few minutes): say so instead of claiming Desk is current.
+   */
+  async function notPublishedOrCurrent(local, signedVersion) {
+    let announced = "";
+    try {
+      const response = await fetch(`${VERSION_URL}?t=${Date.now()}`, { cache: "no-store" });
+      if (response.ok) announced = String((await response.json())?.version || "");
+    } catch {
+      // treat an unreachable version.json as "nothing announced"
+    }
+    if (announced && isNewer(announced, local)) {
+      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+      return {
+        ok: false,
+        error: "update_publishing",
+        mode: "update_publishing",
+        applied: false,
+        version: announced,
+        signedVersion,
+        message: `Desk ${announced} is still being signed and published (a few minutes after release). Still on ${local}; try Check for update again shortly.`,
+      };
+    }
+    await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+    return {
+      ok: true,
+      mode: "up_to_date",
+      applied: false,
+      version: local,
+      message: `Desk ${local} is already the newest version.`,
+    };
+  }
+
+  /**
    * Chrome/Edge have no signed self-update until a store listing exists: download the release zip
    * (Downloads folder), the user unzips over the Desk folder and presses Reload Desk.
    */
@@ -332,16 +384,7 @@
         message: "Couldn’t reach the Desk update feed. Check the connection and try again.",
       };
     }
-    if (!isNewer(version, local)) {
-      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
-      return {
-        ok: true,
-        mode: "up_to_date",
-        applied: false,
-        version: local,
-        message: `Desk ${local} is already the newest version.`,
-      };
-    }
+    if (!isNewer(version, local)) return notPublishedOrCurrent(local, version);
     const url = `${RELEASE_XPI_BASE}/${CHROMIUM_ZIP_NAME}`;
     const manual = (reason) => ({
       ok: false,
@@ -382,16 +425,7 @@
         message: `Couldn’t reach the Desk update feed (${feed.errors.join("; ") || "no response"}). Try again, or open about:addons → ⚙ → Check for Updates.`,
       };
     }
-    if (!isNewer(feed.version, local)) {
-      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
-      return {
-        ok: true,
-        mode: "up_to_date",
-        applied: false,
-        version: local,
-        message: `Desk ${local} is already the newest version.`,
-      };
-    }
+    if (!isNewer(feed.version, local)) return notPublishedOrCurrent(local, feed.version);
 
     if (pendingUpdateDetails) {
       const ver = String(pendingUpdateDetails.version || feed.version);

@@ -1,6 +1,0 @@
-{
-  "version": "0.1.36",
-  "message": "Desk 0.1.36 fixes the first sign-in flashing and locking. Signing in once on Tools or the site now sticks on Tools, the site and Desk; Desk no longer reads a stale or just-minted gate as a website Lock.",
-  "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
-  "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
-}
