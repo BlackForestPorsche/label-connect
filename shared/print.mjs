@@ -1,9 +1,22 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PDFDocument } from "pdf-lib";
 import { QUEUE, safePageKey } from "./media.mjs";
-import { run } from "./detect.mjs";
+import { listWindowsPrinters, run } from "./detect.mjs";
+import {
+  NATIVE_PRINT_SCRIPT,
+  POWERSHELL_ARGS,
+  PRINTTO_SCRIPT,
+  RENDERER_UNAVAILABLE,
+  nativeEnv,
+  noWindowsPrinterMessage,
+  pickWindowsPrinter,
+  sumatraArgs,
+  sumatraCandidates,
+  windowsPrintMode,
+} from "./winprint.mjs";
 
 export function printArgs(pageKey, pdfPath) {
   const key = safePageKey(pageKey);
@@ -27,43 +40,67 @@ export async function pngToPdf(png, widthPt, heightPt, copies) {
   return doc.save();
 }
 
-function windowsPrinterName() {
-  const override = String(process.env.LABELS_PRINTER || "").trim();
-  if (override) return override;
-  return QUEUE;
+const defaultWindowsDeps = {
+  run,
+  exists: existsSync,
+  env: process.env,
+};
+
+async function runPowerShell(deps, dir, name, script, extraEnv, timeoutMs) {
+  const scriptPath = path.join(dir, name);
+  await writeFile(scriptPath, `\ufeff${script}`, "utf8");
+  return deps.run(
+    "powershell.exe",
+    [...POWERSHELL_ARGS, "-File", scriptPath],
+    timeoutMs,
+    { env: extraEnv },
+  );
+}
+
+function failure(result, fallback) {
+  const detail = (result.stderr || result.stdout || fallback).trim();
+  return new Error(detail.split(/\r?\n/).find((line) => line.trim()) || fallback);
 }
 
 /**
- * Windows: PrintTo the LabelWriter/DYMO queue (or LABELS_PRINTER).
- * Resolves a matching installed printer when the default name is missing.
+ * Windows: print a PDF to the LabelWriter/DYMO queue. `auto` tries the native
+ * renderer first and only falls through to SumatraPDF / PrintTo when Windows
+ * cannot render PDFs (a real print failure is never retried, to avoid doubles).
  */
-async function sendPdfWindows(pdfPath) {
-  const wanted = windowsPrinterName();
-  const script = `
-$ErrorActionPreference = 'Stop'
-$wanted = ${JSON.stringify(wanted)}
-$pdf = ${JSON.stringify(pdfPath)}
-function Resolve-LabelPrinter([string]$name) {
-  $printers = @(Get-CimInstance Win32_Printer | Select-Object -ExpandProperty Name)
-  if ($printers -contains $name) { return $name }
-  $match = $printers | Where-Object { $_ -match 'LabelWriter|DYMO' } | Select-Object -First 1
-  if ($match) { return $match }
-  throw "No LabelWriter/DYMO printer found. Set LABELS_PRINTER to the exact queue name."
-}
-$printer = Resolve-LabelPrinter $wanted
-Start-Process -FilePath $pdf -Verb PrintTo -ArgumentList $printer -WindowStyle Hidden -Wait
-Write-Output $printer
-`;
-  const result = await run(
-    "powershell.exe",
-    ["-NoProfile", "-NonInteractive", "-Command", script],
-    60000,
+export async function sendPdfWindows(pdfPath, { pageKey, deps = {} } = {}) {
+  const d = { ...defaultWindowsDeps, ...deps };
+  const env = d.env;
+  const dir = path.dirname(pdfPath);
+  const printers = await listWindowsPrinters(d.run);
+  const pick = pickWindowsPrinter(
+    printers.map((printer) => printer.name),
+    env,
   );
-  if (result.code !== 0) {
-    const detail = (result.stderr || result.stdout || "PrintTo failed.").trim();
-    throw new Error(detail.split("\n")[0]);
+  if (!pick.name) throw new Error(noWindowsPrinterMessage(pick));
+
+  const mode = windowsPrintMode(env);
+  const psEnv = nativeEnv({ pdfPath, printer: pick.name, pageKey, env });
+
+  if (mode === "auto" || mode === "native") {
+    const result = await runPowerShell(d, dir, "print-native.ps1", NATIVE_PRINT_SCRIPT, psEnv, 90000);
+    if (result.code === 0) return { job: (result.stdout || "").trim().split(/\r?\n/).pop() || pick.name };
+    if (result.code !== RENDERER_UNAVAILABLE || mode === "native") throw failure(result, "Windows print failed.");
   }
-  return { job: (result.stdout || "").trim() || wanted };
+
+  if (mode === "auto" || mode === "sumatra") {
+    const sumatra = sumatraCandidates(env).find((candidate) => d.exists(candidate));
+    if (sumatra) {
+      const result = await d.run(sumatra, sumatraArgs(pick.name, pdfPath), 60000);
+      if (result.code === 0) return { job: pick.name };
+      if (mode === "sumatra") throw failure(result, "SumatraPDF could not print the label.");
+    } else if (mode === "sumatra") {
+      throw new Error("SumatraPDF was not found. Set LABELS_SUMATRA to SumatraPDF.exe.");
+    }
+  }
+
+  const result = await runPowerShell(d, dir, "print-to.ps1", PRINTTO_SCRIPT, psEnv, 60000);
+  if (result.code !== 0) throw failure(result, "PrintTo failed. Install a PDF app that supports printing.");
+  return { job: (result.stdout || "").trim() || pick.name };
 }
 
 async function sendPdfLinux(pdfPath, pageKey) {
@@ -97,7 +134,7 @@ export async function sendPdfToQueue(pdfBytes, { pageKey }) {
   try {
     await writeFile(file, pdfBytes);
     if (process.platform === "win32") {
-      return await sendPdfWindows(file);
+      return await sendPdfWindows(file, { pageKey: key });
     }
     return await sendPdfLinux(file, key);
   } finally {
