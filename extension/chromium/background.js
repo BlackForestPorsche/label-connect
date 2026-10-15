@@ -525,26 +525,11 @@
     if (message.type === "site-unlock-page") {
       // Delivery fallback when lockShop hook missed: /unlock page + Tools still open.
       const api = globalThis.AllDataRoLabels;
-      if (!api?.probeToolsBridgeHealth || !api?.syncSiteLockToTools) {
+      if (!api?.handleSiteUnlockPage) {
         sendResponse({ ok: false, error: "Lot helper missing." });
         return false;
       }
-      if (api.unlockHoldActive && api.unlockHoldActive()) {
-        sendResponse({ ok: true, skipped: "unlock_hold" });
-        return false;
-      }
-      api.probeToolsBridgeHealth().then(async (health) => {
-        if (!health.reachable || health.hasSession === false) {
-          sendResponse({ ok: true, skipped: "tools_already_locked" });
-          return;
-        }
-        // /unlock because the site session simply ran out is not a Lock.
-        if (api.siteUnlockPageIsExpiry && (await api.siteUnlockPageIsExpiry())) {
-          sendResponse({ ok: true, skipped: "gate_expired" });
-          return;
-        }
-        return api.syncSiteLockToTools({ reloadShopTabs: false }).then(sendResponse);
-      });
+      api.handleSiteUnlockPage().then(sendResponse);
       return true;
     }
     if (message.type === "check-update") {
@@ -669,6 +654,7 @@
         if (!cookie || cookie.name !== "bf_shop_gate") return;
         if (!/blackforestautomotive\.com$/i.test(String(cookie.domain || ""))) return;
         if (!changeInfo.removed) {
+          globalThis.AllDataRoLabels?.noteGateCookieAdded?.();
           if (gateRemovalTimer) {
             clearTimeout(gateRemovalTimer);
             gateRemovalTimer = null;

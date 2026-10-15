@@ -19,6 +19,11 @@
   const LATCH_KEY = "deskSiteLatch";
   const GATE_SEEN_KEY = "deskGateSeen";
   const GATE_EXPIRY_KEY = "deskGateExpiry";
+  const GATE_SEEN_SESSION_KEY = "deskGateSeenSession";
+  /** An unlock this fresh is never undone by an inferred (not user-clicked) site lock. */
+  const RECENT_UNLOCK_MS = 8_000;
+  /** Desk polls every 400ms: a gate gone this long past its own expiry was not removed by a Lock. */
+  const GATE_EXPIRY_STALE_MS = 120_000;
   /** Renew the Firefox gate this long before it runs out (Tools renews its Bearer at 30m). */
   const GATE_RENEW_MARGIN_MS = 20 * 60 * 1000;
   const GATE_RENEW_RETRY_MS = 2 * 60 * 1000;
@@ -44,9 +49,28 @@
    */
   let gateSeen = false;
   function markGateSeen(value) {
+    if (value) bindGateSeenSession();
+    else clearGateSeenSession();
     if (gateSeen === value) return;
     gateSeen = value;
     void storageSet({ [GATE_SEEN_KEY]: value });
+  }
+  /**
+   * Tools sessionId in force when the gate was last seen. A gate that is gone under a
+   * DIFFERENT Tools session (new sign-in, overnight 8pm lock, browser closed) was not
+   * removed by a website Lock of the session now on :8788 — it is just stale.
+   */
+  let gateSeenSessionId = "";
+  function bindGateSeenSession() {
+    const id = lastToolsSessionId || "";
+    if (!id || gateSeenSessionId === id) return;
+    gateSeenSessionId = id;
+    void storageSet({ [GATE_SEEN_SESSION_KEY]: id });
+  }
+  function clearGateSeenSession() {
+    if (!gateSeenSessionId) return;
+    gateSeenSessionId = "";
+    void storageSet({ [GATE_SEEN_SESSION_KEY]: "" });
   }
   /**
    * Expiry (ms) of the gate cookie Desk last saw. A gate that vanishes AFTER this time just
@@ -84,6 +108,21 @@
   function gateLapsedNaturally(nowMs = Date.now()) {
     return gateExpiryMs > 0 && nowMs >= gateExpiryMs - 5_000 && !isLockHourExpiry(gateExpiryMs);
   }
+  /**
+   * Is a missing gate evidence of a website Lock of the Tools session now on :8788?
+   * Returns "" when it is (lock Tools), otherwise why it is not (do not lock).
+   * Only INFERRED lock paths use this (page/cookie state); a user-clicked Lock arrives
+   * through the lockShop hook and always wins.
+   */
+  function siteLockEvidence(health, nowMs = Date.now()) {
+    if (recentUnlockActive(nowMs)) return "recent_unlock";
+    if (!gateSeen) return "gate_never_seen";
+    const sessionId = health && typeof health.sessionId === "string" ? health.sessionId : "";
+    if (gateSeenSessionId && sessionId && gateSeenSessionId !== sessionId) return "stale_session";
+    if (gateExpiryMs > 0 && nowMs > gateExpiryMs + GATE_EXPIRY_STALE_MS) return "expired_unobserved";
+    if (gateLapsedNaturally(nowMs)) return "expired";
+    return "";
+  }
   /** Same, from a cookies.onChanged removal. Only cause "expired" at/after its own expiry. */
   function removalIsNaturalExpiry(cause, expirationDateSec, nowMs = Date.now()) {
     if (String(cause || "").toLowerCase() !== "expired") return false;
@@ -109,6 +148,15 @@
   let unlockHoldUntil = 0;
   function armUnlockHold(ms = UNLOCK_HOLD_MS) {
     unlockHoldUntil = Date.now() + ms;
+    lastUnlockAt = Date.now();
+  }
+  /**
+   * The hold above is zeroed by the first probe that sees Tools signed in (~400ms), so
+   * it cannot cover the reloaded /unlock page or the cookie swap. This window can.
+   */
+  let lastUnlockAt = 0;
+  function recentUnlockActive(nowMs = Date.now()) {
+    return lastUnlockAt > 0 && nowMs - lastUnlockAt < RECENT_UNLOCK_MS;
   }
   function unlockHoldActive(nowMs = Date.now()) {
     return nowMs < unlockHoldUntil;
@@ -119,8 +167,16 @@
   }
 
   async function loadLatch() {
-    const stored = await storageGet([LATCH_KEY, GATE_SEEN_KEY, GATE_EXPIRY_KEY]);
+    const stored = await storageGet([
+      LATCH_KEY,
+      GATE_SEEN_KEY,
+      GATE_EXPIRY_KEY,
+      GATE_SEEN_SESSION_KEY,
+    ]);
     if (stored[GATE_SEEN_KEY] === true) gateSeen = true;
+    if (!gateSeenSessionId && typeof stored[GATE_SEEN_SESSION_KEY] === "string") {
+      gateSeenSessionId = stored[GATE_SEEN_SESSION_KEY];
+    }
     if (!gateExpiryMs && Number(stored[GATE_EXPIRY_KEY]) > 0) {
       gateExpiryMs = Number(stored[GATE_EXPIRY_KEY]);
     }
@@ -855,9 +911,11 @@
     ) {
       const gateNow = await readShopGateCookie();
       if (!gateNow.present && !gateNow.unknown) {
-        if (gateLapsedNaturally()) {
-          // The gate ran out of time while Tools still holds a live session: that is
-          // session expiry, not a website Lock. Fall through and re-exchange.
+        const why = siteLockEvidence(health);
+        if (why) {
+          // The gate is gone but nothing says a Lock removed it: it ran out, or it
+          // belongs to an older Tools session, or we just unlocked (first sign-in).
+          // Fall through and exchange instead of locking Tools back.
           markGateSeen(false);
           noteGateExpiry(0);
         } else {
@@ -1180,6 +1238,8 @@
     if (gate.present) return { skipped: "gate_present" };
     if (gate.unknown) return { skipped: "gate_unknown" };
     if (unlockHoldActive()) return { skipped: "unlock_hold" };
+    // cookies.set over an existing gate removes (cause "overwrite") then re-adds it.
+    if (String(info.cause || "").toLowerCase() === "overwrite") return { skipped: "gate_overwrite" };
     if (removalIsNaturalExpiry(info.cause, info.expirationDate) || gateLapsedNaturally()) {
       markGateSeen(false);
       noteGateExpiry(0);
@@ -1625,10 +1685,39 @@
   api.startToolsBridgeWatch = startToolsBridgeWatch;
   api.startBridgeSyncPoll = startBridgeSyncPoll;
   api.handleGateCookieRemoved = handleGateCookieRemoved;
-  api.siteUnlockPageIsExpiry = async () => {
+  /**
+   * Why an /unlock page load is NOT proof of a website Lock ("" = it is). Gate present
+   * or unreadable, gate ran out, gate belonged to an older Tools session, or this is
+   * the first sign-in landing on an /unlock tab that has not reloaded yet.
+   */
+  api.siteUnlockPageNotLockReason = async (health) => {
     await latchReady;
     const gate = await readShopGateCookie();
-    return !gate.present && (Boolean(gate.unknown) || gateLapsedNaturally());
+    if (gate.present) return "gate_present";
+    if (gate.unknown) return "gate_unknown";
+    return siteLockEvidence(health);
+  };
+  api.siteUnlockPageIsExpiry = async (health) => Boolean(await api.siteUnlockPageNotLockReason(health));
+  /**
+   * The shop tab landed on /unlock. Lock Tools only with proof of a website Lock;
+   * otherwise it is a stale tab, an expired gate, or the first sign-in not yet reloaded.
+   */
+  api.handleSiteUnlockPage = async () => {
+    await latchReady;
+    if (unlockHoldActive()) return { ok: true, skipped: "unlock_hold" };
+    const health = await probeToolsBridgeHealth();
+    if (!health.reachable || health.hasSession === false) {
+      return { ok: true, skipped: "tools_already_locked" };
+    }
+    const notLock = await api.siteUnlockPageNotLockReason(health);
+    if (notLock) {
+      return { ok: true, skipped: notLock === "gate_present" ? notLock : "not_a_lock", reason: notLock };
+    }
+    return syncSiteLockToTools({ reloadShopTabs: false });
+  };
+  api.noteGateCookieAdded = async () => {
+    await latchReady;
+    await readShopGateCookie();
   };
   api.tickBridgeSyncPoll = tickBridgeSyncPoll;
   api.armUnlockHold = armUnlockHold;
