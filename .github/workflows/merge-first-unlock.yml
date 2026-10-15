@@ -1,0 +1,30 @@
+name: Merge main into first-unlock branch
+# One-shot: merges main, bumps Desk to 0.1.36, verifies sha256 + tests, pushes the merge commit.
+# Delete this file once it has run.
+on:
+  push:
+    branches:
+      - cursor/desk-first-unlock-sticks-deb8
+    paths:
+      - tmp/first-unlock-merge/**
+permissions:
+  contents: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Merge, bump, verify, push
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in version.json expected.sha256 merge-step.sh; do
+            if [ ! -f "tmp/first-unlock-merge/$f" ]; then echo "waiting for $f (green)"; exit 0; fi
+          done
+          bash tmp/first-unlock-merge/merge-step.sh
