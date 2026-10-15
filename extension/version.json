@@ -1,5 +1,5 @@
 {
-  "version": "0.1.28",
-  "message": "Website Lock now stays locked until you unlock: no timed remint after 30s, 2 min or a quiet spell. Tools (:8788) is the truth for locked/unlocked; Desk keeps a persistent lock latch and only lets go when Tools or the site gets a genuinely new unlock. Needs Tools 1.5.14.",
+  "version": "0.1.29",
+  "message": "Logged in: the popup shows plain \u201cLogged in as <name>\u201d (no sync / PIN boxes) and the toolbar icon turns green (red when logged out). Update now works: Firefox has no requestUpdateCheck, so Update opens the signed Desk install prompt (Allow, then Add) and Desk reloads itself. Sticky website lock from 0.1.28 unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
