@@ -1,6 +1,6 @@
 {
-  "version": "0.1.32",
-  "message": "Labels print service now prints natively on Windows (LabelWriter/DYMO) and the shop site can read the printer status. The Desk extension itself behaves the same as 0.1.31 on Chrome, Edge and Firefox.",
+  "version": "0.1.33",
+  "message": "Update now works on Hub-signed Firefox installs even when GitHub's release-asset host is blocked for Desk: it falls back to the GitHub release listing and version.json, then opens the signed XPI. If Update still cannot reach any feed, it names which source failed.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

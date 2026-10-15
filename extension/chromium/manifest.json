@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Black Forest Desk",
-  "version": "0.1.32",
+  "version": "0.1.33",
   "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
   "permissions": [
     "storage",
@@ -50,8 +50,8 @@
       ],
       "js": [
         "config.js",
-        "scrape.js",
         "toast.js",
+        "scrape.js",
         "content.js"
       ],
       "run_at": "document_idle"
