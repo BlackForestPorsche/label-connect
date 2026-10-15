@@ -33,18 +33,11 @@
     } catch {
       return null;
     }
-    // TanStack server-fn wraps: result / data / payload / nested ok envelopes.
-    const candidates = [
-      data,
-      data && data.data,
-      data && data.payload,
-      data && data.result,
-      data && data.result && data.result.data,
-      data && data.result && data.result.result,
-    ].filter(Boolean);
+    const candidates = [data, data && data.data, data && data.payload, data && data.result].filter(
+      Boolean,
+    );
     for (const obj of candidates) {
-      if (!obj || typeof obj !== "object") continue;
-      if (!obj.widgetToken || !obj.widgetExpiresAt) continue;
+      if (!obj || !obj.widgetToken || !obj.widgetExpiresAt) continue;
       return {
         token: String(obj.widgetToken),
         expiresAt: String(obj.widgetExpiresAt),
@@ -129,20 +122,16 @@
 
   function publish(session) {
     if (!session || !runtime?.runtime?.sendMessage) return;
-    const send = () => {
-      try {
-        return runtime.runtime.sendMessage({ type: "shop-site-session", payload: session });
-      } catch {
-        return Promise.resolve(null);
-      }
-    };
-    // Website unlock JSON → Desk → POST :8788. Retry once if Tools publish missed.
-    send()
-      .then((res) => {
-        if (res && res.ok === false && res.toolsPublished === false) return send();
-        return res;
-      })
-      .catch(() => send().catch(() => {}));
+    const send = () =>
+      runtime.runtime.sendMessage({ type: "shop-site-session", payload: session });
+    try {
+      // Website unlock JSON → Desk → POST :8788 (site→Tools). Retry once on reject.
+      Promise.resolve(send())
+        .catch(() => send())
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
   }
 
   function reportSiteLock() {
