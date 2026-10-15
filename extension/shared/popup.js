@@ -62,7 +62,7 @@
     const hint =
       typeof available?.message === "string" && available.message.trim()
         ? available.message.trim()
-        : "Hub On your own → Install from File";
+        : "click Update";
     setUpdate(`Update ${version} ready — ${hint}`, "warn");
   }
 
@@ -292,41 +292,22 @@
         const response = await runtime.runtime.sendMessage({ type: "apply-update" });
         if (response?.mode === "firefox_update" && response?.ok) {
           showApply(false);
-          setUpdate(
-            response.message || "Firefox is applying the signed update (reload)…",
-            "ok",
-          );
-        } else if (
-          response?.mode === "signed_staged" ||
-          response?.staged === true ||
-          response?.mode === "hub_upload" ||
-          response?.error === "hub_signed_kept"
-        ) {
-          // Staged ≠ installed — warn, never green “done”.
-          const local = runtime.runtime.getManifest()?.version || "?";
-          const staged = response?.version || "?";
-          setUpdate(
-            response?.message ||
-              `Still Installed ${local} · Staged ${staged} (NOT applied). about:addons → Install Add-on From File…`,
-            "warn",
-          );
-          showApply(true);
-        } else if (response?.ok && response?.applied !== false) {
-          const version = response.version || "";
+          setUpdate(response.message || "Firefox is applying the signed update (reload)…", "ok");
+        } else if (response?.mode === "up_to_date" && response?.ok) {
           showApply(false);
-          setUpdate(
-            version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox.",
-            "ok",
-          );
+          setUpdate(response.message || "Desk is already the newest version.", "ok");
+        } else if (response?.mode === "firefox_xpi_prompt" && response?.ok) {
+          showApply(true);
+          setUpdate(response.message || "Firefox is asking to install the update — click Allow, then Add.", "warn");
+        } else if (response?.ok && response?.applied) {
+          showApply(false);
+          setUpdate(response.message || "Updated.", "ok");
         } else {
-          setUpdate(response?.message || "Update failed.", "err");
+          setUpdate(response?.message || "Update failed. Try about:addons → ⚙ → Check for Updates.", "err");
           showApply(true);
         }
       } catch {
-        setUpdate(
-          "Could not reach Labels — try about:addons → Check for Updates, or Install Add-on From File (signed desk-extension XPI).",
-          "warn",
-        );
+        setUpdate("Update failed. Try about:addons → ⚙ → Check for Updates.", "err");
         showApply(true);
       } finally {
         applyBtn.disabled = false;
