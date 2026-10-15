@@ -1,7 +1,12 @@
 import pathlib, re, subprocess
 
 patch = pathlib.Path("tmp/first-unlock/p1.patch")
-subprocess.check_call(["git", "apply", "--whitespace=nowarn", "--ignore-whitespace", str(patch)])
+text = patch.read_text()
+bad = "\n }\n \n   function publish(session) {"
+good = "\n   }\n \n   function publish(session) {"
+assert bad in text
+patch.write_text(text.replace(bad, good))
+subprocess.check_call(["git", "apply", "--whitespace=nowarn", str(patch)])
 
 p = pathlib.Path("test/desk-lock-unlock-gaps.test.mjs")
 lines = p.read_text().split("\n")
