@@ -460,6 +460,22 @@
     return false;
   });
 
+  function refreshToolbarState() {
+    void globalThis.AllDataRoLabels?.refreshUnlockBadge?.();
+  }
+
+  refreshToolbarState();
+  if (runtime.storage?.onChanged?.addListener) {
+    try {
+      runtime.storage.onChanged.addListener((changes, area) => {
+        if (area && area !== "local") return;
+        if (changes.shopWidgetToken || changes.shopWidgetTokenExpiresAt) refreshToolbarState();
+      });
+    } catch {
+      // storage.onChanged unavailable
+    }
+  }
+
   void checkForUpdate(false);
   tryAutoUnlock("startup", true);
   try {
@@ -473,9 +489,11 @@
   if (runtime.alarms?.create) {
     try {
       runtime.alarms.create("desk-update-check", { periodInMinutes: 360 });
+      runtime.alarms.create("desk-icon-refresh", { periodInMinutes: 1 });
       runtime.alarms.create(AUTO_UNLOCK_ALARM, { periodInMinutes: AUTO_UNLOCK_PERIOD_MIN });
       runtime.alarms.onAlarm.addListener((alarm) => {
         if (alarm?.name === "desk-update-check") void checkForUpdate(false);
+        if (alarm?.name === "desk-icon-refresh") refreshToolbarState();
         if (alarm?.name === AUTO_UNLOCK_ALARM) tryAutoUnlock("alarm", false);
       });
     } catch {

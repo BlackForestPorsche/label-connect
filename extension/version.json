@@ -1,5 +1,5 @@
 {
   "version": "0.1.29",
-  "message": "Update now works: Firefox does not support requestUpdateCheck, so Update opens the signed Desk install prompt (Allow, then Add) and Desk reloads itself. No more Desktop-staged XPI or \"NOT applied\".",
+  "message": "Logged in: the popup shows plain \u201cLogged in as <name>\u201d (no sync / PIN boxes) and the toolbar icon turns green (red when logged out). Update now works: Firefox has no requestUpdateCheck, so Update opens the signed Desk install prompt (Allow, then Add) and Desk reloads itself. Sticky website lock from 0.1.28 unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }
