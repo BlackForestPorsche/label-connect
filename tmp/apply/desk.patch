@@ -1,0 +1,569 @@
+diff --git a/extension/chromium/manifest.json b/extension/chromium/manifest.json
+index a36e2e4..676587a 100644
+--- a/extension/chromium/manifest.json
++++ b/extension/chromium/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "manifest_version": 3,
+   "name": "Black Forest Desk",
+-  "version": "0.1.29",
++  "version": "0.1.30",
+   "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
+   "permissions": [
+     "storage",
+diff --git a/extension/firefox/manifest.json b/extension/firefox/manifest.json
+index c1f8e5a..58edb49 100644
+--- a/extension/firefox/manifest.json
++++ b/extension/firefox/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "manifest_version": 3,
+   "name": "Black Forest Desk",
+-  "version": "0.1.29",
++  "version": "0.1.30",
+   "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
+   "browser_specific_settings": {
+     "gecko": {
+diff --git a/extension/shared/background.js b/extension/shared/background.js
+index f3a2563..0744190 100644
+--- a/extension/shared/background.js
++++ b/extension/shared/background.js
+@@ -417,11 +417,16 @@
+         sendResponse({ ok: true, skipped: "unlock_hold" });
+         return false;
+       }
+-      api.probeToolsBridgeHealth().then((health) => {
++      api.probeToolsBridgeHealth().then(async (health) => {
+         if (!health.reachable || health.hasSession === false) {
+           sendResponse({ ok: true, skipped: "tools_already_locked" });
+           return;
+         }
++        // /unlock because the site session simply ran out is not a Lock.
++        if (api.siteUnlockPageIsExpiry && (await api.siteUnlockPageIsExpiry())) {
++          sendResponse({ ok: true, skipped: "gate_expired" });
++          return;
++        }
+         return api.syncSiteLockToTools({ reloadShopTabs: false }).then(sendResponse);
+       });
+       return true;
+@@ -539,11 +544,12 @@
+           return;
+         }
+         if (gateRemovalTimer) clearTimeout(gateRemovalTimer);
++        const removalInfo = { cause: changeInfo.cause, expirationDate: cookie.expirationDate };
+         gateRemovalTimer = setTimeout(() => {
+           gateRemovalTimer = null;
+           const api = globalThis.AllDataRoLabels;
+           if (!api?.handleGateCookieRemoved) return;
+-          void api.handleGateCookieRemoved();
++          void api.handleGateCookieRemoved(removalInfo);
+         }, GATE_REMOVAL_MS);
+       });
+     } catch {
+diff --git a/extension/shared/lot-names.js b/extension/shared/lot-names.js
+index a5f1af3..43426a8 100644
+--- a/extension/shared/lot-names.js
++++ b/extension/shared/lot-names.js
+@@ -18,6 +18,13 @@
+   const LEGACY_LOCK_QUIET_MS = 90_000;
+   const LATCH_KEY = "deskSiteLatch";
+   const GATE_SEEN_KEY = "deskGateSeen";
++  const GATE_EXPIRY_KEY = "deskGateExpiry";
++  /** Renew the Firefox gate this long before it runs out (Tools renews its Bearer at 30m). */
++  const GATE_RENEW_MARGIN_MS = 20 * 60 * 1000;
++  const GATE_RENEW_RETRY_MS = 2 * 60 * 1000;
++  /** Site shop-time lock: the gate cookie's own expiry is 8pm America/Los_Angeles. */
++  const LOCK_TIME_ZONE = "America/Los_Angeles";
++  const LOCK_HOUR = 20;
+   /** Desk's own cookie writes (exchange / clear) must not look like a site lock or unlock. */
+   const DESK_GATE_WRITE_MS = 4_000;
+   /** Desk unlock roster (plasmoid fallback). */
+@@ -41,6 +48,56 @@
+     gateSeen = value;
+     void storageSet({ [GATE_SEEN_KEY]: value });
+   }
++  /**
++   * Expiry (ms) of the gate cookie Desk last saw. A gate that vanishes AFTER this time just
++   * ran out; a gate that vanishes before it was removed on purpose (site Lock).
++   */
++  let gateExpiryMs = 0;
++  function noteGateExpiry(ms) {
++    const next = Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 0;
++    if (gateExpiryMs === next) return;
++    gateExpiryMs = next;
++    void storageSet({ [GATE_EXPIRY_KEY]: next });
++  }
++  function isLockHourExpiry(ms) {
++    if (!Number.isFinite(ms) || ms <= 0) return false;
++    let fmt;
++    try {
++      fmt = new Intl.DateTimeFormat("en-US", {
++        timeZone: LOCK_TIME_ZONE,
++        hour: "numeric",
++        minute: "numeric",
++        hourCycle: "h23",
++      });
++    } catch {
++      return false;
++    }
++    for (const delta of [0, 90_000, -90_000]) {
++      const parts = fmt.formatToParts(new Date(ms + delta));
++      const hour = Number(parts.find((x) => x.type === "hour")?.value);
++      const minute = Number(parts.find((x) => x.type === "minute")?.value);
++      if (hour === LOCK_HOUR && minute === 0) return true;
++    }
++    return false;
++  }
++  /** The gate is gone because its (non-8pm) expiry passed — session expiry, not a lock. */
++  function gateLapsedNaturally(nowMs = Date.now()) {
++    return gateExpiryMs > 0 && nowMs >= gateExpiryMs - 5_000 && !isLockHourExpiry(gateExpiryMs);
++  }
++  /** Same, from a cookies.onChanged removal. Only cause "expired" at/after its own expiry. */
++  function removalIsNaturalExpiry(cause, expirationDateSec, nowMs = Date.now()) {
++    if (String(cause || "").toLowerCase() !== "expired") return false;
++    const expMs = Number(expirationDateSec) * 1000;
++    if (!Number.isFinite(expMs) || expMs > nowMs + 5_000) return false;
++    return !isLockHourExpiry(expMs);
++  }
++  function gateRenewalDue(nowMs = Date.now()) {
++    return (
++      gateExpiryMs > 0 &&
++      gateExpiryMs - nowMs < GATE_RENEW_MARGIN_MS &&
++      !isLockHourExpiry(gateExpiryMs)
++    );
++  }
+   let lastToolsSessionId = null;
+   /** Last time something other than Desk removed bf_shop_gate (site Lock). */
+   let lastForeignGateRemovedAt = 0;
+@@ -62,8 +119,11 @@
+   }
+ 
+   async function loadLatch() {
+-    const stored = await storageGet([LATCH_KEY, GATE_SEEN_KEY]);
++    const stored = await storageGet([LATCH_KEY, GATE_SEEN_KEY, GATE_EXPIRY_KEY]);
+     if (stored[GATE_SEEN_KEY] === true) gateSeen = true;
++    if (!gateExpiryMs && Number(stored[GATE_EXPIRY_KEY]) > 0) {
++      gateExpiryMs = Number(stored[GATE_EXPIRY_KEY]);
++    }
+     const value = stored[LATCH_KEY];
+     if (value && typeof value === "object" && !siteLatch) {
+       siteLatch = {
+@@ -524,17 +584,21 @@
+     const base = await shopBaseUrl();
+     const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
+     if (!runtime?.cookies?.get) {
+-      return { present: false, reason: "no_cookies_api" };
++      return { present: false, unknown: true, reason: "no_cookies_api" };
+     }
+     try {
+       const cookie = await runtime.cookies.get({ url: `${base}/`, name });
+       if (cookie && cookie.value) {
+         markGateSeen(true);
++        noteGateExpiry(
++          Number.isFinite(cookie.expirationDate) ? cookie.expirationDate * 1000 : 0,
++        );
+         return { present: true };
+       }
+       return { present: false, reason: "missing" };
+     } catch {
+-      return { present: false, reason: "cookie_error" };
++      // A failed read is "don't know", never "the site is locked".
++      return { present: false, unknown: true, reason: "cookie_error" };
+     }
+   }
+ 
+@@ -569,12 +633,14 @@
+     // swallows a real lock 10s later (Tools lock edge, site Lock, gate removal).
+     if (hasSession) unlockHoldUntil = 0;
+     const sessionId = data && typeof data.sessionId === "string" ? data.sessionId : undefined;
++    const sessionExpired = !hasSession && Boolean(data && data.sessionExpired);
+     if (hasSession && sessionId) lastToolsSessionId = sessionId;
+     if (!hasSession) lastToolsSessionId = "";
+     return {
+       reachable: true,
+       sessionId,
+       locked: data && typeof data.locked === "boolean" ? data.locked : undefined,
++      sessionExpired,
+       hasSession,
+       person: data && data.person ? String(data.person) : "",
+       reason: hasSession ? "has_session" : "no_session",
+@@ -587,6 +653,7 @@
+     if (!runtime?.cookies?.remove) return { ok: false, reason: "no_cookies_api" };
+     deskGateWriteUntil = Date.now() + DESK_GATE_WRITE_MS;
+     markGateSeen(false);
++    noteGateExpiry(0);
+     try {
+       await runtime.cookies.remove({ url: `${base}/`, name });
+       return { ok: true };
+@@ -623,12 +690,14 @@
+     try {
+       await runtime.cookies.set(details);
+       markGateSeen(true);
++      noteGateExpiry(details.expirationDate ? details.expirationDate * 1000 : 0);
+       return { ok: true };
+     } catch {
+       try {
+         delete details.sameSite;
+         await runtime.cookies.set(details);
+         markGateSeen(true);
++        noteGateExpiry(details.expirationDate ? details.expirationDate * 1000 : 0);
+         return { ok: true };
+       } catch {
+         return { ok: false, reason: "set_failed" };
+@@ -782,17 +851,26 @@
+       gateSeen &&
+       health.reachable &&
+       health.hasSession &&
+-      !unlockHoldActive() &&
+-      !(await readShopGateCookie()).present
++      !unlockHoldActive()
+     ) {
+-      await syncSiteLockToTools({ reloadShopTabs: true });
+-      return {
+-        ok: false,
+-        locked: true,
+-        shouldReload: false,
+-        reason: "site_lock",
+-        error: "Website was locked — Tools locked to match.",
+-      };
++      const gateNow = await readShopGateCookie();
++      if (!gateNow.present && !gateNow.unknown) {
++        if (gateLapsedNaturally()) {
++          // The gate ran out of time while Tools still holds a live session: that is
++          // session expiry, not a website Lock. Fall through and re-exchange.
++          markGateSeen(false);
++          noteGateExpiry(0);
++        } else {
++          await syncSiteLockToTools({ reloadShopTabs: true });
++          return {
++            ok: false,
++            locked: true,
++            shouldReload: false,
++            reason: "site_lock",
++            error: "Website was locked — Tools locked to match.",
++          };
++        }
++      }
+     }
+ 
+     if (health.reachable && health.hasSession === false) {
+@@ -807,6 +885,16 @@
+           siteGate: (await readShopGateCookie()).present,
+         };
+       }
++      // Tools' Bearer ran out (not a Tools lock): the website session is still its own
++      // thing. Clearing the gate here is what turned a quiet expiry into a lock of both.
++      if (health.sessionExpired && health.locked !== true) {
++        return {
++          ok: true,
++          skipped: "tools_session_expired",
++          reason: "tools_session_expired",
++          siteGate: (await readShopGateCookie()).present,
++        };
++      }
+       const hadGate = (await readShopGateCookie()).present;
+       await clearShopGateCookie();
+       const stored = await storageGet(["shopWidgetTokenSource"]);
+@@ -855,7 +943,7 @@
+     const stored = await storageGet(["shopWidgetToken"]);
+     const token = stored.shopWidgetToken;
+     const gateBefore = (await readShopGateCookie()).present;
+-    if (gateBefore && !forceExchange) {
++    if (gateBefore && !forceExchange && !gateRenewalDue()) {
+       return {
+         ok: true,
+         person: fromTools.person,
+@@ -1083,14 +1171,28 @@
+   let lastBridgeFingerprint = "";
+   let bridgeWatchInFlight = false;
+ 
+-  async function handleGateCookieRemoved() {
++  async function handleGateCookieRemoved(info = {}) {
+     // Unlock bounce: gateToken cookies.set can remove→set; do not lock Tools.
+     await latchReady;
+     if (siteLatch) return { skipped: "already_latched" };
+     if (unlockHoldActive()) return { skipped: "unlock_hold" };
+     const gate = await readShopGateCookie();
+     if (gate.present) return { skipped: "gate_present" };
++    if (gate.unknown) return { skipped: "gate_unknown" };
+     if (unlockHoldActive()) return { skipped: "unlock_hold" };
++    if (removalIsNaturalExpiry(info.cause, info.expirationDate) || gateLapsedNaturally()) {
++      markGateSeen(false);
++      noteGateExpiry(0);
++      const health = await probeToolsBridgeHealth();
++      if (health.reachable && health.hasSession) {
++        const renewed = await syncToolsSessionToSite({
++          reloadUnlockTabs: true,
++          forceExchange: true,
++        });
++        return { skipped: "gate_expired_renewed", renewed: Boolean(renewed && renewed.ok) };
++      }
++      return { skipped: "gate_expired" };
++    }
+     const health = await probeToolsBridgeHealth();
+     if (health.reachable && health.hasSession === false) return { skipped: "tools_already_locked" };
+     return syncSiteLockToTools({ reloadShopTabs: true });
+@@ -1102,6 +1204,16 @@
+   const MIRROR_RETRY_MS = 3_000;
+   const MIRROR_RETRY_MAX = 20;
+ 
++  let lastGateRenewTryAt = 0;
++  async function tickGateRenewal() {
++    const now = Date.now();
++    if (now - lastGateRenewTryAt < GATE_RENEW_RETRY_MS) return;
++    const gate = await readShopGateCookie();
++    if (!gate.present || !gateRenewalDue(now)) return;
++    lastGateRenewTryAt = now;
++    await syncToolsSessionToSite({ reloadUnlockTabs: false });
++  }
++
+   async function tickBridgeSyncPoll() {
+     if (bridgeWatchInFlight) return;
+     bridgeWatchInFlight = true;
+@@ -1153,6 +1265,10 @@
+           mirrorRetryAt = retried && (retried.ok || retried.locked) ? 0 : Date.now() + MIRROR_RETRY_MS;
+         }
+       }
++      // While both sides are signed in, extend the Firefox gate before it runs out.
++      if (has && !siteLatch && !unlockHoldActive()) {
++        await tickGateRenewal();
++      }
+       // Same tick: Tools → Firefox person-settings (fun on/off).
+       await tickPersonSettingsWatch();
+     } catch {
+@@ -1509,6 +1625,11 @@
+   api.startToolsBridgeWatch = startToolsBridgeWatch;
+   api.startBridgeSyncPoll = startBridgeSyncPoll;
+   api.handleGateCookieRemoved = handleGateCookieRemoved;
++  api.siteUnlockPageIsExpiry = async () => {
++    await latchReady;
++    const gate = await readShopGateCookie();
++    return !gate.present && (Boolean(gate.unknown) || gateLapsedNaturally());
++  };
+   api.tickBridgeSyncPoll = tickBridgeSyncPoll;
+   api.armUnlockHold = armUnlockHold;
+   api.unlockHoldActive = unlockHoldActive;
+diff --git a/extension/version.json b/extension/version.json
+index 63798a1..cfc1f13 100644
+--- a/extension/version.json
++++ b/extension/version.json
+@@ -1,5 +1,5 @@
+ {
+-  "version": "0.1.29",
+-  "message": "Logged in: the popup shows plain \u201cLogged in as <name>\u201d (no sync / PIN boxes) and the toolbar icon turns green (red when logged out). Update now works: Firefox has no requestUpdateCheck, so Update opens the signed Desk install prompt (Allow, then Add) and Desk reloads itself. Sticky website lock from 0.1.28 unchanged.",
++  "version": "0.1.30",
++  "message": "No more surprise re-locks while you are signed in: a website session that simply runs out, or Tools\u2019 Bearer expiring, no longer locks the other side \u2014 Desk quietly renews the website session before it lapses. Deliberate locks (site Lock, Tools Lock, 8pm) stay sticky exactly as in 0.1.28.",
+   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
+ }
+diff --git a/package.json b/package.json
+index b70d1a6..bd668db 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "label-connect",
+   "private": true,
+-  "version": "0.1.29",
++  "version": "0.1.30",
+   "type": "module",
+   "description": "Label bench for the LabelWriter 550. Its own build. Prints to the CUPS queue LabelWriter550.",
+   "scripts": {
+diff --git a/test/desk-lock-unlock-gaps.test.mjs b/test/desk-lock-unlock-gaps.test.mjs
+index a85c318..eab515b 100644
+--- a/test/desk-lock-unlock-gaps.test.mjs
++++ b/test/desk-lock-unlock-gaps.test.mjs
+@@ -22,6 +22,9 @@ function makeWorld() {
+     mint: 0,
+     exchangeGate: null,
+     jar: new Map(),
++    jarExp: new Map(),
++    exchanges: 0,
++    cookieError: false,
+     reloads: [],
+     storage: {},
+     bridgeDown: false,
+@@ -52,7 +55,8 @@ function makeWorld() {
+           hasSession: world.tools.hasSession,
+           person: world.tools.hasSession ? world.tools.person : "",
+           sessionId: world.tools.hasSession ? world.tools.sessionId : "",
+-          locked: !world.tools.hasSession,
++          locked: world.tools.expired ? false : !world.tools.hasSession,
++          sessionExpired: Boolean(world.tools.expired),
+         });
+       }
+       if (u.pathname === "/v1/widget-session" && method === "GET") {
+@@ -79,6 +83,7 @@ function makeWorld() {
+     }
+     if (u.hostname === "shop.blackforestautomotive.com") {
+       if (u.pathname === "/api/widget/session/exchange") {
++        world.exchanges += 1;
+         if (world.exchangeGate) await world.exchangeGate;
+         if (world.exchangeFails > 0) {
+           world.exchangeFails -= 1;
+@@ -116,12 +121,21 @@ function makeWorld() {
+       },
+     },
+     cookies: {
+-      get: async ({ name }) => (world.jar.has(name) ? { name, value: world.jar.get(name) } : null),
+-      set: async ({ name, value }) => {
++      get: async ({ name }) => {
++        if (world.cookieError) throw new Error("cookie store unavailable");
++        if (!world.jar.has(name)) return null;
++        const cookie = { name, value: world.jar.get(name) };
++        if (world.jarExp.has(name)) cookie.expirationDate = world.jarExp.get(name);
++        return cookie;
++      },
++      set: async ({ name, value, expirationDate }) => {
+         world.jar.set(name, value);
++        if (expirationDate) world.jarExp.set(name, expirationDate);
++        else world.jarExp.delete(name);
+       },
+       remove: async ({ name }) => {
+         world.jar.delete(name);
++        world.jarExp.delete(name);
+       },
+     },
+     tabs: {
+@@ -240,7 +254,7 @@ function makeWorld() {
+     siteLock: async () => {
+       world.jar.delete(GATE);
+       await advance(700);
+-      await api.handleGateCookieRemoved();
++      await api.handleGateCookieRemoved({ cause: "explicit" });
+     },
+   };
+ }
+@@ -488,3 +502,133 @@ test("toolbar icon is green while logged in and red when logged out", async () =
+   await w.run(GAP);
+   assert.equal(w.world.icons.at(-1), "green");
+ });
++
++const HOUR = 3_600_000;
++
++test("a gate that simply ran out, with Tools still signed in, is renewed — not a lock", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  assert.equal(w.gate(), true);
++  const exp = w.world.jarExp.get(GATE);
++  assert.ok(exp, "Desk wrote the gate with an expiry");
++
++  await w.advance(HOUR + 1_000);
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++  await w.api.handleGateCookieRemoved({ cause: "expired", expirationDate: exp });
++  await w.run(GAP);
++  assert.equal(w.world.tools.hasSession, true, "Tools stays signed in");
++  assert.equal(w.gate(), true, "site gets a fresh gate");
++  assert.equal(w.api.siteLatchState(), null, "no sticky lock was engaged");
++});
++
++test("an expired gate noticed without a cookie event (suspended page) does not lock either", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  await w.advance(HOUR + 1_000);
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++  w.world.tools.n += 1;
++  w.world.tools.token = `tools-renewed-${w.world.tools.n}`;
++  w.world.tools.sessionId = `id-${w.world.tools.token}`;
++  await w.run(GAP);
++  assert.equal(w.world.tools.hasSession, true);
++  assert.equal(w.gate(), true);
++  assert.equal(w.api.siteLatchState(), null);
++});
++
++test("removing the gate before it expires is still a lock and stays sticky", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  const exp = w.world.jarExp.get(GATE);
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++  await w.advance(700);
++  await w.api.handleGateCookieRemoved({ cause: "explicit", expirationDate: exp });
++  await w.run(GAP);
++  assert.equal(w.world.tools.hasSession, false);
++  assert.notEqual(w.api.siteLatchState(), null);
++  await w.run(60_000);
++  assert.equal(w.gate(), false, "nothing reopens the site on its own");
++});
++
++test("the 8pm shop-time expiry is still a lock", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  const eightPm = 1_800_072_000_000;
++  w.world.jarExp.set(GATE, eightPm / 1000);
++  await w.api.readShopGateCookie();
++  await w.advance(eightPm - 1_800_000_000_000 + 1_000);
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++  await w.api.handleGateCookieRemoved({ cause: "expired", expirationDate: eightPm / 1000 });
++  await w.run(GAP);
++  assert.equal(w.world.tools.hasSession, false);
++  assert.notEqual(w.api.siteLatchState(), null);
++});
++
++test("an expired Tools Bearer (not a Tools lock) never clears the site gate", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  assert.equal(w.gate(), true);
++  w.world.tools.hasSession = false;
++  w.world.tools.expired = true;
++  await w.run(GAP);
++  assert.equal(w.gate(), true, "site session is untouched by Tools' Bearer expiry");
++  assert.equal(w.api.siteLatchState(), null);
++  w.world.tools.expired = false;
++  w.world.tools.hasSession = true;
++  await w.run(GAP);
++  assert.equal(w.gate(), true);
++});
++
++test("an unreadable cookie store is unknown, not a website lock", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  w.world.cookieError = true;
++  await w.api.handleGateCookieRemoved({ cause: "explicit" });
++  w.world.tools.n += 1;
++  w.world.tools.token = `tools-swap-${w.world.tools.n}`;
++  w.world.tools.sessionId = `id-${w.world.tools.token}`;
++  await w.run(GAP);
++  assert.equal(w.world.tools.hasSession, true);
++  assert.equal(w.api.siteLatchState(), null);
++});
++
++test("while both are signed in, Desk extends the gate before it runs out", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  const first = w.world.jarExp.get(GATE);
++  const before = w.world.exchanges;
++  await w.advance(45 * 60_000);
++  await w.run(2_000);
++  assert.ok(w.world.exchanges > before, "gate was re-exchanged ahead of expiry");
++  assert.ok(w.world.jarExp.get(GATE) > first, "new gate expires later");
++  assert.equal(w.world.tools.hasSession, true);
++});
++
++test("/unlock because the gate ran out is expiry; /unlock after a deliberate lock is not", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  assert.equal(await w.api.siteUnlockPageIsExpiry(), false, "gate present");
++  await w.advance(HOUR + 1_000);
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++  assert.equal(await w.api.siteUnlockPageIsExpiry(), true);
++});
