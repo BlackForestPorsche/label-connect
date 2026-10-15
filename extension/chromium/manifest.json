@@ -51,9 +51,21 @@
         "https://www.ssfautoparts.com/*"
       ],
       "js": [
+        "config.js",
+        "toast.js",
+        "lot-names.js",
         "content-ssf.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://shop.blackforestautomotive.com/*"
+      ],
+      "js": [
+        "content-shop.js"
+      ],
+      "run_at": "document_start"
     }
   ]
 }
