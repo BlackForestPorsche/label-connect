@@ -1,0 +1,39 @@
+name: Apply 0.1.32 bump (one-shot)
+on:
+  push:
+    branches: [cursor/windows-labels-print-9759]
+    paths: [.github/workflows/apply-bump-0132.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/windows-labels-print-9759
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Bump
+        run: |
+          set -euo pipefail
+          grep -q '"version": "0.1.31"' package.json || { echo already bumped; exit 0; }
+          sed -i 's/"version": "0.1.31"/"version": "0.1.32"/' package.json extension/chromium/manifest.json extension/firefox/manifest.json
+          sed -i '3s/0.1.31/0.1.32/;9s/0.1.31/0.1.32/' package-lock.json
+          sed -i 's/^\*\*0\.1\.31\*\* - Windows parity/**0.1.32** - Windows parity/; s/see 0\.1\.31 above/see 0.1.32 above/' README.md
+          python3 - <<'PY'
+          import json
+          p='extension/version.json'
+          d=json.load(open(p))
+          d['version']='0.1.32'
+          d['message']="Labels print service now prints natively on Windows (LabelWriter/DYMO) and the shop site can read the printer status. The Desk extension itself behaves the same as 0.1.31 on Chrome, Edge and Firefox."
+          open(p,'w').write(json.dumps(d,indent=2,ensure_ascii=False)+'\n')
+          PY
+          npm ci --silent
+          npm test
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json README.md extension
+          git commit -m "Labels/Desk 0.1.32: Windows print + shop CORS (Desk 0.1.31 Chromium work untouched)"
+          git push origin HEAD:cursor/windows-labels-print-9759
