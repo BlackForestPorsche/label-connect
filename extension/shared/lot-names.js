@@ -1,1 +1,1 @@
-@file:///tmp/desk-file-0.txt
+PLACEHOLDER_USE_CURSOR_MCP_ARGS_FILE
