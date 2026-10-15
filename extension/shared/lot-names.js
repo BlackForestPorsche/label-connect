@@ -1,1 +1,1 @@
-$file:/tmp/lot_exact.js
+__CURSOR_MCP_ARGS_FILE__
