@@ -16,6 +16,11 @@
   const PIN_RE = /^\d{4,12}$/;
   /** After Firefox website lock, do not re-exchange Tools Bearer into the site jar. */
   const SITE_LOCK_QUIET_MS = 90_000;
+  /**
+   * After website unlock (or successful gateToken deposit), Tools flap / hasSession:false
+   * must not clear Firefox bf_shop_gate — that is the unlock→refresh→lock bounce.
+   */
+  const SITE_UNLOCK_HOLD_MS = 120_000;
   /** Desk unlock roster (plasmoid fallback). */
   const DESK_PEOPLE = Object.freeze(["logan", "stephen", "steve", "carla", "john"]);
   let siteLockQuietUntil = 0;
@@ -178,14 +183,20 @@
       token &&
       (src === "shop-site" || src === "site-gate" || src === "pin");
     // Website unlock wins — clear the quiet window so Tools may unlock again.
+    // Hold Firefox gate against Tools hasSession flaps (unlock→refresh→lock bounce).
     if (!quiet && (src === "shop-site" || src === "site-gate" || src === "pin")) {
       siteLockQuietUntil = 0;
     }
+    const holdPatch =
+      src === "shop-site" || src === "site-gate" || src === "pin"
+        ? { siteUnlockHoldUntil: Date.now() + SITE_UNLOCK_HOLD_MS }
+        : {};
     await storageSet({
       shopWidgetToken: token,
       shopWidgetTokenExpiresAt: Date.now() + ttlMs,
       shopPerson: normalized || undefined,
       shopWidgetTokenSource: src,
+      ...holdPatch,
     });
     await setPinBadge(false);
     // Website → Tools unlock: push Bearer into :8788 so Tools SPA leaves /unlock.
@@ -280,6 +291,7 @@
       shopWidgetToken: "",
       shopWidgetTokenExpiresAt: 0,
       shopGateFromToolsAt: 0,
+      siteUnlockHoldUntil: 0,
     });
     await setPinBadge(true);
     const locked = await lockToolsViaBridge();
@@ -388,6 +400,7 @@
   /**
    * Write bf_shop_gate into this browser's jar (Firefox/Chromium ≠ Electron persist:shop).
    * Prefer explicit gateToken from exchange JSON; never log the value.
+   * Try Lax first (matches shop Set-Cookie) so unlock survives refresh in Firefox.
    */
   async function applyGateCookie(value, expiresAt) {
     if (!value || !runtime?.cookies?.set) {
@@ -395,31 +408,38 @@
     }
     const base = await shopBaseUrl();
     const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
-    const details = {
-      url: `${base}/`,
-      name,
-      value: String(value),
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      sameSite: "no_restriction",
-    };
     const parsed = expiresAt ? Date.parse(expiresAt) : NaN;
-    if (Number.isFinite(parsed)) {
-      details.expirationDate = Math.floor(parsed / 1000);
-    }
-    try {
-      await runtime.cookies.set(details);
-      return { ok: true };
-    } catch {
+    const expirationDate = Number.isFinite(parsed) ? Math.floor(parsed / 1000) : undefined;
+    const attempts = [
+      { secure: true, httpOnly: true, sameSite: "lax" },
+      { secure: true, httpOnly: true, sameSite: "no_restriction" },
+      { secure: true, httpOnly: true },
+      { secure: true, httpOnly: false, sameSite: "lax" },
+    ];
+    for (const flags of attempts) {
+      const details = {
+        url: `${base}/`,
+        name,
+        value: String(value),
+        path: "/",
+        ...flags,
+      };
+      if (expirationDate) details.expirationDate = expirationDate;
       try {
-        delete details.sameSite;
         await runtime.cookies.set(details);
-        return { ok: true };
+        const gate = await readShopGateCookie();
+        if (gate.present) {
+          await storageSet({
+            shopGateFromToolsAt: Date.now(),
+            siteUnlockHoldUntil: Date.now() + SITE_UNLOCK_HOLD_MS,
+          });
+          return { ok: true };
+        }
       } catch {
-        return { ok: false, reason: "set_failed" };
+        // try next flag combo
       }
     }
+    return { ok: false, reason: "set_failed" };
   }
 
   /**
@@ -559,13 +579,32 @@
 
     if (health.reachable && health.hasSession === false) {
       const hadGate = (await readShopGateCookie()).present;
+      const stored = await storageGet([
+        "shopWidgetTokenSource",
+        "shopGateFromToolsAt",
+        "siteUnlockHoldUntil",
+      ]);
+      const holdUntil = Number(stored.siteUnlockHoldUntil || 0);
+      const fromToolsAt = Number(stored.shopGateFromToolsAt || 0);
+      const unlockHoldActive =
+        Date.now() < holdUntil || (fromToolsAt > 0 && Date.now() - fromToolsAt < SITE_UNLOCK_HOLD_MS);
+      // Website just unlocked / gateToken just deposited — Tools flap must not wipe jar.
+      if (hadGate && unlockHoldActive && !siteLockQuietActive()) {
+        return {
+          ok: true,
+          reason: "keep_site_gate",
+          siteGate: true,
+          person: "",
+          shouldReload: false,
+        };
+      }
       await clearShopGateCookie();
-      const stored = await storageGet(["shopWidgetTokenSource"]);
       if (stored.shopWidgetTokenSource === "tools-bridge") {
         await storageSet({
           shopWidgetToken: "",
           shopWidgetTokenExpiresAt: 0,
           shopGateFromToolsAt: 0,
+          siteUnlockHoldUntil: 0,
         });
         await setPinBadge(true);
       }
