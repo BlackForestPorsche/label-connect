@@ -537,7 +537,7 @@
       const api = globalThis.AllDataRoLabels;
       if (!api?.resolveLotLastNames) {
         sendResponse({ names: [], source: "error", message: "Lot helper missing." });
-      return false;
+        return false;
       }
       api.resolveLotLastNames().then(sendResponse);
       return true;
@@ -732,17 +732,8 @@
         gateRemovalTimer = setTimeout(() => {
           gateRemovalTimer = null;
           const api = globalThis.AllDataRoLabels;
-          if (!api?.readShopGateCookie || !api?.syncSiteLockToTools) return;
-          // Unlock bounce: gateToken cookies.set can remove→set; do not lock Tools.
-          if (api.unlockHoldActive && api.unlockHoldActive()) return;
-          void api.readShopGateCookie().then((gate) => {
-            if (gate.present) return null;
-            if (api.unlockHoldActive && api.unlockHoldActive()) return null;
-            return api.probeToolsBridgeHealth().then((health) => {
-              if (health.reachable && health.hasSession === false) return null;
-              return api.syncSiteLockToTools({ reloadShopTabs: true });
-            });
-          });
+          if (!api?.handleGateCookieRemoved) return;
+          void api.handleGateCookieRemoved();
         }, GATE_REMOVAL_MS);
       });
     } catch {
