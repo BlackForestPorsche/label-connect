@@ -1,6 +1,6 @@
 {
-  "version": "0.1.31",
-  "message": "Chrome and Edge now match Firefox: the Update button downloads the Chromium zip and a Reload Desk button restarts the extension, the service worker is woken every 30 seconds so unlock sync keeps running, and the toolbar has a static icon before the first green/red check. Firefox behaviour is unchanged.",
+  "version": "0.1.32",
+  "message": "Labels print service now prints natively on Windows (LabelWriter/DYMO) and the shop site can read the printer status. The Desk extension itself behaves the same as 0.1.31 on Chrome, Edge and Firefox.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

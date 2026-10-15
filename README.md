@@ -10,7 +10,7 @@ From **shop-desktop 1.5.11+**, Black Forest Tools **owns** the Labels HTTP serve
 
 Desktop label bench for the DYMO LabelWriter 550. Prints to the CUPS queue **LabelWriter550** on Linux, or the Windows LabelWriter/DYMO printer via PrintTo.
 
-**0.1.31** - Windows parity: real LabelWriter/DYMO print on Windows. PDF is rendered with the built-in Windows PDF renderer and printed through the spooler at the matching DYMO paper (no PDF reader needed); falls back to SumatraPDF, then the shell PrintTo verb. `/api/printer` reports the Windows queue (name, port, offline/printing). Tools-friendly env: `LABELS_DATA_DIR`, `LABELS_HOST` (loopback by default on Windows), `LABELS_PRINTER`, `LABELS_WIN_PRINT=auto|native|sumatra|printto`, `LABELS_WIN_ROTATE=cw|ccw|none`, `LABELS_WIN_DPI`, `LABELS_SUMATRA`. Shop origin may read `GET /api/printer` and dry-run `print-ro` (CORS + Private Network Access preflight); real prints are not CORS-open. Gate/lock stays on Tools `:8788`, never here.
+**0.1.32** - Windows parity: real LabelWriter/DYMO print on Windows. PDF is rendered with the built-in Windows PDF renderer and printed through the spooler at the matching DYMO paper (no PDF reader needed); falls back to SumatraPDF, then the shell PrintTo verb. `/api/printer` reports the Windows queue (name, port, offline/printing). Tools-friendly env: `LABELS_DATA_DIR`, `LABELS_HOST` (loopback by default on Windows), `LABELS_PRINTER`, `LABELS_WIN_PRINT=auto|native|sumatra|printto`, `LABELS_WIN_ROTATE=cw|ccw|none`, `LABELS_WIN_DPI`, `LABELS_SUMATRA`. Shop origin may read `GET /api/printer` and dry-run `print-ro` (CORS + Private Network Access preflight); real prints are not CORS-open. Gate/lock stays on Tools `:8788`, never here.
 
 **0.1.22** - Unlock sync: popup Sync Tools→website force-exchanges; site-lock quiet clears when Tools unlocks (no re-DELETE); website unlock→Tools POST reliability.
 
@@ -91,4 +91,4 @@ Then reopen Labels so the server picks up the new files. Reload the browser exte
 
 ## Windows note
 
-On a Setup desk, Tools starts Labels for you (`npm start` is only for standalone runs, port 8080, loopback only). Printing renders the PDF with the built-in Windows PDF renderer and sends it to a printer named `LabelWriter550` or any installed queue matching `LabelWriter|DYMO` (SumatraPDF, then shell PrintTo, are fallbacks). Override the queue with `LABELS_PRINTER`; see 0.1.31 above for the other knobs.
+On a Setup desk, Tools starts Labels for you (`npm start` is only for standalone runs, port 8080, loopback only). Printing renders the PDF with the built-in Windows PDF renderer and sends it to a printer named `LabelWriter550` or any installed queue matching `LabelWriter|DYMO` (SumatraPDF, then shell PrintTo, are fallbacks). Override the queue with `LABELS_PRINTER`; see 0.1.32 above for the other knobs.
