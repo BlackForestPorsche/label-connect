@@ -1,6 +1,6 @@
 {
-  "version": "0.1.34",
-  "message": "Small update-path test: this is a dummy revision with no new features. If you are on Desk 0.1.33 and the popup Update button finds 0.1.34 and opens the signed install, the update path works. Nothing else changed.",
+  "version": "0.1.35",
+  "message": "Desk 0.1.35 fixes Update saying \"already the newest version\" right after a new Desk was announced. The Update badge now waits for the signed release, so clicking Update opens the signed install.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }
