@@ -63,13 +63,13 @@
     "path": "extension/shared/lot-names.js",
     "prefix": "extension__shared__lot-names.js",
     "chunks": 1,
-    "sha256": "647a3bec6a5ac786026acc9196d727f682796874674ab43a780dedf1a1837a61"
+    "sha256": "59291c3390349ac32092338c3ac257a321d7f1561e90427166e01f7176625a46"
   },
   {
     "path": "extension/shared/content-shop.js",
     "prefix": "extension__shared__content-shop.js",
     "chunks": 1,
-    "sha256": "b5feb0e23e7e0ff0fc433b79db88f061e22f52e0952c4059e738f53a74ffc7d3"
+    "sha256": "c56a033783e86b5e7f806665d27fd8988634dfb33df6e2957748c9b3d1a5c143"
   },
   {
     "path": "extension/shared/popup.js",
@@ -99,13 +99,13 @@
     "path": "extension/firefox/lot-names.js",
     "prefix": "extension__firefox__lot-names.js",
     "chunks": 1,
-    "sha256": "647a3bec6a5ac786026acc9196d727f682796874674ab43a780dedf1a1837a61"
+    "sha256": "59291c3390349ac32092338c3ac257a321d7f1561e90427166e01f7176625a46"
   },
   {
     "path": "extension/firefox/content-shop.js",
     "prefix": "extension__firefox__content-shop.js",
     "chunks": 1,
-    "sha256": "b5feb0e23e7e0ff0fc433b79db88f061e22f52e0952c4059e738f53a74ffc7d3"
+    "sha256": "c56a033783e86b5e7f806665d27fd8988634dfb33df6e2957748c9b3d1a5c143"
   },
   {
     "path": "extension/firefox/popup.js",
@@ -135,13 +135,13 @@
     "path": "extension/chromium/lot-names.js",
     "prefix": "extension__chromium__lot-names.js",
     "chunks": 1,
-    "sha256": "647a3bec6a5ac786026acc9196d727f682796874674ab43a780dedf1a1837a61"
+    "sha256": "59291c3390349ac32092338c3ac257a321d7f1561e90427166e01f7176625a46"
   },
   {
     "path": "extension/chromium/content-shop.js",
     "prefix": "extension__chromium__content-shop.js",
     "chunks": 1,
-    "sha256": "b5feb0e23e7e0ff0fc433b79db88f061e22f52e0952c4059e738f53a74ffc7d3"
+    "sha256": "c56a033783e86b5e7f806665d27fd8988634dfb33df6e2957748c9b3d1a5c143"
   },
   {
     "path": "extension/chromium/popup.js",
