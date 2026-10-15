@@ -1,0 +1,484 @@
+diff --git a/extension/chromium/manifest.json b/extension/chromium/manifest.json
+index 7928011..b913aeb 100644
+--- a/extension/chromium/manifest.json
++++ b/extension/chromium/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "manifest_version": 3,
+   "name": "Black Forest Desk",
+-  "version": "0.1.34",
++  "version": "0.1.35",
+   "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
+   "permissions": [
+     "storage",
+diff --git a/extension/firefox/manifest.json b/extension/firefox/manifest.json
+index b94aa3d..4dd2c2a 100644
+--- a/extension/firefox/manifest.json
++++ b/extension/firefox/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "manifest_version": 3,
+   "name": "Black Forest Desk",
+-  "version": "0.1.34",
++  "version": "0.1.35",
+   "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
+   "browser_specific_settings": {
+     "gecko": {
+diff --git a/extension/shared/background.js b/extension/shared/background.js
+index 0f5b1df..7e3178c 100644
+--- a/extension/shared/background.js
++++ b/extension/shared/background.js
+@@ -525,26 +525,11 @@
+     if (message.type === "site-unlock-page") {
+       // Delivery fallback when lockShop hook missed: /unlock page + Tools still open.
+       const api = globalThis.AllDataRoLabels;
+-      if (!api?.probeToolsBridgeHealth || !api?.syncSiteLockToTools) {
++      if (!api?.handleSiteUnlockPage) {
+         sendResponse({ ok: false, error: "Lot helper missing." });
+         return false;
+       }
+-      if (api.unlockHoldActive && api.unlockHoldActive()) {
+-        sendResponse({ ok: true, skipped: "unlock_hold" });
+-        return false;
+-      }
+-      api.probeToolsBridgeHealth().then(async (health) => {
+-        if (!health.reachable || health.hasSession === false) {
+-          sendResponse({ ok: true, skipped: "tools_already_locked" });
+-          return;
+-        }
+-        // /unlock because the site session simply ran out is not a Lock.
+-        if (api.siteUnlockPageIsExpiry && (await api.siteUnlockPageIsExpiry())) {
+-          sendResponse({ ok: true, skipped: "gate_expired" });
+-          return;
+-        }
+-        return api.syncSiteLockToTools({ reloadShopTabs: false }).then(sendResponse);
+-      });
++      api.handleSiteUnlockPage().then(sendResponse);
+       return true;
+     }
+     if (message.type === "check-update") {
+@@ -669,6 +654,7 @@
+         if (!cookie || cookie.name !== "bf_shop_gate") return;
+         if (!/blackforestautomotive\.com$/i.test(String(cookie.domain || ""))) return;
+         if (!changeInfo.removed) {
++          globalThis.AllDataRoLabels?.noteGateCookieAdded?.();
+           if (gateRemovalTimer) {
+             clearTimeout(gateRemovalTimer);
+             gateRemovalTimer = null;
+diff --git a/extension/shared/content-shop.js b/extension/shared/content-shop.js
+index 976db0e..7d171a2 100644
+--- a/extension/shared/content-shop.js
++++ b/extension/shared/content-shop.js
+@@ -23,6 +23,15 @@
+   const SERVERFN_UNLOCK_NAV_MS = 5_000;
+ 
+   let recentServerFnPostAt = 0;
++  /** A website unlock response just landed: never read follow-up /unlock state writes as Lock. */
++  let lastUnlockResponseAt = 0;
++  const UNLOCK_RESPONSE_QUIET_MS = 15_000;
++  let lastPathname = "";
++  try {
++    lastPathname = location.pathname || "";
++  } catch {
++    lastPathname = "";
++  }
+   let lastReportedSiteLockAt = 0;
+ 
+   function extractUnlock(raw) {
+@@ -121,7 +130,10 @@
+ }
+ 
+   function publish(session) {
+-    if (!session || !runtime?.runtime?.sendMessage) return;
++    if (!session) return;
++    lastUnlockResponseAt = Date.now();
++    recentServerFnPostAt = 0;
++    if (!runtime?.runtime?.sendMessage) return;
+     const send = () =>
+       runtime.runtime.sendMessage({ type: "shop-site-session", payload: session });
+     try {
+@@ -155,7 +167,14 @@
+ 
+   function maybeLockFromUnlockNavigation() {
+     try {
+-      if (!/\/unlock\b/i.test(location.pathname || "")) return;
++      const path = location.pathname || "";
++      const previous = lastPathname;
++      lastPathname = path;
++      if (!/\/unlock\b/i.test(path)) return;
++      // Only a move INTO /unlock is a Lock. Router state writes while already sitting on
++      // /unlock (the unlock form itself) are not.
++      if (/\/unlock\b/i.test(previous)) return;
++      if (Date.now() - lastUnlockResponseAt < UNLOCK_RESPONSE_QUIET_MS) return;
+       if (Date.now() - recentServerFnPostAt > SERVERFN_UNLOCK_NAV_MS) return;
+       reportSiteLock();
+     } catch {
+@@ -331,7 +350,10 @@
+       try {
+         if (key === "bf_shop_gate" && hadGate) {
+           hadGate = false;
+-          if (Date.now() - recentServerFnPostAt < SERVERFN_UNLOCK_NAV_MS) {
++          if (
++            Date.now() - recentServerFnPostAt < SERVERFN_UNLOCK_NAV_MS &&
++            Date.now() - lastUnlockResponseAt >= UNLOCK_RESPONSE_QUIET_MS
++          ) {
+             reportSiteLock();
+           }
+         }
+diff --git a/extension/shared/lot-names.js b/extension/shared/lot-names.js
+index 2d36ed0..a13fba5 100644
+--- a/extension/shared/lot-names.js
++++ b/extension/shared/lot-names.js
+@@ -19,6 +19,11 @@
+   const LATCH_KEY = "deskSiteLatch";
+   const GATE_SEEN_KEY = "deskGateSeen";
+   const GATE_EXPIRY_KEY = "deskGateExpiry";
++  const GATE_SEEN_SESSION_KEY = "deskGateSeenSession";
++  /** An unlock this fresh is never undone by an inferred (not user-clicked) site lock. */
++  const RECENT_UNLOCK_MS = 8_000;
++  /** Desk polls every 400ms: a gate gone this long past its own expiry was not removed by a Lock. */
++  const GATE_EXPIRY_STALE_MS = 120_000;
+   /** Renew the Firefox gate this long before it runs out (Tools renews its Bearer at 30m). */
+   const GATE_RENEW_MARGIN_MS = 20 * 60 * 1000;
+   const GATE_RENEW_RETRY_MS = 2 * 60 * 1000;
+@@ -44,10 +49,29 @@
+    */
+   let gateSeen = false;
+   function markGateSeen(value) {
++    if (value) bindGateSeenSession();
++    else clearGateSeenSession();
+     if (gateSeen === value) return;
+     gateSeen = value;
+     void storageSet({ [GATE_SEEN_KEY]: value });
+   }
++  /**
++   * Tools sessionId in force when the gate was last seen. A gate that is gone under a
++   * DIFFERENT Tools session (new sign-in, overnight 8pm lock, browser closed) was not
++   * removed by a website Lock of the session now on :8788 — it is just stale.
++   */
++  let gateSeenSessionId = "";
++  function bindGateSeenSession() {
++    const id = lastToolsSessionId || "";
++    if (!id || gateSeenSessionId === id) return;
++    gateSeenSessionId = id;
++    void storageSet({ [GATE_SEEN_SESSION_KEY]: id });
++  }
++  function clearGateSeenSession() {
++    if (!gateSeenSessionId) return;
++    gateSeenSessionId = "";
++    void storageSet({ [GATE_SEEN_SESSION_KEY]: "" });
++  }
+   /**
+    * Expiry (ms) of the gate cookie Desk last saw. A gate that vanishes AFTER this time just
+    * ran out; a gate that vanishes before it was removed on purpose (site Lock).
+@@ -84,6 +108,21 @@
+   function gateLapsedNaturally(nowMs = Date.now()) {
+     return gateExpiryMs > 0 && nowMs >= gateExpiryMs - 5_000 && !isLockHourExpiry(gateExpiryMs);
+   }
++  /**
++   * Is a missing gate evidence of a website Lock of the Tools session now on :8788?
++   * Returns "" when it is (lock Tools), otherwise why it is not (do not lock).
++   * Only INFERRED lock paths use this (page/cookie state); a user-clicked Lock arrives
++   * through the lockShop hook and always wins.
++   */
++  function siteLockEvidence(health, nowMs = Date.now()) {
++    if (recentUnlockActive(nowMs)) return "recent_unlock";
++    if (!gateSeen) return "gate_never_seen";
++    const sessionId = health && typeof health.sessionId === "string" ? health.sessionId : "";
++    if (gateSeenSessionId && sessionId && gateSeenSessionId !== sessionId) return "stale_session";
++    if (gateExpiryMs > 0 && nowMs > gateExpiryMs + GATE_EXPIRY_STALE_MS) return "expired_unobserved";
++    if (gateLapsedNaturally(nowMs)) return "expired";
++    return "";
++  }
+   /** Same, from a cookies.onChanged removal. Only cause "expired" at/after its own expiry. */
+   function removalIsNaturalExpiry(cause, expirationDateSec, nowMs = Date.now()) {
+     if (String(cause || "").toLowerCase() !== "expired") return false;
+@@ -109,6 +148,15 @@
+   let unlockHoldUntil = 0;
+   function armUnlockHold(ms = UNLOCK_HOLD_MS) {
+     unlockHoldUntil = Date.now() + ms;
++    lastUnlockAt = Date.now();
++  }
++  /**
++   * The hold above is zeroed by the first probe that sees Tools signed in (~400ms), so
++   * it cannot cover the reloaded /unlock page or the cookie swap. This window can.
++   */
++  let lastUnlockAt = 0;
++  function recentUnlockActive(nowMs = Date.now()) {
++    return lastUnlockAt > 0 && nowMs - lastUnlockAt < RECENT_UNLOCK_MS;
+   }
+   function unlockHoldActive(nowMs = Date.now()) {
+     return nowMs < unlockHoldUntil;
+@@ -119,8 +167,16 @@
+   }
+ 
+   async function loadLatch() {
+-    const stored = await storageGet([LATCH_KEY, GATE_SEEN_KEY, GATE_EXPIRY_KEY]);
++    const stored = await storageGet([
++      LATCH_KEY,
++      GATE_SEEN_KEY,
++      GATE_EXPIRY_KEY,
++      GATE_SEEN_SESSION_KEY,
++    ]);
+     if (stored[GATE_SEEN_KEY] === true) gateSeen = true;
++    if (!gateSeenSessionId && typeof stored[GATE_SEEN_SESSION_KEY] === "string") {
++      gateSeenSessionId = stored[GATE_SEEN_SESSION_KEY];
++    }
+     if (!gateExpiryMs && Number(stored[GATE_EXPIRY_KEY]) > 0) {
+       gateExpiryMs = Number(stored[GATE_EXPIRY_KEY]);
+     }
+@@ -855,9 +911,11 @@
+     ) {
+       const gateNow = await readShopGateCookie();
+       if (!gateNow.present && !gateNow.unknown) {
+-        if (gateLapsedNaturally()) {
+-          // The gate ran out of time while Tools still holds a live session: that is
+-          // session expiry, not a website Lock. Fall through and re-exchange.
++        const why = siteLockEvidence(health);
++        if (why) {
++          // The gate is gone but nothing says a Lock removed it: it ran out, or it
++          // belongs to an older Tools session, or we just unlocked (first sign-in).
++          // Fall through and exchange instead of locking Tools back.
+           markGateSeen(false);
+           noteGateExpiry(0);
+         } else {
+@@ -1180,6 +1238,8 @@
+     if (gate.present) return { skipped: "gate_present" };
+     if (gate.unknown) return { skipped: "gate_unknown" };
+     if (unlockHoldActive()) return { skipped: "unlock_hold" };
++    // cookies.set over an existing gate removes (cause "overwrite") then re-adds it.
++    if (String(info.cause || "").toLowerCase() === "overwrite") return { skipped: "gate_overwrite" };
+     if (removalIsNaturalExpiry(info.cause, info.expirationDate) || gateLapsedNaturally()) {
+       markGateSeen(false);
+       noteGateExpiry(0);
+@@ -1625,10 +1685,39 @@
+   api.startToolsBridgeWatch = startToolsBridgeWatch;
+   api.startBridgeSyncPoll = startBridgeSyncPoll;
+   api.handleGateCookieRemoved = handleGateCookieRemoved;
+-  api.siteUnlockPageIsExpiry = async () => {
++  /**
++   * Why an /unlock page load is NOT proof of a website Lock ("" = it is). Gate present
++   * or unreadable, gate ran out, gate belonged to an older Tools session, or this is
++   * the first sign-in landing on an /unlock tab that has not reloaded yet.
++   */
++  api.siteUnlockPageNotLockReason = async (health) => {
+     await latchReady;
+     const gate = await readShopGateCookie();
+-    return !gate.present && (Boolean(gate.unknown) || gateLapsedNaturally());
++    if (gate.present) return "gate_present";
++    if (gate.unknown) return "gate_unknown";
++    return siteLockEvidence(health);
++  };
++  api.siteUnlockPageIsExpiry = async (health) => Boolean(await api.siteUnlockPageNotLockReason(health));
++  /**
++   * The shop tab landed on /unlock. Lock Tools only with proof of a website Lock;
++   * otherwise it is a stale tab, an expired gate, or the first sign-in not yet reloaded.
++   */
++  api.handleSiteUnlockPage = async () => {
++    await latchReady;
++    if (unlockHoldActive()) return { ok: true, skipped: "unlock_hold" };
++    const health = await probeToolsBridgeHealth();
++    if (!health.reachable || health.hasSession === false) {
++      return { ok: true, skipped: "tools_already_locked" };
++    }
++    const notLock = await api.siteUnlockPageNotLockReason(health);
++    if (notLock) {
++      return { ok: true, skipped: notLock === "gate_present" ? notLock : "not_a_lock", reason: notLock };
++    }
++    return syncSiteLockToTools({ reloadShopTabs: false });
++  };
++  api.noteGateCookieAdded = async () => {
++    await latchReady;
++    await readShopGateCookie();
+   };
+   api.tickBridgeSyncPoll = tickBridgeSyncPoll;
+   api.armUnlockHold = armUnlockHold;
+diff --git a/extension/version.json b/extension/version.json
+index c19f771..e69312a 100644
+--- a/extension/version.json
++++ b/extension/version.json
+@@ -1,6 +1,6 @@
+ {
+-  "version": "0.1.34",
+-  "message": "Small update-path test: this is a dummy revision with no new features. If you are on Desk 0.1.33 and the popup Update button finds 0.1.34 and opens the signed install, the update path works. Nothing else changed.",
++  "version": "0.1.35",
++  "message": "Fixes the first sign-in flashing and locking. Signing in once on Tools or the site now sticks on Tools, the site and Desk; Desk no longer reads a stale or just-minted gate as a website Lock.",
+   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
+   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
+ }
+diff --git a/package.json b/package.json
+index 05dcbd8..6556bd6 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "label-connect",
+   "private": true,
+-  "version": "0.1.34",
++  "version": "0.1.35",
+   "type": "module",
+   "description": "Label bench for the LabelWriter 550. Its own build. Prints to the CUPS queue LabelWriter550.",
+   "scripts": {
+diff --git a/test/desk-first-unlock.test.mjs b/test/desk-first-unlock.test.mjs
+new file mode 100644
+index 0000000..8d6368d
+--- /dev/null
++++ b/test/desk-first-unlock.test.mjs
+@@ -0,0 +1,157 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { GATE, makeWorld } from "./helpers/desk-world.mjs";
++
++/**
++ * First sign-in must stick. Symptom (Logan, Manjaro): sign in once → UI flashes and
++ * locks → sign in a second time → clear everywhere. A gate or /unlock page that was
++ * never evidence of a website Lock of THIS Tools session must not lock Tools.
++ */
++
++const GAP = 10_000;
++const T0 = 1_800_000_000_000;
++const EIGHT_PM = 1_800_072_000_000;
++const HOUR = 3_600_000;
++
++async function signedInThenOvernight(w) {
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  assert.equal(w.gate(), true);
++  w.world.jarExp.set(GATE, EIGHT_PM / 1000);
++  await w.api.readShopGateCookie();
++  // Desk was not running through the 8pm shop lock: the cookie vanished with no event.
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++  w.toolsLock();
++  await w.advance(EIGHT_PM - T0 + 12 * HOUR);
++}
++
++test("morning first sign-in after an unobserved 8pm gate expiry sticks even when the first exchange fails", async () => {
++  const w = makeWorld();
++  await signedInThenOvernight(w);
++  w.toolsUnlock();
++  w.boot();
++  w.world.exchangeFails = 1;
++  await w.run(GAP);
++  assert.equal(w.world.tools.hasSession, true, "Tools stays signed in");
++  assert.equal(w.gate(), true, "site gets its gate on the first sign-in");
++  assert.equal(w.api.siteLatchState(), null, "no sticky lock engaged");
++  await w.run(60_000);
++  assert.equal(w.world.tools.hasSession, true);
++  assert.equal(w.gate(), true);
++});
++
++test("a gate seen under an older Tools session is stale: a shop-tab load racing the first sign-in does not lock", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  const firstId = w.world.tools.sessionId;
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++  w.toolsLock();
++  await w.advance(5 * 60_000);
++  w.toolsUnlock();
++  assert.notEqual(w.world.tools.sessionId, firstId);
++  w.boot();
++  const tabLoad = w.api.syncToolsSessionToSite({ reloadUnlockTabs: true, forceExchange: false });
++  await w.run(GAP);
++  await tabLoad;
++  assert.equal(w.world.tools.hasSession, true);
++  assert.equal(w.gate(), true);
++  assert.equal(w.api.siteLatchState(), null);
++});
++
++test("an /unlock tab landing before the first sign-in reaches the site does not lock Tools", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  const health = await w.api.probeToolsBridgeHealth();
++  assert.equal(health.hasSession, true);
++  assert.equal(w.gate(), false, "site gate not minted yet");
++
++  const result = await w.api.handleSiteUnlockPage();
++  assert.equal(result.skipped, "not_a_lock");
++  assert.equal(w.world.tools.hasSession, true, "Tools untouched");
++  assert.equal(w.api.siteLatchState(), null);
++
++  await w.run(GAP);
++  assert.equal(w.gate(), true);
++  assert.equal(w.world.tools.hasSession, true);
++});
++
++test("the reloaded /unlock tab seconds after the exchange does not lock Tools", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(800);
++  assert.equal(w.gate(), true);
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++
++  const racing = await w.api.handleSiteUnlockPage();
++  assert.equal(racing.ok, true);
++  assert.equal(racing.skipped, "not_a_lock");
++  assert.equal(w.world.tools.hasSession, true);
++
++  w.world.jar.set(GATE, "v2.gate");
++  const present = await w.api.handleSiteUnlockPage();
++  assert.equal(present.skipped, "gate_present");
++  assert.equal(w.world.tools.hasSession, true);
++});
++
++test("cookie overwrite during the first exchange (remove → add) does not lock Tools", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(800);
++  w.world.jar.delete(GATE);
++  const result = await w.api.handleGateCookieRemoved({ cause: "overwrite" });
++  assert.equal(result.skipped, "gate_overwrite");
++  assert.equal(w.world.tools.hasSession, true);
++  assert.equal(w.api.siteLatchState(), null);
++});
++
++test("a deliberate site Lock whose hook never fired still locks Tools via /unlock", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++  await w.advance(GAP);
++
++  const result = await w.api.handleSiteUnlockPage();
++  assert.equal(result.locked, true);
++  assert.equal(w.world.tools.hasSession, false);
++  assert.notEqual(w.api.siteLatchState(), null);
++});
++
++test("a deliberate site Lock noticed only by the poll still locks Tools (same session)", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  w.toolsUnlock();
++  await w.run(GAP);
++  w.world.jar.delete(GATE);
++  w.world.jarExp.delete(GATE);
++  w.boot();
++  await w.api.tryAutoUnlock({ force: false, reason: "shop-tab-complete" });
++  await w.run(5_000);
++  assert.equal(w.world.tools.hasSession, false);
++  assert.equal(w.gate(), false);
++});
++
++test("site PIN first unlock with an /unlock tab still open never locks Tools", async () => {
++  const w = makeWorld();
++  await w.run(800);
++  await w.siteUnlockPageLoad();
++  await w.api.noteGateCookieAdded();
++  await w.run(GAP);
++  assert.equal(w.world.tools.hasSession, true, "Tools follows the site unlock");
++  const result = await w.api.handleSiteUnlockPage();
++  assert.equal(result.skipped, "gate_present");
++  await w.run(GAP);
++  assert.equal(w.world.tools.hasSession, true);
++  assert.equal(w.gate(), true);
++});
