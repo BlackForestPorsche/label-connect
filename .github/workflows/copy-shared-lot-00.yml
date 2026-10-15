@@ -1,0 +1,40 @@
+name: copy-shared-lot-00
+on:
+  push:
+    branches: [cursor/desk-026-hub-ship-b196]
+    paths:
+      - tmp/desk-026-apply/.copy-shared-lot
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: copy-shared-lot-00
+  cancel-in-progress: true
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/desk-026-hub-ship-b196
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy firefox lot-names.00 to shared
+        run: |
+          set -euo pipefail
+          src=tmp/desk-026-apply/extension__firefox__lot-names.js.00
+          dst=tmp/desk-026-apply/extension__shared__lot-names.js.00
+          test -f "$src"
+          cp "$src" "$dst"
+          python3 - <<'PY'
+          import gzip, base64, hashlib, pathlib
+          raw = gzip.decompress(base64.b64decode(pathlib.Path("tmp/desk-026-apply/extension__shared__lot-names.js.00").read_text().strip()))
+          digest = hashlib.sha256(raw).hexdigest()
+          assert digest == "59291c3390349ac32092338c3ac257a321d7f1561e90427166e01f7176625a46", digest
+          print("ok", len(raw), digest)
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add "$dst"
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "fix(desk): restore shared lot-names.00 from good firefox chunk"
+          git push
