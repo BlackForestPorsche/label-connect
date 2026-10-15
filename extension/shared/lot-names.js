@@ -1,1 +1,1 @@
-$file:/tmp/desk-file-0.txt
+@file:///tmp/desk-file-0.txt
