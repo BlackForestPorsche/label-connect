@@ -32,7 +32,7 @@ jobs:
           npm run sync-extension >/dev/null
           sha256sum -c tmp/first-unlock/expected.sha256
           node --test test/desk-lock-unlock-gaps.test.mjs test/desk-first-unlock.test.mjs test/desk-manifest-parity.test.mjs test/desk-update.test.mjs
-          git rm -rq tmp/first-unlock
+          git rm -rqf tmp/first-unlock
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
