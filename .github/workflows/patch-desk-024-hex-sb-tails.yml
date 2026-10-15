@@ -1,0 +1,60 @@
+name: patch-desk-024-hex-sb-tails
+on:
+  push:
+    branches: [cursor/desk-024-update-apply-sync-b196]
+    paths: [.github/workflows/patch-desk-024-hex-sb-tails.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/desk-024-update-apply-sync-b196
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Append exact tails for shared_bg.02 and .03
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import hashlib
+
+          tails = {
+            "shared_bg.02": (
+              "386b4c696b46776347444b4950344135697653304f766f324153634173685757505a6f4c6c686f775236706b644469374a7539445077656b5945794e624e70776f4576554c344b5a7678724179534b5133787a395771696144435774736a366c6746374148346a746f6b532f454e79686e704872526178633875576274724673316d5049796765666a7568676b5a4b784750514b66555668474b37644c63387a6561656c4d655832475a54456e57645155594641567055564f6b4830486667696b462b6979624c50496356327a51466c623674327a65525644524c6e4e56656955736c6374483068414c6279356f4863576a4970347a46757572\n",
+              "cc588c3695f4",
+            ),
+            "shared_bg.03": (
+              "6e744f4d416c64307a75644441636c64684c354866636d6e78453465756b6e53514861326d7173545a6144344273417a5165612f37726b4a735634593348665839474f346b704c574c6a30324a7a34726a73614c373231463565326747506364676a6f555539655a6772787730414f764e4f7232436f696d55412f77767656526439617474374d2b352f3433714c4257445735766e744e7255374e30746e3353623233364550743953494173743332564f42354931592f4f357155764576445a62666361554f5851565a2f4f6d582f7a5232355064303269654d5172466f517a506f6d75652b353969343538767379642b6f3358726646337675\n",
+              "256ef957ebee",
+            ),
+          }
+
+          for name, (tail, expect12) in tails.items():
+              p = Path(f"tmp/desk-024-hex/{name}.hex")
+              cur = p.read_text()
+              if cur.endswith("\n") and len(cur) > 2500:
+                  print(name, "already final-ish", len(cur))
+              if len(cur.rstrip("\n")) != 2500 and len(cur) != 2500:
+                  raise SystemExit(f"{name} unexpected len {len(cur)}")
+              base = cur[:2500] if not cur[:2500].endswith("\n") else cur[:2499]
+              # remote is exact 2500 without needing strip
+              base = cur if len(cur) == 2500 else cur.rstrip("\n")[:2500]
+              if len(base) != 2500:
+                  raise SystemExit(f"{name} base len {len(base)}")
+              text = base + tail
+              # tail already includes \n
+              h = hashlib.sha256(text.encode()).hexdigest()[:12]
+              print(name, "len", len(text), "hash12", h, "expect", expect12)
+              if h != expect12:
+                  raise SystemExit(f"{name} hash mismatch")
+              p.write_text(text)
+              print(name, "wrote ok")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tmp/desk-024-hex/shared_bg.02.hex tmp/desk-024-hex/shared_bg.03.hex
+          git diff --cached --quiet || git commit -m "ci(desk): hex shared_bg.02/.03 exact final tails"
+          git push
