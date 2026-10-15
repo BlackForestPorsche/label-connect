@@ -992,7 +992,7 @@
     if (!gate.present) {
       return {
         error:
-          "Shop site is not signed in in this Firefox profile. Unlock shop.blackforestautomotive.com first.",
+          "Shop site is not signed in in this browser profile. Unlock shop.blackforestautomotive.com first.",
         reason: "no_gate_cookie",
       };
     }
@@ -1028,7 +1028,7 @@
     }
     if (response.status === 401 || response.status === 403) {
       return {
-        error: "Shop cookie was rejected. Unlock the shop site again in this Firefox profile.",
+        error: "Shop cookie was rejected. Unlock the shop site again in this browser profile.",
         reason: "unauthorized",
       };
     }
@@ -1519,7 +1519,7 @@
         names: cachedNames,
         source: cachedNames.length ? "cache" : "auth",
         message:
-          "Unlock the shop site in this Firefox profile (or Tools / desk PIN in the popup), then Refresh.",
+          "Unlock the shop site in this browser profile (or Tools / desk PIN in the popup), then Refresh.",
       };
     }
 

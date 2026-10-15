@@ -8,6 +8,9 @@
   const toolsBtn = document.getElementById("useTools");
   const checkBtn = document.getElementById("checkUpdate");
   const applyBtn = document.getElementById("applyUpdate");
+  const reloadBtn = document.getElementById("reloadDesk");
+  const isChromium = typeof runtime.runtime.getBrowserInfo !== "function";
+  if (isChromium && applyBtn) applyBtn.textContent = "Download update";
   const status = document.getElementById("status");
   const updateEl = document.getElementById("update");
   const versionEl = document.getElementById("version");
@@ -101,7 +104,13 @@
     }
     if (appliedVersion && String(appliedVersion) === String(version)) {
       showApply(false);
-      setUpdate(`Update ${version} installed — Restart Firefox.`, "ok");
+      setUpdate(
+        isChromium
+          ? `Update ${version} downloaded — unzip over the Desk folder, then Reload Desk.`
+          : `Update ${version} installed — Restart Firefox.`,
+        "ok",
+      );
+      if (isChromium && reloadBtn) reloadBtn.hidden = false;
       return;
     }
     showApply(true);
@@ -347,20 +356,42 @@
         } else if (response?.mode === "firefox_xpi_prompt" && response?.ok) {
           showApply(true);
           setUpdate(response.message || "Firefox is asking to install the update — click Allow, then Add.", "warn");
+        } else if (response?.mode === "chromium_zip" && response?.ok) {
+          showApply(true);
+          if (reloadBtn) reloadBtn.hidden = false;
+          await runtime.storage.local.set({ deskUpdateAppliedVersion: response.version });
+          setUpdate(response.message || "Downloaded. Unzip over the Desk folder, then Reload Desk.", "ok");
+        } else if (response?.mode === "chromium_manual") {
+          showApply(true);
+          if (reloadBtn) reloadBtn.hidden = false;
+          setUpdate(response.message || "Download the Desk zip from the release, unzip, then Reload Desk.", "warn");
         } else if (response?.ok && response?.applied) {
           showApply(false);
           setUpdate(response.message || "Updated.", "ok");
         } else {
-          setUpdate(response?.message || "Update failed. Try about:addons → ⚙ → Check for Updates.", "err");
+          setUpdate(response?.message || (isChromium ? "Update failed. Try again." : "Update failed. Try about:addons → ⚙ → Check for Updates."), "err");
           showApply(true);
         }
       } catch {
-        setUpdate("Update failed. Try about:addons → ⚙ → Check for Updates.", "err");
+        setUpdate(isChromium ? "Update failed. Try again." : "Update failed. Try about:addons → ⚙ → Check for Updates.", "err");
         showApply(true);
       } finally {
         applyBtn.disabled = false;
         checkBtn.disabled = false;
       }
+    });
+  }
+
+  if (reloadBtn) {
+    reloadBtn.addEventListener("click", async () => {
+      reloadBtn.disabled = true;
+      setUpdate("Reloading Desk…", "warn");
+      try {
+        await runtime.runtime.sendMessage({ type: "reload-extension" });
+      } catch {
+        // worker restarts mid-message
+      }
+      setTimeout(() => window.close(), 400);
     });
   }
 
