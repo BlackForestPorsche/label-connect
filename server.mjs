@@ -6,6 +6,7 @@ import QRCode from "qrcode";
 import { describePrinter } from "./shared/detect.mjs";
 import { sendPdfToQueue, sendToQueue } from "./shared/print.mjs";
 import { safePageKey } from "./shared/media.mjs";
+import { corsAllowed } from "./shared/cors.mjs";
 import { createRoPrintStore } from "./shared/ro-idempotency.mjs";
 import { normalizeRoPayload, planRoPrint, renderRoLabelPdf, roLabelLines } from "./shared/ro-label.mjs";
 import {
@@ -17,12 +18,13 @@ import {
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
-const dataDir = path.join(root, "data");
+const dataDir = process.env.LABELS_DATA_DIR ? path.resolve(process.env.LABELS_DATA_DIR) : path.join(root, "data");
 const labelsFile = path.join(dataDir, "labels.json");
 const roPrintsFile = path.join(dataDir, "ro-prints.json");
 const roPrintStore = createRoPrintStore(roPrintsFile);
 const port = Number(process.env.PORT || 8080);
-const host = "0.0.0.0";
+// Windows asks for a firewall exception when a process listens on every interface.
+const host = process.env.LABELS_HOST || (process.platform === "win32" ? "127.0.0.1" : "0.0.0.0");
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -64,6 +66,32 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
   res.end(payload);
 }
 
+function applyCors(req, res, url) {
+  const origin = String(req.headers.origin || "");
+  if (!origin) return false;
+  if (!corsAllowed(origin, req.method, url.pathname, url.searchParams)) {
+    if (req.method === "OPTIONS") {
+      res.writeHead(403, { "cache-control": "no-store" });
+      res.end();
+      return true;
+    }
+    return false;
+  }
+  res.setHeader("access-control-allow-origin", origin);
+  res.setHeader("vary", "Origin");
+  if (req.method !== "OPTIONS") return false;
+  res.writeHead(204, {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "content-type",
+    "access-control-allow-private-network": "true",
+    "access-control-max-age": "600",
+    "cache-control": "no-store",
+  });
+  res.end();
+  return true;
+}
+
 function readBody(req, limit = 8_000_000) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -103,6 +131,7 @@ async function serveStatic(res, urlPath) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   try {
+    if (applyCors(req, res, url)) return;
     if (req.method === "GET" && url.pathname === "/api/qr") {
       const text = (url.searchParams.get("text") || " ").slice(0, 80);
       const qr = QRCode.create(text, { errorCorrectionLevel: "M" });

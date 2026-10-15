@@ -3,6 +3,13 @@ import { constants as fsConstants } from "node:fs";
 import { open, readdir, readFile } from "node:fs/promises";
 import { QUEUE, FALLBACK_MEDIA, mediaBySku, parsePpd } from "./media.mjs";
 import { parseSkuDump, parseStatus } from "./status.mjs";
+import {
+  LIST_PRINTERS_SCRIPT,
+  POWERSHELL_ARGS,
+  parseWindowsPrinterList,
+  pickWindowsPrinter,
+  windowsQueueStatus,
+} from "./winprint.mjs";
 
 const PPD_CANDIDATES = [
   `/etc/cups/ppd/${QUEUE}.ppd`,
@@ -11,9 +18,13 @@ const PPD_CANDIDATES = [
   "/usr/share/cups/model/dymo/lw550.ppd",
 ];
 
-function run(cmd, args, timeoutMs = 4000) {
+function run(cmd, args, timeoutMs = 4000, { env } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+    });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
@@ -51,7 +62,24 @@ export async function loadMedia() {
   return { media: FALLBACK_MEDIA, ppd: null };
 }
 
+export async function listWindowsPrinters(runFn = run) {
+  const result = await runFn("powershell.exe", [...POWERSHELL_ARGS, "-Command", LIST_PRINTERS_SCRIPT], 15000);
+  if (result.code !== 0) return [];
+  return parseWindowsPrinterList(result.stdout);
+}
+
+export async function windowsQueue(runFn = run, env = process.env) {
+  const printers = await listWindowsPrinters(runFn);
+  const pick = pickWindowsPrinter(
+    printers.map((printer) => printer.name),
+    env,
+  );
+  const found = printers.find((printer) => printer.name === pick.name) ?? null;
+  return { ...windowsQueueStatus(found, String(env.LABELS_PRINTER || "").trim() || QUEUE), name: pick.name };
+}
+
 export async function queueStatus() {
+  if (process.platform === "win32") return windowsQueue();
   const listed = await run("lpstat", ["-p", QUEUE, "-l"]);
   const uri = await run("lpstat", ["-v", QUEUE]);
   if (listed.code !== 0) {
@@ -145,6 +173,7 @@ export async function readRoll() {
 
 export async function describePrinter() {
   const [{ media, ppd }, queue, roll] = await Promise.all([loadMedia(), queueStatus(), readRoll()]);
+  const queueName = queue.name || QUEUE;
   const sku = roll.status?.sku || roll.dump?.sku || "";
   const matched = mediaBySku(media, sku);
   let rollInfo = null;
@@ -163,7 +192,7 @@ export async function describePrinter() {
     };
   }
   return {
-    queue: QUEUE,
+    queue: queueName,
     ppd,
     queuePresent: queue.present,
     state: queue.state,
