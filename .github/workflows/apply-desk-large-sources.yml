@@ -1,8 +1,47 @@
-name: MUTED — apply-desk-large-sources
+name: apply-desk-large-sources
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'tmp/desk-large-sources/**'
+      - '.github/workflows/apply-desk-large-sources.yml'
 jobs:
-  muted:
+  apply:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - run: echo "Muted. Use main apply-payload.yml (soft-skip)."
+      - uses: actions/checkout@v4
+      - name: Assemble shared lot-names and mirror
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64, gzip, pathlib, hashlib, shutil
+          root = pathlib.Path("tmp/desk-large-sources")
+          key = "extension__shared__lot-names.js"
+          parts = sorted(root.glob(f"{key}.gz.b64.*"))
+          if not parts:
+              raise SystemExit("missing shared chunks")
+          b64 = "".join(p.read_text().strip() for p in parts)
+          data = gzip.decompress(base64.b64decode(b64))
+          shared = pathlib.Path("extension/shared/lot-names.js")
+          shared.parent.mkdir(parents=True, exist_ok=True)
+          shared.write_bytes(data)
+          print(shared, len(data), hashlib.sha256(data).hexdigest())
+          for dest in [
+              "extension/firefox/lot-names.js",
+              "extension/chromium/lot-names.js",
+          ]:
+              p = pathlib.Path(dest)
+              p.parent.mkdir(parents=True, exist_ok=True)
+              p.write_bytes(data)
+              print(dest, hashlib.sha256(data).hexdigest())
+          PY
+      - name: Commit assembled lot-names
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add extension/shared/lot-names.js extension/firefox/lot-names.js extension/chromium/lot-names.js
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "fix(desk): sticky gateToken unlock — Lax cookies.set + unlock hold"
+          git push
