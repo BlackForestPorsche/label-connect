@@ -69,7 +69,7 @@
     "path": "extension/shared/content-shop.js",
     "prefix": "extension__shared__content-shop.js",
     "chunks": 1,
-    "sha256": "f2ca9a100e8e8b10d0281ea8b42f047e3a343143ccb8d4e2af2a8531bca1c2b7"
+    "sha256": "b5feb0e23e7e0ff0fc433b79db88f061e22f52e0952c4059e738f53a74ffc7d3"
   },
   {
     "path": "extension/shared/popup.js",
@@ -105,7 +105,7 @@
     "path": "extension/firefox/content-shop.js",
     "prefix": "extension__firefox__content-shop.js",
     "chunks": 1,
-    "sha256": "f2ca9a100e8e8b10d0281ea8b42f047e3a343143ccb8d4e2af2a8531bca1c2b7"
+    "sha256": "b5feb0e23e7e0ff0fc433b79db88f061e22f52e0952c4059e738f53a74ffc7d3"
   },
   {
     "path": "extension/firefox/popup.js",
@@ -141,7 +141,7 @@
     "path": "extension/chromium/content-shop.js",
     "prefix": "extension__chromium__content-shop.js",
     "chunks": 1,
-    "sha256": "f2ca9a100e8e8b10d0281ea8b42f047e3a343143ccb8d4e2af2a8531bca1c2b7"
+    "sha256": "b5feb0e23e7e0ff0fc433b79db88f061e22f52e0952c4059e738f53a74ffc7d3"
   },
   {
     "path": "extension/chromium/popup.js",
