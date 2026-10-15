@@ -1,5 +1,5 @@
 {
-  "version": "0.1.26",
-  "message": "Combined Hub: Update applies; instant :8788; unlock-hold; website Lock hashed serverFn + sessionStorage (#67); DELETE+POST remint suppress; Create RO scrape (#64). Install 0.1.26 once.",
+  "version": "0.1.27",
+  "message": "Lock/unlock with short gaps: unlock-hold now releases once Tools shows the session, so Tools lock, site Lock and gate removal within ~35s of an unlock are no longer swallowed; swallowed Tools-lock edges replay.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }

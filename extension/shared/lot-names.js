@@ -431,6 +431,9 @@
       return { reachable: true, hasSession: false, reason: "health_error", status: response.status };
     }
     const hasSession = Boolean(data && data.hasSession);
+    // Tools now shows the unlock the hold was guarding. Holding on past this point
+    // swallows a real lock 10s later (Tools lock edge, site Lock, gate removal).
+    if (hasSession) unlockHoldUntil = 0;
     return {
       reachable: true,
       hasSession,
@@ -724,6 +727,11 @@
    */
   async function importSiteGateSession() {
     const gate = await readShopGateCookie();
+    if (gate.present) {
+      // A just-unlocked shop page can race tab-complete auto-unlock before from-gate
+      // lands in Tools. Hold until Tools shows the session (probe releases it).
+      armUnlockHold();
+    }
     if (!gate.present) {
       return {
         error:
@@ -903,6 +911,17 @@
   let lastBridgeFingerprint = "";
   let bridgeWatchInFlight = false;
 
+  async function handleGateCookieRemoved() {
+    // Unlock bounce: gateToken cookies.set can remove→set; do not lock Tools.
+    if (unlockHoldActive()) return { skipped: "unlock_hold" };
+    const gate = await readShopGateCookie();
+    if (gate.present) return { skipped: "gate_present" };
+    if (unlockHoldActive()) return { skipped: "unlock_hold" };
+    const health = await probeToolsBridgeHealth();
+    if (health.reachable && health.hasSession === false) return { skipped: "tools_already_locked" };
+    return syncSiteLockToTools({ reloadShopTabs: true });
+  }
+
   async function tickBridgeSyncPoll() {
     if (bridgeWatchInFlight) return;
     bridgeWatchInFlight = true;
@@ -921,7 +940,12 @@
         lastBridgeHasSession = has;
         lastBridgeFingerprint = fp;
         if (first || edge) {
-          await syncToolsSessionToSite({ reloadUnlockTabs: true, forceExchange: has });
+          const synced = await syncToolsSessionToSite({ reloadUnlockTabs: true, forceExchange: has });
+          if (synced && synced.skipped === "unlock_hold") {
+            // Edge was swallowed by the hold. Replay it once the hold ends.
+            lastBridgeHasSession = null;
+            lastBridgeFingerprint = "";
+          }
         }
       }
       // Same tick: Tools → Firefox person-settings (fun on/off).
@@ -932,7 +956,6 @@
       bridgeWatchInFlight = false;
     }
   }
-
 
   /**
    * Partner (bc-0eb7ffe4) contract: Tools 1.5.14+ GET/POST /v1/person-settings.
@@ -1275,6 +1298,8 @@
   api.tryAutoUnlock = tryAutoUnlock;
   api.startToolsBridgeWatch = startToolsBridgeWatch;
   api.startBridgeSyncPoll = startBridgeSyncPoll;
+  api.handleGateCookieRemoved = handleGateCookieRemoved;
+  api.tickBridgeSyncPoll = tickBridgeSyncPoll;
   api.armUnlockHold = armUnlockHold;
   api.unlockHoldActive = unlockHoldActive;
   api.startPersonSettingsBridge = startPersonSettingsBridge;
