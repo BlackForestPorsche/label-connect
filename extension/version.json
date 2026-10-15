@@ -1,5 +1,5 @@
 {
-  "version": "0.1.23",
-  "message": "Create RO scrape: row wrappers + wait for lastName/model after UI confirm (no plate/account loosen).",
+  "version": "0.1.26",
+  "message": "Combined Hub: Update applies; instant :8788; unlock-hold; website Lock hashed serverFn + sessionStorage (#67); DELETE+POST remint suppress; Create RO scrape (#64). Install 0.1.26 once.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
 }

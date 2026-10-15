@@ -241,8 +241,8 @@ function signedStagedResult({ version, root, staged, detail }) {
     applied: false,
     restartRequired: false,
     message: pathHint
-      ? `Signed Desk ${ver} ready on Desktop (${pathHint}). about:addons → gear → Install Add-on From File… (or wait for Firefox auto-update).${detail ? ` ${detail}` : ""}`
-      : `Signed Desk ${ver} feed staged. about:addons → Install Add-on From File, or Check for Updates.${detail ? ` ${detail}` : ""}`,
+      ? `Still Installed (Firefox) · Staged ${ver} on Desktop (NOT applied): ${pathHint}. about:addons → gear → Install Add-on From File… — Desktop alone is not an upgrade.${detail ? ` ${detail}` : ""}`
+      : `Still Installed (Firefox) · Staged ${ver} (NOT applied). about:addons → Install Add-on From File, or Check for Updates.${detail ? ` ${detail}` : ""}`,
   };
 }
 
