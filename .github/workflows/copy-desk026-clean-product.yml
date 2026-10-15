@@ -1,0 +1,54 @@
+name: copy-desk026-clean-product
+on:
+  workflow_dispatch:
+  push:
+    branches: [cursor/desk-026-hub-clean-b196]
+    paths: [.github/workflows/copy-desk026-clean-product.yml]
+permissions:
+  contents: write
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/desk-026-hub-clean-b196
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy product sources from dirty tip (no tmp/)
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin cursor/desk-026-hub-ship-b196
+          SRC=origin/cursor/desk-026-hub-ship-b196
+          PATHS=(
+            package-lock.json
+            shared/desk-update.mjs
+            extension/shared/background.js
+            extension/shared/content-shop.js
+            extension/shared/popup.js
+            extension/firefox/background.js
+            extension/firefox/content-shop.js
+            extension/firefox/popup.js
+            extension/firefox/lot-names.js
+            extension/chromium/background.js
+            extension/chromium/content-shop.js
+            extension/chromium/popup.js
+            extension/chromium/lot-names.js
+          )
+          for p in "${PATHS[@]}"; do
+            git checkout "$SRC" -- "$p"
+          done
+          # shared lot-names on dirty tip is stale; firefox copy matches batch
+          cp extension/firefox/lot-names.js extension/shared/lot-names.js
+          git add extension/shared/lot-names.js
+          # Remove this one-shot workflow so PR stays product-only
+          rm -f .github/workflows/copy-desk026-clean-product.yml
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+            exit 0
+          fi
+          git commit -m "fix(desk): 0.1.26 Hub product sources (copy from verified tip, no tmp/)"
+          git push origin HEAD:cursor/desk-026-hub-clean-b196
