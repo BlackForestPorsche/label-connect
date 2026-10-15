@@ -23,6 +23,15 @@
   const SERVERFN_UNLOCK_NAV_MS = 5_000;
 
   let recentServerFnPostAt = 0;
+  /** A website unlock response just landed: never read follow-up /unlock state writes as Lock. */
+  let lastUnlockResponseAt = 0;
+  const UNLOCK_RESPONSE_QUIET_MS = 15_000;
+  let lastPathname = "";
+  try {
+    lastPathname = location.pathname || "";
+  } catch {
+    lastPathname = "";
+  }
   let lastReportedSiteLockAt = 0;
 
   function extractUnlock(raw) {
@@ -121,7 +130,10 @@
   }
 
   function publish(session) {
-    if (!session || !runtime?.runtime?.sendMessage) return;
+    if (!session) return;
+    lastUnlockResponseAt = Date.now();
+    recentServerFnPostAt = 0;
+    if (!runtime?.runtime?.sendMessage) return;
     const send = () =>
       runtime.runtime.sendMessage({ type: "shop-site-session", payload: session });
     try {
@@ -155,7 +167,14 @@
 
   function maybeLockFromUnlockNavigation() {
     try {
-      if (!/\/unlock\b/i.test(location.pathname || "")) return;
+      const path = location.pathname || "";
+      const previous = lastPathname;
+      lastPathname = path;
+      if (!/\/unlock\b/i.test(path)) return;
+      // Only a move INTO /unlock is a Lock. Router state writes while already sitting on
+      // /unlock (the unlock form itself) are not.
+      if (/\/unlock\b/i.test(previous)) return;
+      if (Date.now() - lastUnlockResponseAt < UNLOCK_RESPONSE_QUIET_MS) return;
       if (Date.now() - recentServerFnPostAt > SERVERFN_UNLOCK_NAV_MS) return;
       reportSiteLock();
     } catch {
@@ -331,7 +350,10 @@
       try {
         if (key === "bf_shop_gate" && hadGate) {
           hadGate = false;
-          if (Date.now() - recentServerFnPostAt < SERVERFN_UNLOCK_NAV_MS) {
+          if (
+            Date.now() - recentServerFnPostAt < SERVERFN_UNLOCK_NAV_MS &&
+            Date.now() - lastUnlockResponseAt >= UNLOCK_RESPONSE_QUIET_MS
+          ) {
             reportSiteLock();
           }
         }
