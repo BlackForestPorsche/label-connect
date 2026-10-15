@@ -417,9 +417,14 @@
         sendResponse({ ok: true, skipped: "unlock_hold" });
         return false;
       }
-      api.probeToolsBridgeHealth().then((health) => {
+      api.probeToolsBridgeHealth().then(async (health) => {
         if (!health.reachable || health.hasSession === false) {
           sendResponse({ ok: true, skipped: "tools_already_locked" });
+          return;
+        }
+        // /unlock because the site session simply ran out is not a Lock.
+        if (api.siteUnlockPageIsExpiry && (await api.siteUnlockPageIsExpiry())) {
+          sendResponse({ ok: true, skipped: "gate_expired" });
           return;
         }
         return api.syncSiteLockToTools({ reloadShopTabs: false }).then(sendResponse);
@@ -539,11 +544,12 @@
           return;
         }
         if (gateRemovalTimer) clearTimeout(gateRemovalTimer);
+        const removalInfo = { cause: changeInfo.cause, expirationDate: cookie.expirationDate };
         gateRemovalTimer = setTimeout(() => {
           gateRemovalTimer = null;
           const api = globalThis.AllDataRoLabels;
           if (!api?.handleGateCookieRemoved) return;
-          void api.handleGateCookieRemoved();
+          void api.handleGateCookieRemoved(removalInfo);
         }, GATE_REMOVAL_MS);
       });
     } catch {

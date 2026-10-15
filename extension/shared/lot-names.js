@@ -18,6 +18,13 @@
   const LEGACY_LOCK_QUIET_MS = 90_000;
   const LATCH_KEY = "deskSiteLatch";
   const GATE_SEEN_KEY = "deskGateSeen";
+  const GATE_EXPIRY_KEY = "deskGateExpiry";
+  /** Renew the Firefox gate this long before it runs out (Tools renews its Bearer at 30m). */
+  const GATE_RENEW_MARGIN_MS = 20 * 60 * 1000;
+  const GATE_RENEW_RETRY_MS = 2 * 60 * 1000;
+  /** Site shop-time lock: the gate cookie's own expiry is 8pm America/Los_Angeles. */
+  const LOCK_TIME_ZONE = "America/Los_Angeles";
+  const LOCK_HOUR = 20;
   /** Desk's own cookie writes (exchange / clear) must not look like a site lock or unlock. */
   const DESK_GATE_WRITE_MS = 4_000;
   /** Desk unlock roster (plasmoid fallback). */
@@ -41,6 +48,56 @@
     gateSeen = value;
     void storageSet({ [GATE_SEEN_KEY]: value });
   }
+  /**
+   * Expiry (ms) of the gate cookie Desk last saw. A gate that vanishes AFTER this time just
+   * ran out; a gate that vanishes before it was removed on purpose (site Lock).
+   */
+  let gateExpiryMs = 0;
+  function noteGateExpiry(ms) {
+    const next = Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 0;
+    if (gateExpiryMs === next) return;
+    gateExpiryMs = next;
+    void storageSet({ [GATE_EXPIRY_KEY]: next });
+  }
+  function isLockHourExpiry(ms) {
+    if (!Number.isFinite(ms) || ms <= 0) return false;
+    let fmt;
+    try {
+      fmt = new Intl.DateTimeFormat("en-US", {
+        timeZone: LOCK_TIME_ZONE,
+        hour: "numeric",
+        minute: "numeric",
+        hourCycle: "h23",
+      });
+    } catch {
+      return false;
+    }
+    for (const delta of [0, 90_000, -90_000]) {
+      const parts = fmt.formatToParts(new Date(ms + delta));
+      const hour = Number(parts.find((x) => x.type === "hour")?.value);
+      const minute = Number(parts.find((x) => x.type === "minute")?.value);
+      if (hour === LOCK_HOUR && minute === 0) return true;
+    }
+    return false;
+  }
+  /** The gate is gone because its (non-8pm) expiry passed — session expiry, not a lock. */
+  function gateLapsedNaturally(nowMs = Date.now()) {
+    return gateExpiryMs > 0 && nowMs >= gateExpiryMs - 5_000 && !isLockHourExpiry(gateExpiryMs);
+  }
+  /** Same, from a cookies.onChanged removal. Only cause "expired" at/after its own expiry. */
+  function removalIsNaturalExpiry(cause, expirationDateSec, nowMs = Date.now()) {
+    if (String(cause || "").toLowerCase() !== "expired") return false;
+    const expMs = Number(expirationDateSec) * 1000;
+    if (!Number.isFinite(expMs) || expMs > nowMs + 5_000) return false;
+    return !isLockHourExpiry(expMs);
+  }
+  function gateRenewalDue(nowMs = Date.now()) {
+    return (
+      gateExpiryMs > 0 &&
+      gateExpiryMs - nowMs < GATE_RENEW_MARGIN_MS &&
+      !isLockHourExpiry(gateExpiryMs)
+    );
+  }
   let lastToolsSessionId = null;
   /** Last time something other than Desk removed bf_shop_gate (site Lock). */
   let lastForeignGateRemovedAt = 0;
@@ -62,8 +119,11 @@
   }
 
   async function loadLatch() {
-    const stored = await storageGet([LATCH_KEY, GATE_SEEN_KEY]);
+    const stored = await storageGet([LATCH_KEY, GATE_SEEN_KEY, GATE_EXPIRY_KEY]);
     if (stored[GATE_SEEN_KEY] === true) gateSeen = true;
+    if (!gateExpiryMs && Number(stored[GATE_EXPIRY_KEY]) > 0) {
+      gateExpiryMs = Number(stored[GATE_EXPIRY_KEY]);
+    }
     const value = stored[LATCH_KEY];
     if (value && typeof value === "object" && !siteLatch) {
       siteLatch = {
@@ -524,17 +584,21 @@
     const base = await shopBaseUrl();
     const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
     if (!runtime?.cookies?.get) {
-      return { present: false, reason: "no_cookies_api" };
+      return { present: false, unknown: true, reason: "no_cookies_api" };
     }
     try {
       const cookie = await runtime.cookies.get({ url: `${base}/`, name });
       if (cookie && cookie.value) {
         markGateSeen(true);
+        noteGateExpiry(
+          Number.isFinite(cookie.expirationDate) ? cookie.expirationDate * 1000 : 0,
+        );
         return { present: true };
       }
       return { present: false, reason: "missing" };
     } catch {
-      return { present: false, reason: "cookie_error" };
+      // A failed read is "don't know", never "the site is locked".
+      return { present: false, unknown: true, reason: "cookie_error" };
     }
   }
 
@@ -569,12 +633,14 @@
     // swallows a real lock 10s later (Tools lock edge, site Lock, gate removal).
     if (hasSession) unlockHoldUntil = 0;
     const sessionId = data && typeof data.sessionId === "string" ? data.sessionId : undefined;
+    const sessionExpired = !hasSession && Boolean(data && data.sessionExpired);
     if (hasSession && sessionId) lastToolsSessionId = sessionId;
     if (!hasSession) lastToolsSessionId = "";
     return {
       reachable: true,
       sessionId,
       locked: data && typeof data.locked === "boolean" ? data.locked : undefined,
+      sessionExpired,
       hasSession,
       person: data && data.person ? String(data.person) : "",
       reason: hasSession ? "has_session" : "no_session",
@@ -587,6 +653,7 @@
     if (!runtime?.cookies?.remove) return { ok: false, reason: "no_cookies_api" };
     deskGateWriteUntil = Date.now() + DESK_GATE_WRITE_MS;
     markGateSeen(false);
+    noteGateExpiry(0);
     try {
       await runtime.cookies.remove({ url: `${base}/`, name });
       return { ok: true };
@@ -623,12 +690,14 @@
     try {
       await runtime.cookies.set(details);
       markGateSeen(true);
+      noteGateExpiry(details.expirationDate ? details.expirationDate * 1000 : 0);
       return { ok: true };
     } catch {
       try {
         delete details.sameSite;
         await runtime.cookies.set(details);
         markGateSeen(true);
+        noteGateExpiry(details.expirationDate ? details.expirationDate * 1000 : 0);
         return { ok: true };
       } catch {
         return { ok: false, reason: "set_failed" };
@@ -782,17 +851,26 @@
       gateSeen &&
       health.reachable &&
       health.hasSession &&
-      !unlockHoldActive() &&
-      !(await readShopGateCookie()).present
+      !unlockHoldActive()
     ) {
-      await syncSiteLockToTools({ reloadShopTabs: true });
-      return {
-        ok: false,
-        locked: true,
-        shouldReload: false,
-        reason: "site_lock",
-        error: "Website was locked — Tools locked to match.",
-      };
+      const gateNow = await readShopGateCookie();
+      if (!gateNow.present && !gateNow.unknown) {
+        if (gateLapsedNaturally()) {
+          // The gate ran out of time while Tools still holds a live session: that is
+          // session expiry, not a website Lock. Fall through and re-exchange.
+          markGateSeen(false);
+          noteGateExpiry(0);
+        } else {
+          await syncSiteLockToTools({ reloadShopTabs: true });
+          return {
+            ok: false,
+            locked: true,
+            shouldReload: false,
+            reason: "site_lock",
+            error: "Website was locked — Tools locked to match.",
+          };
+        }
+      }
     }
 
     if (health.reachable && health.hasSession === false) {
@@ -804,6 +882,16 @@
           ok: true,
           skipped: "unlock_hold",
           reason: "unlock_hold",
+          siteGate: (await readShopGateCookie()).present,
+        };
+      }
+      // Tools' Bearer ran out (not a Tools lock): the website session is still its own
+      // thing. Clearing the gate here is what turned a quiet expiry into a lock of both.
+      if (health.sessionExpired && health.locked !== true) {
+        return {
+          ok: true,
+          skipped: "tools_session_expired",
+          reason: "tools_session_expired",
           siteGate: (await readShopGateCookie()).present,
         };
       }
@@ -855,7 +943,7 @@
     const stored = await storageGet(["shopWidgetToken"]);
     const token = stored.shopWidgetToken;
     const gateBefore = (await readShopGateCookie()).present;
-    if (gateBefore && !forceExchange) {
+    if (gateBefore && !forceExchange && !gateRenewalDue()) {
       return {
         ok: true,
         person: fromTools.person,
@@ -1083,14 +1171,28 @@
   let lastBridgeFingerprint = "";
   let bridgeWatchInFlight = false;
 
-  async function handleGateCookieRemoved() {
+  async function handleGateCookieRemoved(info = {}) {
     // Unlock bounce: gateToken cookies.set can remove→set; do not lock Tools.
     await latchReady;
     if (siteLatch) return { skipped: "already_latched" };
     if (unlockHoldActive()) return { skipped: "unlock_hold" };
     const gate = await readShopGateCookie();
     if (gate.present) return { skipped: "gate_present" };
+    if (gate.unknown) return { skipped: "gate_unknown" };
     if (unlockHoldActive()) return { skipped: "unlock_hold" };
+    if (removalIsNaturalExpiry(info.cause, info.expirationDate) || gateLapsedNaturally()) {
+      markGateSeen(false);
+      noteGateExpiry(0);
+      const health = await probeToolsBridgeHealth();
+      if (health.reachable && health.hasSession) {
+        const renewed = await syncToolsSessionToSite({
+          reloadUnlockTabs: true,
+          forceExchange: true,
+        });
+        return { skipped: "gate_expired_renewed", renewed: Boolean(renewed && renewed.ok) };
+      }
+      return { skipped: "gate_expired" };
+    }
     const health = await probeToolsBridgeHealth();
     if (health.reachable && health.hasSession === false) return { skipped: "tools_already_locked" };
     return syncSiteLockToTools({ reloadShopTabs: true });
@@ -1101,6 +1203,16 @@
   let mirrorRetries = 0;
   const MIRROR_RETRY_MS = 3_000;
   const MIRROR_RETRY_MAX = 20;
+
+  let lastGateRenewTryAt = 0;
+  async function tickGateRenewal() {
+    const now = Date.now();
+    if (now - lastGateRenewTryAt < GATE_RENEW_RETRY_MS) return;
+    const gate = await readShopGateCookie();
+    if (!gate.present || !gateRenewalDue(now)) return;
+    lastGateRenewTryAt = now;
+    await syncToolsSessionToSite({ reloadUnlockTabs: false });
+  }
 
   async function tickBridgeSyncPoll() {
     if (bridgeWatchInFlight) return;
@@ -1152,6 +1264,10 @@
           const retried = await syncToolsSessionToSite({ reloadUnlockTabs: true });
           mirrorRetryAt = retried && (retried.ok || retried.locked) ? 0 : Date.now() + MIRROR_RETRY_MS;
         }
+      }
+      // While both sides are signed in, extend the Firefox gate before it runs out.
+      if (has && !siteLatch && !unlockHoldActive()) {
+        await tickGateRenewal();
       }
       // Same tick: Tools → Firefox person-settings (fun on/off).
       await tickPersonSettingsWatch();
@@ -1509,6 +1625,11 @@
   api.startToolsBridgeWatch = startToolsBridgeWatch;
   api.startBridgeSyncPoll = startBridgeSyncPoll;
   api.handleGateCookieRemoved = handleGateCookieRemoved;
+  api.siteUnlockPageIsExpiry = async () => {
+    await latchReady;
+    const gate = await readShopGateCookie();
+    return !gate.present && (Boolean(gate.unknown) || gateLapsedNaturally());
+  };
   api.tickBridgeSyncPoll = tickBridgeSyncPoll;
   api.armUnlockHold = armUnlockHold;
   api.unlockHoldActive = unlockHoldActive;
