@@ -1,1 +1,1 @@
-PLACEHOLDER_USE_CURSOR_MCP_ARGS_FILE
+$file:/tmp/lot_exact.js
