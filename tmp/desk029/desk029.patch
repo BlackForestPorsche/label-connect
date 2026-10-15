@@ -1,0 +1,846 @@
+diff --git a/extension/chromium/manifest.json b/extension/chromium/manifest.json
+index 4206232..a36e2e4 100644
+--- a/extension/chromium/manifest.json
++++ b/extension/chromium/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "manifest_version": 3,
+   "name": "Black Forest Desk",
+-  "version": "0.1.28",
++  "version": "0.1.29",
+   "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
+   "permissions": [
+     "storage",
+diff --git a/extension/firefox/manifest.json b/extension/firefox/manifest.json
+index f4ca254..c1f8e5a 100644
+--- a/extension/firefox/manifest.json
++++ b/extension/firefox/manifest.json
+@@ -1,7 +1,7 @@
+ {
+   "manifest_version": 3,
+   "name": "Black Forest Desk",
+-  "version": "0.1.28",
++  "version": "0.1.29",
+   "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
+   "browser_specific_settings": {
+     "gecko": {
+diff --git a/extension/shared/background.js b/extension/shared/background.js
+index 51f0d80..9cdf4bb 100644
+--- a/extension/shared/background.js
++++ b/extension/shared/background.js
+@@ -126,7 +126,7 @@
+             local,
+             message:
+               remote.message ||
+-              "Hub On your own → Upload New Version, then about:addons → Install Add-on From File (Hub-signed XPI).",
++              "Firefox installs it from the signed Desk feed.",
+             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
+           }
+         : null;
+@@ -157,16 +157,6 @@
+   const UPDATES_JSON_URL = `${RELEASE_XPI_BASE}/updates.json`;
+   const DESK_ADDON_ID = "black-forest-desk@blackforestautomotive.com";
+ 
+-  async function openAboutAddons() {
+-    try {
+-      if (runtime.tabs?.create) {
+-        await runtime.tabs.create({ url: "about:addons" });
+-      }
+-    } catch {
+-      // about:addons open is best-effort
+-    }
+-  }
+-
+   async function fetchSignedFeedUpdate() {
+     try {
+       const response = await fetch(`${UPDATES_JSON_URL}?t=${Date.now()}`, { cache: "no-store" });
+@@ -187,39 +177,10 @@
+     }
+   }
+ 
+-  async function downloadSignedXpi(version, updateLink) {
+-    const ver = String(version || "").trim();
+-    const url = String(updateLink || "").trim() || `${RELEASE_XPI_BASE}/Black.Forest.Desk-${ver}.xpi`;
+-    if (!ver || !runtime.downloads?.download) return null;
+-    try {
+-      const downloadId = await runtime.downloads.download({
+-        url,
+-        filename: `Black.Forest.Desk-${ver}.xpi`,
+-        saveAs: false,
+-        conflictAction: "overwrite",
+-      });
+-      return { downloadId, filename: `Black.Forest.Desk-${ver}.xpi`, url };
+-    } catch {
+-      return null;
+-    }
+-  }
+-
+-  /** @deprecated name kept for older call sites — downloads the signed feed XPI. */
+-  async function downloadHubUploadZip(version) {
+-    return downloadSignedXpi(version, `${RELEASE_XPI_BASE}/Black.Forest.Desk-${version}.xpi`);
+-  }
+-
+   function sleep(ms) {
+     return new Promise((resolve) => setTimeout(resolve, ms));
+   }
+ 
+-  function signedStagedMessage(localVer, stagedVer, pathHint) {
+-    const installed = localVer || localVersion();
+-    const staged = stagedVer || "?";
+-    const where = pathHint ? ` File: ${pathHint}.` : "";
+-    return `Still Installed ${installed} · Staged ${staged} (NOT applied).${where} about:addons → gear → Install Add-on From File… — Desktop is not an upgrade.`;
+-  }
+-
+   /** Resolve once Firefox has downloaded a signed update (then we reload). */
+   let updateAvailableWaiters = [];
+   let pendingUpdateDetails = null;
+@@ -387,133 +348,40 @@
+     };
+   }
+ 
++  const FIREFOX_CHECK_HINT =
++    "Firefox installs Desk updates itself: ☰ → Add-ons and themes → Black Forest Desk → ⚙ → Check for Updates. It also checks daily and at startup, then Desk reloads on its own.";
++
+   async function applyDeskUpdate() {
+     const local = localVersion();
+     const feed = await fetchSignedFeedUpdate();
+ 
+-    // 1) Prefer Firefox-native Hub/AMO signed apply (requestUpdateCheck → reload).
+-    if (feed?.version && isNewer(feed.version, local)) {
+-      const ff = await tryFirefoxApply(feed);
+-      if (ff?.mode === "firefox_update") return ff;
+-    }
+-
+-    // 2) Labels may pull + stage; never treat Desktop stage as Installed.
+-    const base = await labelsBaseUrl();
+-    let response;
+-    try {
+-      response = await fetch(`${base}/api/update-desk-extension`, {
+-        method: "POST",
+-        headers: { "content-type": "application/json", accept: "application/json" },
+-        body: "{}",
+-      });
+-    } catch {
+-      if (feed?.version && isNewer(feed.version, local)) {
+-        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
+-        if (ff?.mode === "firefox_update") return ff;
+-      }
+-      return stageSignedFeedSuccess("(Labels wasn’t reachable; Firefox did not apply yet.)");
+-    }
+-
+-    let data = null;
+-    try {
+-      data = await response.json();
+-    } catch {
+-      data = null;
+-    }
+-
+-    const code = data?.error || `http_${response.status}`;
+-    const mode = data?.mode || "";
+-
+-    async function afterStageFallback(version, pathHint, detail) {
+-      // 3) After Labels stages Desktop XPI, nudge Firefox updater again before admitting defeat.
+-      if (feed?.version && isNewer(feed.version, local)) {
+-        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
+-        if (ff?.mode === "firefox_update") return ff;
+-      }
+-      if (!pathHint && version) {
+-        const dl = await downloadSignedXpi(version, feed?.updateLink);
+-        pathHint = dl?.filename || null;
+-      }
+-      await openAboutAddons();
+-      return {
+-        ok: true,
+-        error: null,
+-        mode: "signed_staged",
+-        version,
+-        signedXpiPath: data?.signedXpiPath || null,
+-        hubUploadPath: data?.hubUploadPath || null,
+-        staged: true,
+-        applied: false,
+-        restartRequired: false,
+-        message: `${signedStagedMessage(local, version, pathHint)}${detail ? ` ${detail}` : ""}`,
+-      };
+-    }
+-
+-    if (mode === "signed_staged" || data?.staged === true) {
+-      const version = String(data?.version || feed?.version || "");
+-      return afterStageFallback(
+-        version,
+-        data?.signedXpiPath || data?.hubUploadPath || null,
+-        "Unsigned sideload skipped (Hub/AMO signed install kept).",
+-      );
+-    }
+-
+-    if (mode === "hub_upload" || code === "hub_signed_kept" || code === "update_outcome_unclear") {
+-      const version = String(data?.version || feed?.version || "");
+-      return afterStageFallback(version, data?.hubUploadPath || null, "Hub-signed keep — Install from File only if Firefox did not apply.");
+-    }
+-
+-    if (!response.ok || !data?.ok) {
+-      if (response.status === 403 || code === "localhost_only") {
+-        return { ok: false, error: code, message: "Desk update refused — Labels only accepts updates from this machine." };
+-      }
+-      if (feed?.version && isNewer(feed.version, local)) {
+-        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
+-        if (ff?.mode === "firefox_update") return ff;
+-      }
+-      if (response.status === 404 || code === "update_failed" || code.startsWith("http_")) {
+-        return stageSignedFeedSuccess(
+-          response.status === 404
+-            ? "(Labels has no update endpoint yet — pull label-connect / restart Labels.)"
+-            : "(Labels apply failed; Firefox did not apply; staged for Install from File.)",
+-        );
++    if (!feed?.version || !isNewer(feed.version, local)) {
++      const stored = await runtime.storage.local.get(["deskUpdateAvailable"]);
++      const announced = stored.deskUpdateAvailable?.version;
++      if (announced && isNewer(announced, local)) {
++        return {
++          ok: false,
++          mode: "feed_pending",
++          applied: false,
++          version: announced,
++          message: `Desk ${announced} is published but the signed update feed is not live yet. Try again in a few minutes.`,
++        };
+       }
+-      return stageSignedFeedSuccess(data?.message || "(Labels error; Firefox did not apply; staged.)");
++      return { ok: true, mode: "up_to_date", applied: false, version: local, message: `Desk ${local} is up to date.` };
+     }
+ 
+-    if (data.applied === false || data.mode === "hub_upload") {
+-      const version = String(data.version || feed?.version || "");
+-      return afterStageFallback(version, data.hubUploadPath || null, data.message || "");
++    // Chromium-style runtime.requestUpdateCheck (undefined in Firefox, which has no update-now API).
++    if (pendingUpdateDetails || typeof runtime.runtime.requestUpdateCheck === "function") {
++      const ff = await tryFirefoxApply(feed);
++      if (ff?.mode === "firefox_update") return ff;
+     }
+ 
+-    const version = String(data.version || "");
+-    await runtime.storage.local.set({
+-      deskUpdateAppliedVersion: version || true,
+-      deskUpdateAvailable: version
+-        ? {
+-            version,
+-            local: localVersion(),
+-            message: "Restart Firefox to finish.",
+-            applied: true,
+-          }
+-        : null,
+-    });
+-    if (runtime.action?.setBadgeText) {
+-      await runtime.action.setBadgeText({ text: "↻" });
+-      await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+-      await runtime.action.setTitle?.({
+-        title: version
+-          ? `Black Forest Desk — v${version} ready; restart Firefox`
+-          : "Black Forest Desk — restart Firefox to finish update",
+-      });
+-    }
+     return {
+-      ok: true,
+-      version,
+-      mode: data.mode || "unsigned_sideload",
+-      restartRequired: true,
+-      applied: true,
+-      message: data.message || (version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox."),
++      ok: false,
++      mode: "firefox_check_updates",
++      applied: false,
++      version: feed.version,
++      message: `Desk ${feed.version} is ready (installed ${local}). ${FIREFOX_CHECK_HINT}`,
+     };
+   }
+ 
+@@ -668,6 +536,22 @@
+     return false;
+   });
+ 
++  function refreshToolbarState() {
++    void globalThis.AllDataRoLabels?.refreshUnlockBadge?.();
++  }
++
++  refreshToolbarState();
++  if (runtime.storage?.onChanged?.addListener) {
++    try {
++      runtime.storage.onChanged.addListener((changes, area) => {
++        if (area && area !== "local") return;
++        if (changes.shopWidgetToken || changes.shopWidgetTokenExpiresAt) refreshToolbarState();
++      });
++    } catch {
++      // storage.onChanged unavailable
++    }
++  }
++
+   void checkForUpdate(false);
+   tryAutoUnlock("startup", true);
+   try {
+@@ -681,9 +565,11 @@
+   if (runtime.alarms?.create) {
+     try {
+       runtime.alarms.create("desk-update-check", { periodInMinutes: 360 });
++      runtime.alarms.create("desk-icon-refresh", { periodInMinutes: 1 });
+       runtime.alarms.create(AUTO_UNLOCK_ALARM, { periodInMinutes: AUTO_UNLOCK_PERIOD_MIN });
+       runtime.alarms.onAlarm.addListener((alarm) => {
+         if (alarm?.name === "desk-update-check") void checkForUpdate(false);
++        if (alarm?.name === "desk-icon-refresh") refreshToolbarState();
+         if (alarm?.name === AUTO_UNLOCK_ALARM) tryAutoUnlock("alarm", false);
+       });
+     } catch {
+diff --git a/extension/shared/lot-names.js b/extension/shared/lot-names.js
+index d3eff90..a5f1af3 100644
+--- a/extension/shared/lot-names.js
++++ b/extension/shared/lot-names.js
+@@ -195,14 +195,86 @@
+     } catch {}
+   }
+ 
++  const ICON_SIZES = [16, 32, 48, 128];
++  const ICON_GREEN = "#2e7d32";
++  const ICON_RED = "#c62828";
++  const iconCache = {};
++
++  function makeCanvas(size) {
++    if (typeof OffscreenCanvas === "function") return new OffscreenCanvas(size, size);
++    if (typeof document !== "undefined" && document.createElement) {
++      const canvas = document.createElement("canvas");
++      canvas.width = size;
++      canvas.height = size;
++      return canvas;
++    }
++    return null;
++  }
++
++  function drawStatusIcon(loggedIn, size) {
++    const canvas = makeCanvas(size);
++    const ctx = canvas?.getContext?.("2d");
++    if (!ctx) return null;
++    const c = size / 2;
++    ctx.clearRect(0, 0, size, size);
++    ctx.beginPath();
++    ctx.arc(c, c, size * 0.47, 0, Math.PI * 2);
++    ctx.fillStyle = loggedIn ? ICON_GREEN : ICON_RED;
++    ctx.fill();
++    ctx.lineWidth = Math.max(1.5, size * 0.07);
++    ctx.strokeStyle = "#ffffff";
++    ctx.lineCap = "round";
++    ctx.lineJoin = "round";
++    ctx.beginPath();
++    if (loggedIn) {
++      ctx.moveTo(size * 0.27, size * 0.52);
++      ctx.lineTo(size * 0.43, size * 0.68);
++      ctx.lineTo(size * 0.74, size * 0.34);
++    } else {
++      ctx.moveTo(size * 0.33, size * 0.33);
++      ctx.lineTo(size * 0.67, size * 0.67);
++      ctx.moveTo(size * 0.67, size * 0.33);
++      ctx.lineTo(size * 0.33, size * 0.67);
++    }
++    ctx.stroke();
++    return ctx.getImageData(0, 0, size, size);
++  }
++
++  function statusIconImages(loggedIn) {
++    const key = loggedIn ? "in" : "out";
++    if (iconCache[key]) return iconCache[key];
++    const images = {};
++    for (const size of ICON_SIZES) {
++      const image = drawStatusIcon(loggedIn, size);
++      if (!image) return null;
++      images[size] = image;
++    }
++    iconCache[key] = images;
++    return images;
++  }
++
++  /** Toolbar icon: green = logged in (shop / Tools session), red = logged out. */
++  async function setToolbarIcon(loggedIn) {
++    const action = runtime?.action || runtime?.browserAction;
++    if (!action?.setIcon) return false;
++    try {
++      const imageData = statusIconImages(Boolean(loggedIn));
++      if (!imageData) return false;
++      await action.setIcon({ imageData });
++      return true;
++    } catch {
++      return false;
++    }
++  }
++
+   async function setPinBadge(needsPin) {
++    await setToolbarIcon(!needsPin);
+     if (!runtime?.action?.setBadgeText) return;
+     try {
+       if (needsPin) {
+-        await runtime.action.setBadgeText({ text: "PIN" });
+-        await runtime.action.setBadgeBackgroundColor?.({ color: "#7a1f1f" });
++        await runtime.action.setBadgeText({ text: "" });
+         await runtime.action.setTitle?.({
+-          title: "Black Forest Desk — enter desk PIN to unlock lot names",
++          title: "Black Forest Desk — logged out",
+         });
+       } else {
+         const stored = await storageGet(["deskUpdateAvailable"]);
+@@ -217,7 +289,7 @@
+           await runtime.action.setBadgeText({ text: "" });
+           await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+           await runtime.action.setTitle?.({
+-            title: "Black Forest Desk — lot names unlocked",
++            title: "Black Forest Desk — logged in",
+           });
+         }
+       }
+@@ -276,6 +348,7 @@
+       shopWidgetToken: token,
+       shopWidgetTokenExpiresAt: Date.now() + ttlMs,
+       shopPerson: normalized || undefined,
++      deskSessionPerson: normalized || "",
+       shopWidgetTokenSource: src,
+     });
+     await setPinBadge(false);
+@@ -1444,6 +1517,7 @@
+   api.pushPersonSettingsToShopTabs = pushPersonSettingsToShopTabs;
+   api.hasFreshWidgetToken = hasFreshWidgetToken;
+   api.refreshUnlockBadge = refreshUnlockBadge;
++  api.setToolbarIcon = setToolbarIcon;
+   api.resolveLotLastNames = resolveLotLastNames;
+   api.loadLotLastNames = loadLotLastNames;
+ })(globalThis);
+diff --git a/extension/shared/popup.html b/extension/shared/popup.html
+index 641bad4..fdd4bdf 100644
+--- a/extension/shared/popup.html
++++ b/extension/shared/popup.html
+@@ -63,8 +63,26 @@
+         opacity: 0.55;
+         cursor: default;
+       }
+-      button[hidden] {
+-        display: none;
++      [hidden] {
++        display: none !important;
++      }
++      #loggedIn {
++        margin: 0 0 4px;
++        padding: 10px 12px;
++        border-radius: 6px;
++        background: #e3efe5;
++        color: #1f4d2a;
++        font-size: 14px;
++        font-weight: 700;
++      }
++      #loggedIn::before {
++        content: "";
++        display: inline-block;
++        width: 9px;
++        height: 9px;
++        margin-right: 8px;
++        border-radius: 50%;
++        background: #2e7d32;
+       }
+       #status,
+       #update {
+@@ -85,17 +103,20 @@
+   </head>
+   <body>
+     <h1>Black Forest Desk</h1>
+-    <p>
+-      Desk unlocks the shop website cookie from Tools (and lot names). Sync Tools if the site stays on /unlock after you unlock Tools.
+-      Person + desk PIN remain as backup. Create RO print uses local Labels only — no PIN.
+-    </p>
+-    <button id="useShopSession" type="button">Sync shop session</button>
+-    <button id="useTools" class="secondary" type="button">Sync Tools → website</button>
+-    <label for="person">Person</label>
+-    <select id="person" autocomplete="username" aria-label="Shop person"></select>
+-    <label for="pin">Desk PIN</label>
+-    <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4–12 digits" />
+-    <button id="unlock" class="secondary" type="button">Unlock with desk PIN</button>
++    <div id="loggedIn" role="status" hidden></div>
++    <div id="loginBox">
++      <p>
++        Desk unlocks the shop website cookie from Tools (and lot names). Sync Tools if the site stays on /unlock after you unlock Tools.
++        Person + desk PIN remain as backup. Create RO print uses local Labels only — no PIN.
++      </p>
++      <button id="useShopSession" type="button">Sync shop session</button>
++      <button id="useTools" class="secondary" type="button">Sync Tools → website</button>
++      <label for="person">Person</label>
++      <select id="person" autocomplete="username" aria-label="Shop person"></select>
++      <label for="pin">Desk PIN</label>
++      <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4–12 digits" />
++      <button id="unlock" class="secondary" type="button">Unlock with desk PIN</button>
++    </div>
+     <button id="checkUpdate" class="secondary" type="button">Check for extension update</button>
+     <button id="applyUpdate" class="accent" type="button" hidden>Update</button>
+     <div id="status" role="status"></div>
+diff --git a/extension/shared/popup.js b/extension/shared/popup.js
+index 49cc83f..3fbb9ca 100644
+--- a/extension/shared/popup.js
++++ b/extension/shared/popup.js
+@@ -11,6 +11,8 @@
+   const status = document.getElementById("status");
+   const updateEl = document.getElementById("update");
+   const versionEl = document.getElementById("version");
++  const loggedInEl = document.getElementById("loggedIn");
++  const loginBoxEl = document.getElementById("loginBox");
+ 
+   const FALLBACK_PEOPLE = ["logan", "stephen", "steve", "carla", "john"];
+ 
+@@ -31,6 +33,50 @@
+       .toLowerCase();
+   }
+ 
++  function displayName(person) {
++    const text = String(person || "").trim();
++    if (!text) return "";
++    return text.charAt(0).toUpperCase() + text.slice(1);
++  }
++
++  let wasLoggedIn = false;
++
++  function renderSession({ loggedIn, person } = {}) {
++    if (!loggedInEl || !loginBoxEl) return;
++    loggedInEl.hidden = !loggedIn;
++    loginBoxEl.hidden = Boolean(loggedIn);
++    status.hidden = Boolean(loggedIn);
++    if (!loggedIn) {
++      if (wasLoggedIn) setStatus("Logged out — unlock Tools or the shop site, or use person + PIN.");
++      wasLoggedIn = false;
++      return;
++    }
++    wasLoggedIn = true;
++    const name = displayName(person);
++    loggedInEl.textContent = name ? `Logged in as ${name}` : "Logged in";
++  }
++
++  async function refreshSession() {
++    try {
++      const stored = await runtime.storage.local.get([
++        "shopWidgetToken",
++        "shopWidgetTokenExpiresAt",
++        "shopPerson",
++        "deskSessionPerson",
++      ]);
++      const loggedIn = Boolean(
++        stored.shopWidgetToken && Number(stored.shopWidgetTokenExpiresAt || 0) > Date.now(),
++      );
++      const person =
++        typeof stored.deskSessionPerson === "string" ? stored.deskSessionPerson : stored.shopPerson;
++      renderSession({ loggedIn, person });
++      return loggedIn;
++    } catch {
++      renderSession({ loggedIn: false });
++      return false;
++    }
++  }
++
+   function setStatus(text, kind) {
+     status.textContent = text;
+     status.className = kind === "ok" ? "ok" : kind === "err" ? "err" : "";
+@@ -62,7 +108,7 @@
+     const hint =
+       typeof available?.message === "string" && available.message.trim()
+         ? available.message.trim()
+-        : "Hub On your own → Install from File";
++        : "Firefox will install it";
+     setUpdate(`Update ${version} ready — ${hint}`, "warn");
+   }
+ 
+@@ -122,6 +168,7 @@
+             ? "Lot names unlocked from Black Forest Tools."
+             : "Lot names unlocked from the shop site session.";
+         setStatus(label, "ok");
++        await refreshSession();
+         return true;
+       }
+       if (!quiet) setStatus(humanizeUnlockError(response?.error), "err");
+@@ -206,6 +253,7 @@
+         return;
+       }
+       setStatus(`Lot names unlocked as “${person}”. Open SSF checkout and Refresh if needed.`, "ok");
++      await refreshSession();
+     } catch {
+       setStatus("Extension background unavailable. Reload the add-on, then enter your desk PIN.", "err");
+     } finally {
+@@ -296,20 +344,11 @@
+             response.message || "Firefox is applying the signed update (reload)…",
+             "ok",
+           );
+-        } else if (
+-          response?.mode === "signed_staged" ||
+-          response?.staged === true ||
+-          response?.mode === "hub_upload" ||
+-          response?.error === "hub_signed_kept"
+-        ) {
+-          // Staged ≠ installed — warn, never green “done”.
+-          const local = runtime.runtime.getManifest()?.version || "?";
+-          const staged = response?.version || "?";
+-          setUpdate(
+-            response?.message ||
+-              `Still Installed ${local} · Staged ${staged} (NOT applied). about:addons → Install Add-on From File…`,
+-            "warn",
+-          );
++        } else if (response?.mode === "up_to_date") {
++          showApply(false);
++          setUpdate(response.message || "Desk extension is up to date.", "ok");
++        } else if (response?.mode === "firefox_check_updates" || response?.mode === "feed_pending") {
++          setUpdate(response.message, "warn");
+           showApply(true);
+         } else if (response?.ok && response?.applied !== false) {
+           const version = response.version || "";
+@@ -324,7 +363,7 @@
+         }
+       } catch {
+         setUpdate(
+-          "Could not reach Labels — try about:addons → Check for Updates, or Install Add-on From File (signed desk-extension XPI).",
++          "Update failed — ☰ → Add-ons and themes → Black Forest Desk → ⚙ → Check for Updates.",
+           "warn",
+         );
+         showApply(true);
+@@ -335,6 +374,21 @@
+     });
+   }
+ 
++  if (runtime.storage?.onChanged?.addListener) {
++    runtime.storage.onChanged.addListener((changes, area) => {
++      if (area && area !== "local") return;
++      if (
++        changes.shopWidgetToken ||
++        changes.shopWidgetTokenExpiresAt ||
++        changes.deskSessionPerson ||
++        changes.shopPerson
++      ) {
++        void refreshSession();
++      }
++    });
++  }
++
+   fillPersonSelect("logan");
+-  restore();
++  void refreshSession();
++  restore().then(refreshSession);
+ })();
+diff --git a/extension/version.json b/extension/version.json
+index da7644b..ce9bbe0 100644
+--- a/extension/version.json
++++ b/extension/version.json
+@@ -1,5 +1,5 @@
+ {
+-  "version": "0.1.28",
+-  "message": "Website Lock now stays locked until you unlock: no timed remint after 30s, 2 min or a quiet spell. Tools (:8788) is the truth for locked/unlocked; Desk keeps a persistent lock latch and only lets go when Tools or the site gets a genuinely new unlock. Needs Tools 1.5.14.",
++  "version": "0.1.29",
++  "message": "Popup shows plain \u201cLogged in as <name>\u201d (no sync / PIN boxes) when signed in; toolbar icon is green when logged in, red when logged out. Update button no longer stages a Desktop file \u2014 Firefox has no update-now API, so it points you to \u2699 \u2192 Check for Updates (Firefox also applies it by itself). Sticky website lock unchanged.",
+   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
+ }
+diff --git a/package.json b/package.json
+index 4a089cc..b70d1a6 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "label-connect",
+   "private": true,
+-  "version": "0.1.28",
++  "version": "0.1.29",
+   "type": "module",
+   "description": "Label bench for the LabelWriter 550. Its own build. Prints to the CUPS queue LabelWriter550.",
+   "scripts": {
+diff --git a/test/desk-lock-unlock-gaps.test.mjs b/test/desk-lock-unlock-gaps.test.mjs
+index b0260f3..a85c318 100644
+--- a/test/desk-lock-unlock-gaps.test.mjs
++++ b/test/desk-lock-unlock-gaps.test.mjs
+@@ -25,6 +25,7 @@ function makeWorld() {
+     reloads: [],
+     storage: {},
+     bridgeDown: false,
++    icons: [],
+   };
+ 
+   const fakeSetTimeout = (fn, ms = 0) => {
+@@ -129,7 +130,13 @@ function makeWorld() {
+         world.reloads.push(id);
+       },
+     },
+-    action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
++    action: {
++      setBadgeText: async () => {},
++      setBadgeBackgroundColor: async () => {},
++      setIcon: async ({ imageData }) => {
++        world.icons.push(imageData[16].tag);
++      },
++    },
+     browserAction: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
+     runtime: { getManifest: () => ({ version: "0.1.26" }) },
+   };
+@@ -153,6 +160,19 @@ function makeWorld() {
+     setInterval: () => 0,
+     clearInterval: () => {},
+     fetch: fakeFetch,
++    OffscreenCanvas: class {
++      getContext() {
++        const ctx = {
++          fillStyle: "",
++          fill() {
++            ctx.painted = ctx.fillStyle;
++          },
++          getImageData: () => ({ tag: ctx.painted === "#2e7d32" ? "green" : "red" }),
++        };
++        for (const fn of ["clearRect", "beginPath", "arc", "stroke", "moveTo", "lineTo"]) ctx[fn] = () => {};
++        return ctx;
++      }
++    },
+     browser: runtime,
+     chrome: runtime,
+   });
+@@ -452,3 +472,19 @@ test("a failed exchange after Tools unlock is retried", async () => {
+   await w.run(12_000);
+   assert.equal(w.gate(), true, "site follows Tools after retries");
+ });
++
++test("toolbar icon is green while logged in and red when logged out", async () => {
++  const w = makeWorld();
++  await w.api.refreshUnlockBadge();
++  assert.equal(w.world.icons.at(-1), "red");
++  w.toolsUnlock();
++  await w.run(GAP);
++  assert.equal(w.world.icons.at(-1), "green");
++  assert.equal(w.world.storage.deskSessionPerson, "logan");
++  await w.siteLock();
++  await w.run(GAP);
++  assert.equal(w.world.icons.at(-1), "red");
++  w.toolsUnlock();
++  await w.run(GAP);
++  assert.equal(w.world.icons.at(-1), "green");
++});
+diff --git a/test/desk-popup-session.test.mjs b/test/desk-popup-session.test.mjs
+new file mode 100644
+index 0000000..174b7d7
+--- /dev/null
++++ b/test/desk-popup-session.test.mjs
+@@ -0,0 +1,98 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import fs from "node:fs";
++import path from "node:path";
++import vm from "node:vm";
++import { fileURLToPath } from "node:url";
++import { parseHTML } from "linkedom";
++
++const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
++const shared = path.join(root, "extension/shared");
++
++async function openPopup(storage) {
++  const html = fs.readFileSync(path.join(shared, "popup.html"), "utf8");
++  const { window, document } = parseHTML(html);
++  const listeners = [];
++  const runtime = {
++    runtime: {
++      getManifest: () => ({ version: "0.1.29" }),
++      sendMessage: async () => ({ ok: false, error: "unauthorized" }),
++    },
++    storage: {
++      local: {
++        get: async (keys) => {
++          const list = Array.isArray(keys) ? keys : [keys];
++          return Object.fromEntries(list.filter((k) => k in storage).map((k) => [k, storage[k]]));
++        },
++        set: async (obj) => Object.assign(storage, obj),
++      },
++      onChanged: { addListener: (fn) => listeners.push(fn) },
++    },
++  };
++  const context = vm.createContext({ console, document, window, browser: runtime, chrome: runtime, Date, Promise });
++  context.globalThis = context;
++  vm.runInContext(fs.readFileSync(path.join(shared, "popup.js"), "utf8"), context, { filename: "popup.js" });
++  const settle = async () => {
++    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
++  };
++  await settle();
++  const visible = (id) => !document.getElementById(id).hasAttribute("hidden");
++  return { document, storage, listeners, settle, visible };
++}
++
++const loginControls = ["useShopSession", "useTools", "person", "pin", "unlock"];
++
++test("popup shows plain Logged in as <name> and hides sync / PIN controls", async () => {
++  const p = await openPopup({
++    shopWidgetToken: "t",
++    shopWidgetTokenExpiresAt: Date.now() + 3_600_000,
++    deskSessionPerson: "logan",
++  });
++  assert.equal(p.visible("loggedIn"), true);
++  assert.equal(p.document.getElementById("loggedIn").textContent, "Logged in as Logan");
++  assert.equal(p.visible("loginBox"), false);
++  for (const id of loginControls) {
++    assert.equal(p.document.getElementById("loginBox").contains(p.document.getElementById(id)), true, id);
++  }
++  assert.equal(p.visible("status"), false);
++  assert.equal(p.visible("checkUpdate"), true);
++});
++
++test("popup shows login controls when logged out or the session expired", async () => {
++  for (const storage of [
++    {},
++    { shopWidgetToken: "t", shopWidgetTokenExpiresAt: Date.now() - 1_000, deskSessionPerson: "logan" },
++  ]) {
++    const p = await openPopup(storage);
++    assert.equal(p.visible("loggedIn"), false);
++    assert.equal(p.visible("loginBox"), true);
++  }
++});
++
++test("popup flips live when the session starts and ends", async () => {
++  const p = await openPopup({});
++  assert.equal(p.visible("loginBox"), true);
++  Object.assign(p.storage, {
++    shopWidgetToken: "t",
++    shopWidgetTokenExpiresAt: Date.now() + 3_600_000,
++    deskSessionPerson: "carla",
++  });
++  for (const fn of p.listeners) fn({ shopWidgetToken: {} }, "local");
++  await p.settle();
++  assert.equal(p.document.getElementById("loggedIn").textContent, "Logged in as Carla");
++  assert.equal(p.visible("loginBox"), false);
++  Object.assign(p.storage, { shopWidgetToken: "", shopWidgetTokenExpiresAt: 0 });
++  for (const fn of p.listeners) fn({ shopWidgetToken: {} }, "local");
++  await p.settle();
++  assert.equal(p.visible("loggedIn"), false);
++  assert.equal(p.visible("loginBox"), true);
++});
++
++test("logged in without a known person still reads Logged in", async () => {
++  const p = await openPopup({
++    shopWidgetToken: "t",
++    shopWidgetTokenExpiresAt: Date.now() + 3_600_000,
++    deskSessionPerson: "",
++  });
++  assert.equal(p.document.getElementById("loggedIn").textContent, "Logged in");
++});
+diff --git a/test/desk-update.test.mjs b/test/desk-update.test.mjs
+index dd13860..7a916f4 100644
+--- a/test/desk-update.test.mjs
++++ b/test/desk-update.test.mjs
+@@ -47,20 +47,18 @@ test("popup and background no longer tell users to run bash update script", asyn
+   assert.equal(/on the desk run/.test(popup), false);
+   assert.equal(/bash ~\/label-connect/.test(popup), false);
+   assert.equal(/apply-update/.test(background), true);
+-  assert.equal(/\/api\/update-desk-extension/.test(background), true);
+   assert.equal(/run update-desk-extension\.sh/.test(background), false);
+-  assert.equal(/hub_signed_kept/.test(background), true);
+-  assert.equal(/signed_staged/.test(background), true);
+   assert.equal(/requestUpdateCheck/.test(background), true);
+   assert.equal(/onUpdateAvailable/.test(background), true);
+   assert.equal(/startToolsBridgeWatch/.test(background), true);
+-  assert.equal(/NOT applied/.test(background), true);
+-  assert.equal(/NOT applied/.test(popup), true);
+   assert.equal(/startToolsBridgeWatch/.test(await readFile(path.join(root, "extension/shared/lot-names.js"), "utf8")), true);
+   assert.equal(/updates\.json/.test(background), true);
+-  assert.equal(/signed_staged/.test(popup), true);
+   assert.equal(/Desk update failed/.test(popup), false);
+-  assert.equal(/mode !== "hub_upload"/.test(popup) || /mode === "hub_upload"/.test(popup) || /signed_staged/.test(popup), true);
++  assert.equal(/Desktop is not an upgrade|Staged .* \(NOT applied\)/.test(background + popup), false);
++  assert.equal(/\/api\/update-desk-extension/.test(background), false);
++  assert.equal(/downloads\.download/.test(background), false);
++  assert.equal(/firefox_check_updates/.test(background), true);
++  assert.equal(/firefox_check_updates/.test(popup), true);
+ });
+ 
+ test("isNewerVersion compares semver-ish strings", () => {
