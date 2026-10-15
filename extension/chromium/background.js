@@ -15,6 +15,9 @@
   const AUTO_UNLOCK_ALARM = "desk-auto-unlock";
   /** Backup only — Tools↔site sync is edge-driven via :8788 health watch (~1s). */
   const AUTO_UNLOCK_PERIOD_MIN = 5;
+  const BRIDGE_WAKE_ALARM = "desk-bridge-wake";
+  const IS_CHROMIUM = typeof runtime.runtime.getBrowserInfo !== "function";
+  const CHROMIUM_ZIP_NAME = "Black.Forest.Desk-chromium.zip";
   const SHOP_HOST_RE = /^https:\/\/shop\.blackforestautomotive\.com(\/|$)/i;
 
   // Chromium MV3 service worker: pull shared helpers.
@@ -125,8 +128,11 @@
             version: remoteVersion,
             local,
             message:
+              (IS_CHROMIUM && remote.chromiumMessage) ||
               remote.message ||
-              "Firefox installs Hub-signed updates by itself; click Update to apply it now.",
+              (IS_CHROMIUM
+                ? "Click Download update, unzip over the Desk folder, then Reload Desk."
+                : "Firefox installs Hub-signed updates by itself; click Update to apply it now."),
             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
@@ -243,7 +249,73 @@
    * onUpdateAvailable listener above reloads the add-on the moment Firefox has the new version
    * (daily background check, about:addons → Check for Updates, or the install prompt below).
    */
+  async function chromiumFeedVersion() {
+    const feed = await fetchSignedFeedUpdate();
+    if (feed) return feed.version;
+    try {
+      const response = await fetch(`${VERSION_URL}?t=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) return null;
+      const remote = await response.json();
+      return remote?.version ? String(remote.version) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Chrome/Edge have no signed self-update until a store listing exists: download the release zip
+   * (Downloads folder), the user unzips over the Desk folder and presses Reload Desk.
+   */
+  async function applyChromiumUpdate() {
+    const local = localVersion();
+    const version = await chromiumFeedVersion();
+    if (!version) {
+      return {
+        ok: false,
+        error: "feed_unreachable",
+        mode: "feed_unreachable",
+        applied: false,
+        message: "Couldn’t reach the Desk update feed. Check the connection and try again.",
+      };
+    }
+    if (!isNewer(version, local)) {
+      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+      return {
+        ok: true,
+        mode: "up_to_date",
+        applied: false,
+        version: local,
+        message: `Desk ${local} is already the newest version.`,
+      };
+    }
+    const url = `${RELEASE_XPI_BASE}/${CHROMIUM_ZIP_NAME}`;
+    const manual = (reason) => ({
+      ok: false,
+      error: "chromium_manual",
+      mode: "chromium_manual",
+      applied: false,
+      version,
+      url,
+      message: `Desk ${version} is ready (${reason}). Download ${CHROMIUM_ZIP_NAME} from the label-connect desk-extension release, unzip over the Desk folder, then Reload Desk.`,
+    });
+    if (!runtime.downloads?.download) return manual("downloads unavailable");
+    try {
+      await runtime.downloads.download({ url, filename: CHROMIUM_ZIP_NAME, conflictAction: "uniquify" });
+    } catch {
+      return manual("download blocked");
+    }
+    return {
+      ok: true,
+      mode: "chromium_zip",
+      applied: false,
+      version,
+      url,
+      message: `Downloaded Desk ${version} to your Downloads folder. Unzip it over the Desk folder, then press Reload Desk. Still running ${local} until you do.`,
+    };
+  }
+
   async function applyDeskUpdate() {
+    if (IS_CHROMIUM) return applyChromiumUpdate();
     const local = localVersion();
     const feed = await fetchSignedFeedUpdate();
     if (!feed) {
@@ -264,17 +336,6 @@
         applied: false,
         version: local,
         message: `Desk ${local} is already the newest version.`,
-      };
-    }
-
-    if (typeof runtime.runtime.getBrowserInfo !== "function") {
-      return {
-        ok: false,
-        error: "chromium_manual",
-        mode: "chromium_manual",
-        applied: false,
-        version: feed.version,
-        message: `Desk ${feed.version} is ready. In Chrome/Edge open chrome://extensions and Reload the unpacked Desk folder after pulling label-connect.`,
       };
     }
 
@@ -435,6 +496,17 @@
       checkForUpdate(Boolean(message.force)).then((available) => sendResponse({ available }));
       return true;
     }
+    if (message.type === "reload-extension") {
+      sendResponse({ ok: true });
+      setTimeout(() => {
+        try {
+          runtime.runtime.reload();
+        } catch {
+          // reload may throw if already shutting down
+        }
+      }, 150);
+      return false;
+    }
     if (message.type === "apply-update") {
       applyDeskUpdate().then(sendResponse);
       return true;
@@ -496,10 +568,15 @@
       runtime.alarms.create("desk-update-check", { periodInMinutes: 360 });
       runtime.alarms.create("desk-icon-refresh", { periodInMinutes: 1 });
       runtime.alarms.create(AUTO_UNLOCK_ALARM, { periodInMinutes: AUTO_UNLOCK_PERIOD_MIN });
+      // MV3 service workers stop when idle; a 30s alarm respawns the worker so the 400ms bridge poll resumes.
+      if (IS_CHROMIUM) runtime.alarms.create(BRIDGE_WAKE_ALARM, { periodInMinutes: 0.5 });
       runtime.alarms.onAlarm.addListener((alarm) => {
         if (alarm?.name === "desk-update-check") void checkForUpdate(false);
         if (alarm?.name === "desk-icon-refresh") refreshToolbarState();
         if (alarm?.name === AUTO_UNLOCK_ALARM) tryAutoUnlock("alarm", false);
+        if (alarm?.name === BRIDGE_WAKE_ALARM) {
+          globalThis.AllDataRoLabels?.startBridgeSyncPoll?.();
+        }
       });
     } catch {
     }

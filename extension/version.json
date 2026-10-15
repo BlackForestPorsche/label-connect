@@ -1,5 +1,6 @@
 {
-  "version": "0.1.30",
-  "message": "No more surprise re-locks while you are signed in: a website session that simply runs out, or Tools\u2019 Bearer expiring, no longer locks the other side \u2014 Desk quietly renews the website session before it lapses. Deliberate locks (site Lock, Tools Lock, 8pm) stay sticky exactly as in 0.1.28.",
-  "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension"
+  "version": "0.1.31",
+  "message": "Chrome and Edge now match Firefox: the Update button downloads the Chromium zip and a Reload Desk button restarts the extension, the service worker is woken every 30 seconds so unlock sync keeps running, and the toolbar has a static icon before the first green/red check. Firefox behaviour is unchanged.",
+  "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
+  "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

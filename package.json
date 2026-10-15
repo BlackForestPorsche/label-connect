@@ -7,13 +7,15 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs",
-    "sync-extension": "mkdir -p extension/chromium extension/firefox && cp extension/shared/*.js extension/shared/*.html extension/chromium/ && cp extension/shared/*.js extension/shared/*.html extension/firefox/"
+    "sync-extension": "mkdir -p extension/chromium extension/firefox && cp extension/shared/*.js extension/shared/*.html extension/chromium/ && cp extension/shared/*.js extension/shared/*.html extension/firefox/",
+    "test:chromium": "node --test --test-concurrency=1 test/e2e/chromium-desk.e2e.mjs"
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "linkedom": "^0.18.9"
+    "linkedom": "^0.18.9",
+    "playwright-core": "^1.64.1"
   }
 }

@@ -60,8 +60,8 @@ test("popup Update never stages a Desktop XPI or tells Logan to Install from Fil
   assert.equal(/startToolsBridgeWatch/.test(await readFile(path.join(root, "extension/shared/lot-names.js"), "utf8")), true);
 });
 
-function loadBackground({ feedVersion, localVersion = "0.1.28" }) {
-  const calls = { tabs: [], fetches: [], reloads: 0 };
+function loadBackground({ feedVersion, localVersion = "0.1.28", chromium = false, downloadFails = false }) {
+  const calls = { tabs: [], fetches: [], reloads: 0, downloads: [], alarms: [] };
   const noopEvent = { addListener() {} };
   const messageListeners = [];
   const feed = {
@@ -80,7 +80,7 @@ function loadBackground({ feedVersion, localVersion = "0.1.28" }) {
   const runtimeApi = {
     getManifest: () => ({ version: localVersion }),
     onMessage: { addListener: (fn) => messageListeners.push(fn) },
-    getBrowserInfo: async () => ({ name: "Firefox" }),
+    ...(chromium ? {} : { getBrowserInfo: async () => ({ name: "Firefox" }) }),
     onUpdateAvailable: noopEvent,
     onInstalled: noopEvent,
     onStartup: noopEvent,
@@ -107,7 +107,14 @@ function loadBackground({ feedVersion, localVersion = "0.1.28" }) {
       onActivated: noopEvent,
       query: async () => [],
     },
-    alarms: { create() {}, onAlarm: noopEvent },
+    alarms: { create: (name) => calls.alarms.push(name), onAlarm: noopEvent },
+    downloads: {
+      download: async (opts) => {
+        if (downloadFails) throw new Error("blocked");
+        calls.downloads.push(opts);
+        return 1;
+      },
+    },
     cookies: { onChanged: noopEvent, get: async () => null, set: async () => null, remove: async () => null },
     idle: { onStateChanged: noopEvent, setDetectionInterval() {} },
     action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {} },
@@ -138,7 +145,7 @@ function loadBackground({ feedVersion, localVersion = "0.1.28" }) {
       }
       resolve(undefined);
     });
-  return { calls, send };
+  return { calls, send, store };
 }
 
 test("apply-update on Firefox without requestUpdateCheck opens the signed XPI prompt, no staging", async () => {
@@ -243,4 +250,47 @@ test("stageHubUploadZip copies self-dist pack to Desktop", async () => {
   }
   // silence unused import warning if bundlers care
   assert.equal(typeof homedir, "function");
+});
+
+test("Chromium apply-update downloads the release zip and never opens an XPI prompt", async () => {
+  const { calls, send } = loadBackground({ feedVersion: "0.1.29", chromium: true });
+  const result = await send({ type: "apply-update" });
+  assert.equal(result.ok, true);
+  assert.equal(result.mode, "chromium_zip");
+  assert.equal(result.applied, false);
+  assert.equal(calls.tabs.length, 0);
+  assert.equal(calls.downloads.length, 1);
+  assert.match(calls.downloads[0].url, /desk-extension\/Black\.Forest\.Desk-chromium\.zip$/);
+  assert.equal(/Firefox|about:addons/.test(result.message), false);
+});
+
+test("Chromium apply-update falls back to manual steps when the download is blocked", async () => {
+  const { send } = loadBackground({ feedVersion: "0.1.29", chromium: true, downloadFails: true });
+  const result = await send({ type: "apply-update" });
+  assert.equal(result.mode, "chromium_manual");
+  assert.equal(result.ok, false);
+  assert.match(result.message, /Reload Desk/);
+});
+
+test("Chromium apply-update says up to date and downloads nothing", async () => {
+  const { calls, send } = loadBackground({ feedVersion: "0.1.28", chromium: true });
+  const result = await send({ type: "apply-update" });
+  assert.equal(result.mode, "up_to_date");
+  assert.equal(calls.downloads.length, 0);
+});
+
+test("Chromium registers the service-worker wake alarm; Firefox does not", () => {
+  const chromium = loadBackground({ feedVersion: "0.1.28", chromium: true });
+  assert.ok(chromium.calls.alarms.includes("desk-bridge-wake"));
+  const firefox = loadBackground({ feedVersion: "0.1.28" });
+  assert.equal(firefox.calls.alarms.includes("desk-bridge-wake"), false);
+  assert.ok(firefox.calls.alarms.includes("desk-icon-refresh"));
+});
+
+test("reload-extension asks the runtime to reload", async () => {
+  const { calls, send } = loadBackground({ feedVersion: "0.1.28", chromium: true });
+  const result = await send({ type: "reload-extension" });
+  assert.equal(result.ok, true);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(calls.reloads, 1);
 });

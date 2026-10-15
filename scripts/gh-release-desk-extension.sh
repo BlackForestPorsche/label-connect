@@ -73,8 +73,12 @@ Latest: https://github.com/BlackForestPorsche/label-connect/releases/latest
 
 **Temporary add-ons** and unsigned \`update-desk-extension.sh\` sideloads are **not** durable auto-update. Sideload **skips** when a Hub-signed Desk is already installed.
 
-### Chrome / Edge
-Unzip → Load unpacked (Developer mode). No Chrome Web Store listing yet — reload the card after a zip refresh, or keep Load unpacked pointed at \`extension/chromium/\` after git pull.
+### Chrome / Edge (Chromium 110+)
+1. Download \`Black.Forest.Desk-chromium.zip\` and unzip it into a permanent folder (for example \`C:\\Desk\\chromium\` — the folder that contains \`manifest.json\`).
+2. \`chrome://extensions\` or \`edge://extensions\` → turn on **Developer mode** → **Load unpacked** → pick that folder.
+3. Pin the Desk icon. Updates: open the popup → **Download update**, unzip over the same folder, then **Reload Desk** (or press Reload on the extension card).
+
+No Chrome Web Store / Edge Add-ons listing yet, so there is no silent auto-update on Chromium. Keep Load unpacked on one folder forever.
 NOTES
 
 delete_named_assets() {
