@@ -63,8 +63,26 @@
         opacity: 0.55;
         cursor: default;
       }
-      button[hidden] {
-        display: none;
+      [hidden] {
+        display: none !important;
+      }
+      #loggedIn {
+        margin: 0 0 4px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        background: #e3efe5;
+        color: #1f4d2a;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      #loggedIn::before {
+        content: "";
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        margin-right: 8px;
+        border-radius: 50%;
+        background: #2e7d32;
       }
       #status,
       #update {
@@ -85,17 +103,20 @@
   </head>
   <body>
     <h1>Black Forest Desk</h1>
-    <p>
-      Desk unlocks the shop website cookie from Tools (and lot names). Sync Tools if the site stays on /unlock after you unlock Tools.
-      Person + desk PIN remain as backup. Create RO print uses local Labels only — no PIN.
-    </p>
-    <button id="useShopSession" type="button">Sync shop session</button>
-    <button id="useTools" class="secondary" type="button">Sync Tools → website</button>
-    <label for="person">Person</label>
-    <select id="person" autocomplete="username" aria-label="Shop person"></select>
-    <label for="pin">Desk PIN</label>
-    <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4–12 digits" />
-    <button id="unlock" class="secondary" type="button">Unlock with desk PIN</button>
+    <div id="loggedIn" role="status" hidden></div>
+    <div id="loginBox">
+      <p>
+        Desk unlocks the shop website cookie from Tools (and lot names). Sync Tools if the site stays on /unlock after you unlock Tools.
+        Person + desk PIN remain as backup. Create RO print uses local Labels only — no PIN.
+      </p>
+      <button id="useShopSession" type="button">Sync shop session</button>
+      <button id="useTools" class="secondary" type="button">Sync Tools → website</button>
+      <label for="person">Person</label>
+      <select id="person" autocomplete="username" aria-label="Shop person"></select>
+      <label for="pin">Desk PIN</label>
+      <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4–12 digits" />
+      <button id="unlock" class="secondary" type="button">Unlock with desk PIN</button>
+    </div>
     <button id="checkUpdate" class="secondary" type="button">Check for extension update</button>
     <button id="applyUpdate" class="accent" type="button" hidden>Update</button>
     <div id="status" role="status"></div>

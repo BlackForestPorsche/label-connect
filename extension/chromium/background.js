@@ -126,7 +126,7 @@
             local,
             message:
               remote.message ||
-              "Hub On your own → Upload New Version, then about:addons → Install Add-on From File (Hub-signed XPI).",
+              "Firefox installs it from the signed Desk feed.",
             url: remote.url || "https://github.com/BlackForestPorsche/label-connect",
           }
         : null;
@@ -157,16 +157,6 @@
   const UPDATES_JSON_URL = `${RELEASE_XPI_BASE}/updates.json`;
   const DESK_ADDON_ID = "black-forest-desk@blackforestautomotive.com";
 
-  async function openAboutAddons() {
-    try {
-      if (runtime.tabs?.create) {
-        await runtime.tabs.create({ url: "about:addons" });
-      }
-    } catch {
-      // about:addons open is best-effort
-    }
-  }
-
   async function fetchSignedFeedUpdate() {
     try {
       const response = await fetch(`${UPDATES_JSON_URL}?t=${Date.now()}`, { cache: "no-store" });
@@ -187,37 +177,8 @@
     }
   }
 
-  async function downloadSignedXpi(version, updateLink) {
-    const ver = String(version || "").trim();
-    const url = String(updateLink || "").trim() || `${RELEASE_XPI_BASE}/Black.Forest.Desk-${ver}.xpi`;
-    if (!ver || !runtime.downloads?.download) return null;
-    try {
-      const downloadId = await runtime.downloads.download({
-        url,
-        filename: `Black.Forest.Desk-${ver}.xpi`,
-        saveAs: false,
-        conflictAction: "overwrite",
-      });
-      return { downloadId, filename: `Black.Forest.Desk-${ver}.xpi`, url };
-    } catch {
-      return null;
-    }
-  }
-
-  /** @deprecated name kept for older call sites — downloads the signed feed XPI. */
-  async function downloadHubUploadZip(version) {
-    return downloadSignedXpi(version, `${RELEASE_XPI_BASE}/Black.Forest.Desk-${version}.xpi`);
-  }
-
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  function signedStagedMessage(localVer, stagedVer, pathHint) {
-    const installed = localVer || localVersion();
-    const staged = stagedVer || "?";
-    const where = pathHint ? ` File: ${pathHint}.` : "";
-    return `Still Installed ${installed} · Staged ${staged} (NOT applied).${where} about:addons → gear → Install Add-on From File… — Desktop is not an upgrade.`;
   }
 
   /** Resolve once Firefox has downloaded a signed update (then we reload). */
@@ -387,133 +348,40 @@
     };
   }
 
+  const FIREFOX_CHECK_HINT =
+    "Firefox installs Desk updates itself: ☰ → Add-ons and themes → Black Forest Desk → ⚙ → Check for Updates. It also checks daily and at startup, then Desk reloads on its own.";
+
   async function applyDeskUpdate() {
     const local = localVersion();
     const feed = await fetchSignedFeedUpdate();
 
-    // 1) Prefer Firefox-native Hub/AMO signed apply (requestUpdateCheck → reload).
-    if (feed?.version && isNewer(feed.version, local)) {
+    if (!feed?.version || !isNewer(feed.version, local)) {
+      const stored = await runtime.storage.local.get(["deskUpdateAvailable"]);
+      const announced = stored.deskUpdateAvailable?.version;
+      if (announced && isNewer(announced, local)) {
+        return {
+          ok: false,
+          mode: "feed_pending",
+          applied: false,
+          version: announced,
+          message: `Desk ${announced} is published but the signed update feed is not live yet. Try again in a few minutes.`,
+        };
+      }
+      return { ok: true, mode: "up_to_date", applied: false, version: local, message: `Desk ${local} is up to date.` };
+    }
+
+    // Chromium-style runtime.requestUpdateCheck (undefined in Firefox, which has no update-now API).
+    if (pendingUpdateDetails || typeof runtime.runtime.requestUpdateCheck === "function") {
       const ff = await tryFirefoxApply(feed);
       if (ff?.mode === "firefox_update") return ff;
     }
 
-    // 2) Labels may pull + stage; never treat Desktop stage as Installed.
-    const base = await labelsBaseUrl();
-    let response;
-    try {
-      response = await fetch(`${base}/api/update-desk-extension`, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: "{}",
-      });
-    } catch {
-      if (feed?.version && isNewer(feed.version, local)) {
-        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
-        if (ff?.mode === "firefox_update") return ff;
-      }
-      return stageSignedFeedSuccess("(Labels wasn’t reachable; Firefox did not apply yet.)");
-    }
-
-    let data = null;
-    try {
-      data = await response.json();
-    } catch {
-      data = null;
-    }
-
-    const code = data?.error || `http_${response.status}`;
-    const mode = data?.mode || "";
-
-    async function afterStageFallback(version, pathHint, detail) {
-      // 3) After Labels stages Desktop XPI, nudge Firefox updater again before admitting defeat.
-      if (feed?.version && isNewer(feed.version, local)) {
-        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
-        if (ff?.mode === "firefox_update") return ff;
-      }
-      if (!pathHint && version) {
-        const dl = await downloadSignedXpi(version, feed?.updateLink);
-        pathHint = dl?.filename || null;
-      }
-      await openAboutAddons();
-      return {
-        ok: true,
-        error: null,
-        mode: "signed_staged",
-        version,
-        signedXpiPath: data?.signedXpiPath || null,
-        hubUploadPath: data?.hubUploadPath || null,
-        staged: true,
-        applied: false,
-        restartRequired: false,
-        message: `${signedStagedMessage(local, version, pathHint)}${detail ? ` ${detail}` : ""}`,
-      };
-    }
-
-    if (mode === "signed_staged" || data?.staged === true) {
-      const version = String(data?.version || feed?.version || "");
-      return afterStageFallback(
-        version,
-        data?.signedXpiPath || data?.hubUploadPath || null,
-        "Unsigned sideload skipped (Hub/AMO signed install kept).",
-      );
-    }
-
-    if (mode === "hub_upload" || code === "hub_signed_kept" || code === "update_outcome_unclear") {
-      const version = String(data?.version || feed?.version || "");
-      return afterStageFallback(version, data?.hubUploadPath || null, "Hub-signed keep — Install from File only if Firefox did not apply.");
-    }
-
-    if (!response.ok || !data?.ok) {
-      if (response.status === 403 || code === "localhost_only") {
-        return { ok: false, error: code, message: "Desk update refused — Labels only accepts updates from this machine." };
-      }
-      if (feed?.version && isNewer(feed.version, local)) {
-        const ff = await tryFirefoxApply(feed, { waitMs: 8_000 });
-        if (ff?.mode === "firefox_update") return ff;
-      }
-      if (response.status === 404 || code === "update_failed" || code.startsWith("http_")) {
-        return stageSignedFeedSuccess(
-          response.status === 404
-            ? "(Labels has no update endpoint yet — pull label-connect / restart Labels.)"
-            : "(Labels apply failed; Firefox did not apply; staged for Install from File.)",
-        );
-      }
-      return stageSignedFeedSuccess(data?.message || "(Labels error; Firefox did not apply; staged.)");
-    }
-
-    if (data.applied === false || data.mode === "hub_upload") {
-      const version = String(data.version || feed?.version || "");
-      return afterStageFallback(version, data.hubUploadPath || null, data.message || "");
-    }
-
-    const version = String(data.version || "");
-    await runtime.storage.local.set({
-      deskUpdateAppliedVersion: version || true,
-      deskUpdateAvailable: version
-        ? {
-            version,
-            local: localVersion(),
-            message: "Restart Firefox to finish.",
-            applied: true,
-          }
-        : null,
-    });
-    if (runtime.action?.setBadgeText) {
-      await runtime.action.setBadgeText({ text: "↻" });
-      await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
-      await runtime.action.setTitle?.({
-        title: version
-          ? `Black Forest Desk — v${version} ready; restart Firefox`
-          : "Black Forest Desk — restart Firefox to finish update",
-      });
-    }
     return {
-      ok: true,
-      version,
-      mode: data.mode || "unsigned_sideload",
-      restartRequired: true,
-      applied: true,
-      message: data.message || (version ? `Updated to ${version}. Restart Firefox.` : "Updated. Restart Firefox."),
+      ok: false,
+      mode: "firefox_check_updates",
+      applied: false,
+      version: feed.version,
+      message: `Desk ${feed.version} is ready (installed ${local}). ${FIREFOX_CHECK_HINT}`,
     };
   }
 
@@ -537,7 +405,7 @@
       const api = globalThis.AllDataRoLabels;
       if (!api?.resolveLotLastNames) {
         sendResponse({ names: [], source: "error", message: "Lot helper missing." });
-      return false;
+        return false;
       }
       api.resolveLotLastNames().then(sendResponse);
       return true;
@@ -668,6 +536,22 @@
     return false;
   });
 
+  function refreshToolbarState() {
+    void globalThis.AllDataRoLabels?.refreshUnlockBadge?.();
+  }
+
+  refreshToolbarState();
+  if (runtime.storage?.onChanged?.addListener) {
+    try {
+      runtime.storage.onChanged.addListener((changes, area) => {
+        if (area && area !== "local") return;
+        if (changes.shopWidgetToken || changes.shopWidgetTokenExpiresAt) refreshToolbarState();
+      });
+    } catch {
+      // storage.onChanged unavailable
+    }
+  }
+
   void checkForUpdate(false);
   tryAutoUnlock("startup", true);
   try {
@@ -681,9 +565,11 @@
   if (runtime.alarms?.create) {
     try {
       runtime.alarms.create("desk-update-check", { periodInMinutes: 360 });
+      runtime.alarms.create("desk-icon-refresh", { periodInMinutes: 1 });
       runtime.alarms.create(AUTO_UNLOCK_ALARM, { periodInMinutes: AUTO_UNLOCK_PERIOD_MIN });
       runtime.alarms.onAlarm.addListener((alarm) => {
         if (alarm?.name === "desk-update-check") void checkForUpdate(false);
+        if (alarm?.name === "desk-icon-refresh") refreshToolbarState();
         if (alarm?.name === AUTO_UNLOCK_ALARM) tryAutoUnlock("alarm", false);
       });
     } catch {
@@ -732,17 +618,8 @@
         gateRemovalTimer = setTimeout(() => {
           gateRemovalTimer = null;
           const api = globalThis.AllDataRoLabels;
-          if (!api?.readShopGateCookie || !api?.syncSiteLockToTools) return;
-          // Unlock bounce: gateToken cookies.set can remove→set; do not lock Tools.
-          if (api.unlockHoldActive && api.unlockHoldActive()) return;
-          void api.readShopGateCookie().then((gate) => {
-            if (gate.present) return null;
-            if (api.unlockHoldActive && api.unlockHoldActive()) return null;
-            return api.probeToolsBridgeHealth().then((health) => {
-              if (health.reachable && health.hasSession === false) return null;
-              return api.syncSiteLockToTools({ reloadShopTabs: true });
-            });
-          });
+          if (!api?.handleGateCookieRemoved) return;
+          void api.handleGateCookieRemoved();
         }, GATE_REMOVAL_MS);
       });
     } catch {

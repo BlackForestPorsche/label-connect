@@ -47,20 +47,18 @@ test("popup and background no longer tell users to run bash update script", asyn
   assert.equal(/on the desk run/.test(popup), false);
   assert.equal(/bash ~\/label-connect/.test(popup), false);
   assert.equal(/apply-update/.test(background), true);
-  assert.equal(/\/api\/update-desk-extension/.test(background), true);
   assert.equal(/run update-desk-extension\.sh/.test(background), false);
-  assert.equal(/hub_signed_kept/.test(background), true);
-  assert.equal(/signed_staged/.test(background), true);
   assert.equal(/requestUpdateCheck/.test(background), true);
   assert.equal(/onUpdateAvailable/.test(background), true);
   assert.equal(/startToolsBridgeWatch/.test(background), true);
-  assert.equal(/NOT applied/.test(background), true);
-  assert.equal(/NOT applied/.test(popup), true);
   assert.equal(/startToolsBridgeWatch/.test(await readFile(path.join(root, "extension/shared/lot-names.js"), "utf8")), true);
   assert.equal(/updates\.json/.test(background), true);
-  assert.equal(/signed_staged/.test(popup), true);
   assert.equal(/Desk update failed/.test(popup), false);
-  assert.equal(/mode !== "hub_upload"/.test(popup) || /mode === "hub_upload"/.test(popup) || /signed_staged/.test(popup), true);
+  assert.equal(/Desktop is not an upgrade|Staged .* \(NOT applied\)/.test(background + popup), false);
+  assert.equal(/\/api\/update-desk-extension/.test(background), false);
+  assert.equal(/downloads\.download/.test(background), false);
+  assert.equal(/firefox_check_updates/.test(background), true);
+  assert.equal(/firefox_check_updates/.test(popup), true);
 });
 
 test("isNewerVersion compares semver-ish strings", () => {

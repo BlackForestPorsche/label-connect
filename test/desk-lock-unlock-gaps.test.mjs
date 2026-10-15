@@ -25,6 +25,7 @@ function makeWorld() {
     reloads: [],
     storage: {},
     bridgeDown: false,
+    icons: [],
   };
 
   const fakeSetTimeout = (fn, ms = 0) => {
@@ -129,7 +130,13 @@ function makeWorld() {
         world.reloads.push(id);
       },
     },
-    action: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
+    action: {
+      setBadgeText: async () => {},
+      setBadgeBackgroundColor: async () => {},
+      setIcon: async ({ imageData }) => {
+        world.icons.push(imageData[16].tag);
+      },
+    },
     browserAction: { setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {} },
     runtime: { getManifest: () => ({ version: "0.1.26" }) },
   };
@@ -153,6 +160,19 @@ function makeWorld() {
     setInterval: () => 0,
     clearInterval: () => {},
     fetch: fakeFetch,
+    OffscreenCanvas: class {
+      getContext() {
+        const ctx = {
+          fillStyle: "",
+          fill() {
+            ctx.painted = ctx.fillStyle;
+          },
+          getImageData: () => ({ tag: ctx.painted === "#2e7d32" ? "green" : "red" }),
+        };
+        for (const fn of ["clearRect", "beginPath", "arc", "stroke", "moveTo", "lineTo"]) ctx[fn] = () => {};
+        return ctx;
+      }
+    },
     browser: runtime,
     chrome: runtime,
   });
@@ -451,4 +471,20 @@ test("a failed exchange after Tools unlock is retried", async () => {
   w.toolsUnlock();
   await w.run(12_000);
   assert.equal(w.gate(), true, "site follows Tools after retries");
+});
+
+test("toolbar icon is green while logged in and red when logged out", async () => {
+  const w = makeWorld();
+  await w.api.refreshUnlockBadge();
+  assert.equal(w.world.icons.at(-1), "red");
+  w.toolsUnlock();
+  await w.run(GAP);
+  assert.equal(w.world.icons.at(-1), "green");
+  assert.equal(w.world.storage.deskSessionPerson, "logan");
+  await w.siteLock();
+  await w.run(GAP);
+  assert.equal(w.world.icons.at(-1), "red");
+  w.toolsUnlock();
+  await w.run(GAP);
+  assert.equal(w.world.icons.at(-1), "green");
 });

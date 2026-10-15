@@ -11,6 +11,8 @@
   const status = document.getElementById("status");
   const updateEl = document.getElementById("update");
   const versionEl = document.getElementById("version");
+  const loggedInEl = document.getElementById("loggedIn");
+  const loginBoxEl = document.getElementById("loginBox");
 
   const FALLBACK_PEOPLE = ["logan", "stephen", "steve", "carla", "john"];
 
@@ -29,6 +31,50 @@
     return String(person || "")
       .trim()
       .toLowerCase();
+  }
+
+  function displayName(person) {
+    const text = String(person || "").trim();
+    if (!text) return "";
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
+  let wasLoggedIn = false;
+
+  function renderSession({ loggedIn, person } = {}) {
+    if (!loggedInEl || !loginBoxEl) return;
+    loggedInEl.hidden = !loggedIn;
+    loginBoxEl.hidden = Boolean(loggedIn);
+    status.hidden = Boolean(loggedIn);
+    if (!loggedIn) {
+      if (wasLoggedIn) setStatus("Logged out — unlock Tools or the shop site, or use person + PIN.");
+      wasLoggedIn = false;
+      return;
+    }
+    wasLoggedIn = true;
+    const name = displayName(person);
+    loggedInEl.textContent = name ? `Logged in as ${name}` : "Logged in";
+  }
+
+  async function refreshSession() {
+    try {
+      const stored = await runtime.storage.local.get([
+        "shopWidgetToken",
+        "shopWidgetTokenExpiresAt",
+        "shopPerson",
+        "deskSessionPerson",
+      ]);
+      const loggedIn = Boolean(
+        stored.shopWidgetToken && Number(stored.shopWidgetTokenExpiresAt || 0) > Date.now(),
+      );
+      const person =
+        typeof stored.deskSessionPerson === "string" ? stored.deskSessionPerson : stored.shopPerson;
+      renderSession({ loggedIn, person });
+      return loggedIn;
+    } catch {
+      renderSession({ loggedIn: false });
+      return false;
+    }
   }
 
   function setStatus(text, kind) {
@@ -62,7 +108,7 @@
     const hint =
       typeof available?.message === "string" && available.message.trim()
         ? available.message.trim()
-        : "Hub On your own → Install from File";
+        : "Firefox will install it";
     setUpdate(`Update ${version} ready — ${hint}`, "warn");
   }
 
@@ -122,6 +168,7 @@
             ? "Lot names unlocked from Black Forest Tools."
             : "Lot names unlocked from the shop site session.";
         setStatus(label, "ok");
+        await refreshSession();
         return true;
       }
       if (!quiet) setStatus(humanizeUnlockError(response?.error), "err");
@@ -206,6 +253,7 @@
         return;
       }
       setStatus(`Lot names unlocked as “${person}”. Open SSF checkout and Refresh if needed.`, "ok");
+      await refreshSession();
     } catch {
       setStatus("Extension background unavailable. Reload the add-on, then enter your desk PIN.", "err");
     } finally {
@@ -296,20 +344,11 @@
             response.message || "Firefox is applying the signed update (reload)…",
             "ok",
           );
-        } else if (
-          response?.mode === "signed_staged" ||
-          response?.staged === true ||
-          response?.mode === "hub_upload" ||
-          response?.error === "hub_signed_kept"
-        ) {
-          // Staged ≠ installed — warn, never green “done”.
-          const local = runtime.runtime.getManifest()?.version || "?";
-          const staged = response?.version || "?";
-          setUpdate(
-            response?.message ||
-              `Still Installed ${local} · Staged ${staged} (NOT applied). about:addons → Install Add-on From File…`,
-            "warn",
-          );
+        } else if (response?.mode === "up_to_date") {
+          showApply(false);
+          setUpdate(response.message || "Desk extension is up to date.", "ok");
+        } else if (response?.mode === "firefox_check_updates" || response?.mode === "feed_pending") {
+          setUpdate(response.message, "warn");
           showApply(true);
         } else if (response?.ok && response?.applied !== false) {
           const version = response.version || "";
@@ -324,7 +363,7 @@
         }
       } catch {
         setUpdate(
-          "Could not reach Labels — try about:addons → Check for Updates, or Install Add-on From File (signed desk-extension XPI).",
+          "Update failed — ☰ → Add-ons and themes → Black Forest Desk → ⚙ → Check for Updates.",
           "warn",
         );
         showApply(true);
@@ -335,6 +374,21 @@
     });
   }
 
+  if (runtime.storage?.onChanged?.addListener) {
+    runtime.storage.onChanged.addListener((changes, area) => {
+      if (area && area !== "local") return;
+      if (
+        changes.shopWidgetToken ||
+        changes.shopWidgetTokenExpiresAt ||
+        changes.deskSessionPerson ||
+        changes.shopPerson
+      ) {
+        void refreshSession();
+      }
+    });
+  }
+
   fillPersonSelect("logan");
-  restore();
+  void refreshSession();
+  restore().then(refreshSession);
 })();

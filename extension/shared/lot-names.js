@@ -195,14 +195,86 @@
     } catch {}
   }
 
+  const ICON_SIZES = [16, 32, 48, 128];
+  const ICON_GREEN = "#2e7d32";
+  const ICON_RED = "#c62828";
+  const iconCache = {};
+
+  function makeCanvas(size) {
+    if (typeof OffscreenCanvas === "function") return new OffscreenCanvas(size, size);
+    if (typeof document !== "undefined" && document.createElement) {
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      return canvas;
+    }
+    return null;
+  }
+
+  function drawStatusIcon(loggedIn, size) {
+    const canvas = makeCanvas(size);
+    const ctx = canvas?.getContext?.("2d");
+    if (!ctx) return null;
+    const c = size / 2;
+    ctx.clearRect(0, 0, size, size);
+    ctx.beginPath();
+    ctx.arc(c, c, size * 0.47, 0, Math.PI * 2);
+    ctx.fillStyle = loggedIn ? ICON_GREEN : ICON_RED;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, size * 0.07);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    if (loggedIn) {
+      ctx.moveTo(size * 0.27, size * 0.52);
+      ctx.lineTo(size * 0.43, size * 0.68);
+      ctx.lineTo(size * 0.74, size * 0.34);
+    } else {
+      ctx.moveTo(size * 0.33, size * 0.33);
+      ctx.lineTo(size * 0.67, size * 0.67);
+      ctx.moveTo(size * 0.67, size * 0.33);
+      ctx.lineTo(size * 0.33, size * 0.67);
+    }
+    ctx.stroke();
+    return ctx.getImageData(0, 0, size, size);
+  }
+
+  function statusIconImages(loggedIn) {
+    const key = loggedIn ? "in" : "out";
+    if (iconCache[key]) return iconCache[key];
+    const images = {};
+    for (const size of ICON_SIZES) {
+      const image = drawStatusIcon(loggedIn, size);
+      if (!image) return null;
+      images[size] = image;
+    }
+    iconCache[key] = images;
+    return images;
+  }
+
+  /** Toolbar icon: green = logged in (shop / Tools session), red = logged out. */
+  async function setToolbarIcon(loggedIn) {
+    const action = runtime?.action || runtime?.browserAction;
+    if (!action?.setIcon) return false;
+    try {
+      const imageData = statusIconImages(Boolean(loggedIn));
+      if (!imageData) return false;
+      await action.setIcon({ imageData });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function setPinBadge(needsPin) {
+    await setToolbarIcon(!needsPin);
     if (!runtime?.action?.setBadgeText) return;
     try {
       if (needsPin) {
-        await runtime.action.setBadgeText({ text: "PIN" });
-        await runtime.action.setBadgeBackgroundColor?.({ color: "#7a1f1f" });
+        await runtime.action.setBadgeText({ text: "" });
         await runtime.action.setTitle?.({
-          title: "Black Forest Desk — enter desk PIN to unlock lot names",
+          title: "Black Forest Desk — logged out",
         });
       } else {
         const stored = await storageGet(["deskUpdateAvailable"]);
@@ -217,7 +289,7 @@
           await runtime.action.setBadgeText({ text: "" });
           await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
           await runtime.action.setTitle?.({
-            title: "Black Forest Desk — lot names unlocked",
+            title: "Black Forest Desk — logged in",
           });
         }
       }
@@ -276,6 +348,7 @@
       shopWidgetToken: token,
       shopWidgetTokenExpiresAt: Date.now() + ttlMs,
       shopPerson: normalized || undefined,
+      deskSessionPerson: normalized || "",
       shopWidgetTokenSource: src,
     });
     await setPinBadge(false);
@@ -1444,6 +1517,7 @@
   api.pushPersonSettingsToShopTabs = pushPersonSettingsToShopTabs;
   api.hasFreshWidgetToken = hasFreshWidgetToken;
   api.refreshUnlockBadge = refreshUnlockBadge;
+  api.setToolbarIcon = setToolbarIcon;
   api.resolveLotLastNames = resolveLotLastNames;
   api.loadLotLastNames = loadLotLastNames;
 })(globalThis);
