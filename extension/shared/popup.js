@@ -293,7 +293,7 @@
         if (response?.mode === "firefox_update" && response?.ok) {
           showApply(false);
           setUpdate(
-            response.message || "Firefox is applying the signed update. Restart when prompted.",
+            response.message || "Firefox is applying the signed update (reload)…",
             "ok",
           );
         } else if (
@@ -302,10 +302,13 @@
           response?.mode === "hub_upload" ||
           response?.error === "hub_signed_kept"
         ) {
-          // Signed feed / Install-from-File staging — success UX (not an error toast).
+          // Staged ≠ installed — warn, never green “done”.
+          const local = runtime.runtime.getManifest()?.version || "?";
+          const staged = response?.version || "?";
           setUpdate(
-            response?.message || "Signed update ready — about:addons → Install Add-on From File.",
-            "ok",
+            response?.message ||
+              `Still Installed ${local} · Staged ${staged} (NOT applied). about:addons → Install Add-on From File…`,
+            "warn",
           );
           showApply(true);
         } else if (response?.ok && response?.applied !== false) {

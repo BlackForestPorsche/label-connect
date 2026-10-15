@@ -52,6 +52,11 @@ test("popup and background no longer tell users to run bash update script", asyn
   assert.equal(/hub_signed_kept/.test(background), true);
   assert.equal(/signed_staged/.test(background), true);
   assert.equal(/requestUpdateCheck/.test(background), true);
+  assert.equal(/onUpdateAvailable/.test(background), true);
+  assert.equal(/startToolsBridgeWatch/.test(background), true);
+  assert.equal(/NOT applied/.test(background), true);
+  assert.equal(/NOT applied/.test(popup), true);
+  assert.equal(/startToolsBridgeWatch/.test(await readFile(path.join(root, "extension/shared/lot-names.js"), "utf8")), true);
   assert.equal(/updates\.json/.test(background), true);
   assert.equal(/signed_staged/.test(popup), true);
   assert.equal(/Desk update failed/.test(popup), false);
