@@ -18,7 +18,9 @@ function makeWorld() {
   let timerId = 0;
   const timers = new Map();
   const world = {
-    tools: { hasSession: false, person: "logan" },
+    tools: { hasSession: false, person: "logan", token: "", sessionId: "", revoked: new Set(), n: 0 },
+    mint: 0,
+    exchangeGate: null,
     jar: new Map(),
     reloads: [],
     storage: {},
@@ -48,24 +50,39 @@ function makeWorld() {
           ok: true,
           hasSession: world.tools.hasSession,
           person: world.tools.hasSession ? world.tools.person : "",
+          sessionId: world.tools.hasSession ? world.tools.sessionId : "",
+          locked: !world.tools.hasSession,
         });
       }
       if (u.pathname === "/v1/widget-session" && method === "GET") {
         return world.tools.hasSession
-          ? json(200, { token: "bearer-1", expiresAt: new Date(now + 3_600_000).toISOString(), person: world.tools.person })
+          ? json(200, { token: world.tools.token, expiresAt: new Date(now + 3_600_000).toISOString(), person: world.tools.person })
           : json(404, { ok: false, error: "no_session" });
       }
       if (u.pathname === "/v1/widget-session" && method === "POST") {
-        if (!world.dropPublish) world.tools.hasSession = true;
+        const body = JSON.parse(init.body || "{}");
+        const id = `id-${body.token}`;
+        if (world.tools.revoked.has(id)) return json(409, { ok: false, error: "locked" });
+        if (!world.dropPublish) {
+          world.tools.hasSession = true;
+          world.tools.token = body.token;
+          world.tools.sessionId = id;
+        }
         return json(200, { ok: true });
       }
       if ((u.pathname === "/v1/widget-session" && method === "DELETE") || u.pathname === "/v1/lock") {
+        if (world.tools.sessionId) world.tools.revoked.add(world.tools.sessionId);
         world.tools.hasSession = false;
         return json(200, { ok: true, locked: true });
       }
     }
     if (u.hostname === "shop.blackforestautomotive.com") {
       if (u.pathname === "/api/widget/session/exchange") {
+        if (world.exchangeGate) await world.exchangeGate;
+        if (world.exchangeFails > 0) {
+          world.exchangeFails -= 1;
+          return json(500, { ok: false });
+        }
         return json(200, {
           ok: true,
           person: "logan",
@@ -76,7 +93,7 @@ function makeWorld() {
       if (u.pathname === "/api/widget/session/from-gate") {
         if (!world.jar.has(GATE)) return json(401, { error: "unauthorized" });
         return json(200, {
-          token: "bearer-site",
+          token: `bearer-site-${++world.mint}`,
           expiresAt: new Date(now + 3_600_000).toISOString(),
           person: "logan",
         });
@@ -123,6 +140,8 @@ function makeWorld() {
     }
   };
 
+  let api = null;
+  const boot = () => {
   const context = vm.createContext({
     console,
     URL,
@@ -141,7 +160,9 @@ function makeWorld() {
   for (const file of ["config.js", "lot-names.js"]) {
     vm.runInContext(fs.readFileSync(path.join(root, "extension/shared", file), "utf8"), context, { filename: file });
   }
-  const api = context.AllDataRoLabels;
+  api = context.AllDataRoLabels;
+  };
+  boot();
 
   async function settle() {
     for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r));
@@ -174,14 +195,22 @@ function makeWorld() {
 
   return {
     world,
-    api,
+    get api() {
+      return api;
+    },
+    boot,
+    settle,
     run,
     advance,
     gate,
     toolsUnlock: () => {
+      world.tools.n += 1;
+      world.tools.token = `tools-${world.tools.n}`;
+      world.tools.sessionId = `id-${world.tools.token}`;
       world.tools.hasSession = true;
     },
     toolsLock: () => {
+      if (world.tools.sessionId) world.tools.revoked.add(world.tools.sessionId);
       world.tools.hasSession = false;
     },
     siteUnlockPageLoad: async () => {
@@ -273,7 +302,7 @@ test("a fresh site unlock is not cleared while Tools is still catching up", asyn
   await w.run(5_000);
   assert.equal(w.gate(), true, "hold protects the unlock until Tools reflects it");
   w.world.dropPublish = false;
-  await w.api.publishSessionToToolsBridge({ token: "t", expiresAt: new Date().toISOString(), person: "logan" });
+  await w.api.publishSessionToToolsBridge({ token: "t-fresh", expiresAt: new Date().toISOString(), person: "logan" });
   await w.run(1_000);
   assert.equal(w.world.tools.hasSession, true);
   assert.equal(w.gate(), true);
@@ -291,4 +320,135 @@ test("Tools lock replays after a lock edge landed inside the hold", async () => 
   await w.advance(40_000);
   await w.run(1_200);
   assert.equal(w.gate(), false, "edge replayed after hold ended");
+});
+
+test("site lock stays locked for 10 minutes through every Desk trigger", async () => {
+  const w = makeWorld();
+  await w.run(800);
+  w.toolsUnlock();
+  await w.run(GAP);
+  assert.equal(w.gate(), true);
+
+  await w.siteLock();
+  await w.run(2_000);
+  assert.equal(w.world.tools.hasSession, false);
+  assert.equal(w.gate(), false);
+
+  for (let minute = 0; minute < 10; minute++) {
+    await w.run(30_000);
+    await w.api.tryAutoUnlock({ force: false, reason: "shop-tab-complete" });
+    await w.api.tryAutoUnlock({ force: false, reason: "idle-active" });
+    if (minute % 5 === 4) await w.api.tryAutoUnlock({ force: false, reason: "alarm" });
+    await w.run(30_000);
+    assert.equal(w.gate(), false, `gate stays absent at minute ${minute + 1}`);
+    assert.equal(w.world.tools.hasSession, false, `Tools stays locked at minute ${minute + 1}`);
+  }
+});
+
+test("lock survives a suspended and restarted background page", async () => {
+  const w = makeWorld();
+  await w.run(800);
+  w.toolsUnlock();
+  await w.run(GAP);
+  await w.siteLock();
+  await w.run(1_000);
+  assert.equal(w.world.tools.hasSession, false);
+
+  w.boot();
+  await w.api.tryAutoUnlock({ force: true, reason: "startup" });
+  await w.run(3_000);
+  assert.equal(w.gate(), false, "startup exchange must not remint");
+  assert.equal(w.world.tools.hasSession, false);
+  await w.advance(150_000);
+  await w.api.tryAutoUnlock({ force: false, reason: "shop-tab-complete" });
+  await w.run(2_000);
+  assert.equal(w.gate(), false, "still locked 2.5 minutes later");
+});
+
+test("a site lock the cookie listener only sees after wake still sticks", async () => {
+  const w = makeWorld();
+  await w.run(800);
+  w.toolsUnlock();
+  await w.run(GAP);
+  w.world.jar.delete(GATE);
+  w.boot();
+  await w.api.tryAutoUnlock({ force: false, reason: "shop-tab-complete" });
+  await w.api.handleGateCookieRemoved();
+  await w.run(5_000);
+  assert.equal(w.world.tools.hasSession, false, "Tools locked");
+  assert.equal(w.gate(), false);
+});
+
+test("an exchange already in flight when the site locks is discarded", async () => {
+  const w = makeWorld();
+  await w.run(800);
+  w.toolsUnlock();
+  await w.run(GAP);
+  w.world.jar.delete(GATE);
+  let release;
+  w.world.exchangeGate = new Promise((r) => {
+    release = r;
+  });
+  const pending = w.api.exchangeWidgetSessionToGate(w.world.tools.token);
+  await w.settle();
+  await w.api.syncSiteLockToTools({ reloadShopTabs: false });
+  release();
+  const result = await pending;
+  w.world.exchangeGate = null;
+  assert.equal(result.ok, undefined);
+  assert.equal(w.gate(), false, "stale exchange must not set the gate");
+  assert.equal(w.world.tools.hasSession, false);
+});
+
+test("a revoked Tools session coming back is relocked, not exchanged", async () => {
+  const w = makeWorld();
+  await w.run(800);
+  w.toolsUnlock();
+  await w.run(GAP);
+  const staleId = w.world.tools.sessionId;
+  const staleToken = w.world.tools.token;
+  await w.siteLock();
+  await w.run(1_000);
+  w.world.tools.hasSession = true;
+  w.world.tools.sessionId = staleId;
+  w.world.tools.token = staleToken;
+  await w.run(3_000);
+  assert.equal(w.world.tools.hasSession, false, "relocked");
+  assert.equal(w.gate(), false);
+});
+
+test("Tools unlock any time after a site lock opens the site again", async () => {
+  const w = makeWorld();
+  await w.run(800);
+  w.toolsUnlock();
+  await w.run(GAP);
+  await w.siteLock();
+  await w.run(1_000);
+  await w.advance(600_000);
+  w.toolsUnlock();
+  await w.run(3_000);
+  assert.equal(w.gate(), true, "intentional Tools unlock mirrors to the site");
+});
+
+test("site PIN unlock after a site lock releases the latch", async () => {
+  const w = makeWorld();
+  await w.run(800);
+  w.toolsUnlock();
+  await w.run(GAP);
+  await w.siteLock();
+  await w.run(1_000);
+  await w.siteUnlockPageLoad();
+  await w.run(3_000);
+  assert.equal(w.world.tools.hasSession, true, "Tools follows the site unlock");
+  assert.equal(w.gate(), true);
+  assert.equal(w.api.siteLatchState(), null);
+});
+
+test("a failed exchange after Tools unlock is retried", async () => {
+  const w = makeWorld();
+  await w.run(800);
+  w.world.exchangeFails = 2;
+  w.toolsUnlock();
+  await w.run(12_000);
+  assert.equal(w.gate(), true, "site follows Tools after retries");
 });

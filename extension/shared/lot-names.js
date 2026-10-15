@@ -14,11 +14,39 @@
   const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
   const PERSON_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
   const PIN_RE = /^\d{4,12}$/;
-  /** After Firefox website lock, do not re-exchange Tools Bearer into the site jar. */
-  const SITE_LOCK_QUIET_MS = 90_000;
+  /** Legacy Tools (no sessionId on /health): old quiet window after a website lock. */
+  const LEGACY_LOCK_QUIET_MS = 90_000;
+  const LATCH_KEY = "deskSiteLatch";
+  const GATE_SEEN_KEY = "deskGateSeen";
+  /** Desk's own cookie writes (exchange / clear) must not look like a site lock or unlock. */
+  const DESK_GATE_WRITE_MS = 4_000;
   /** Desk unlock roster (plasmoid fallback). */
   const DESK_PEOPLE = Object.freeze(["logan", "stephen", "steve", "carla", "john"]);
-  let siteLockQuietUntil = 0;
+  /**
+   * Sticky website lock. Set by every intentional site lock, persisted in storage so
+   * a suspended background page does not forget it, and released only by an intentional
+   * unlock: a new Tools session (different sessionId on :8788) or a site PIN unlock.
+   * No timer ends it.
+   */
+  let siteLatch = null;
+  let latchEpoch = 0;
+  /**
+   * True once this browser has held a website gate that Desk has not itself cleared.
+   * If the gate is gone and Desk did not remove it, the site was locked — even if the
+   * cookie listener has not fired yet (event page wake, suspended page).
+   */
+  let gateSeen = false;
+  function markGateSeen(value) {
+    if (gateSeen === value) return;
+    gateSeen = value;
+    void storageSet({ [GATE_SEEN_KEY]: value });
+  }
+  let lastToolsSessionId = null;
+  /** Last time something other than Desk removed bf_shop_gate (site Lock). */
+  let lastForeignGateRemovedAt = 0;
+  const FOREIGN_REMOVAL_SETTLE_MS = 1_500;
+  let deskGateWriteUntil = 0;
+  let lastDeskGateValue = "";
   /** After Tools→site exchange, ignore gate-removal → site-lock (unlock bounce). */
   const UNLOCK_HOLD_MS = 35_000;
   let unlockHoldUntil = 0;
@@ -27,6 +55,66 @@
   }
   function unlockHoldActive(nowMs = Date.now()) {
     return nowMs < unlockHoldUntil;
+  }
+
+  async function persistLatch() {
+    await storageSet({ [LATCH_KEY]: siteLatch });
+  }
+
+  async function loadLatch() {
+    const stored = await storageGet([LATCH_KEY, GATE_SEEN_KEY]);
+    if (stored[GATE_SEEN_KEY] === true) gateSeen = true;
+    const value = stored[LATCH_KEY];
+    if (value && typeof value === "object" && !siteLatch) {
+      siteLatch = {
+        at: Number(value.at) || Date.now(),
+        toolsSessionId: value.toolsSessionId == null ? null : String(value.toolsSessionId),
+      };
+    }
+  }
+
+  const latchReady = loadLatch().catch(() => {});
+
+  function engageSiteLatch(toolsSessionId = lastToolsSessionId) {
+    latchEpoch += 1;
+    siteLatch = {
+      at: siteLatch ? siteLatch.at : Date.now(),
+      toolsSessionId: toolsSessionId == null ? null : String(toolsSessionId),
+    };
+    void persistLatch();
+  }
+
+  function releaseSiteLatch() {
+    if (!siteLatch) return;
+    siteLatch = null;
+    void persistLatch();
+  }
+
+  function siteLockQuietActive() {
+    return Boolean(siteLatch);
+  }
+
+  /**
+   * What the sticky site lock says about Tools' current :8788 health.
+   * - none: not latched
+   * - release: Tools has a different session than the one locked — user unlocked Tools
+   * - relock: Tools still shows the session we locked — keep it locked, never exchange
+   * - hold: Tools is locked or away — stay locked, never exchange
+   */
+  function latchVerdict(health, nowMs = Date.now()) {
+    if (!siteLatch) return "none";
+    if (!health || !health.reachable || !health.hasSession) return "hold";
+    if (typeof health.sessionId === "string") {
+      if (health.sessionId && health.sessionId !== siteLatch.toolsSessionId) return "release";
+      return "relock";
+    }
+    return nowMs - siteLatch.at >= LEGACY_LOCK_QUIET_MS ? "release" : "relock";
+  }
+
+  async function relockTools() {
+    const locked = await lockToolsViaBridge();
+    await clearShopGateCookie();
+    return locked;
   }
 
   function lastNameFromLotLabel(label) {
@@ -181,7 +269,7 @@
     // Website unlock wins — clear quiet + arm hold so throttle lock-wins cannot
     // clear the Firefox gate ~30s later (unlock-bounce-30s.md).
     if (src === "shop-site" || src === "site-gate" || src === "pin") {
-      siteLockQuietUntil = 0;
+      releaseSiteLatch();
       armUnlockHold();
     }
     await storageSet({
@@ -300,7 +388,10 @@
     if (!force && unlockHoldActive()) {
       return { ok: false, skipped: "unlock_hold", reason: "unlock_hold" };
     }
-    siteLockQuietUntil = Date.now() + SITE_LOCK_QUIET_MS;
+    const pre = await probeToolsBridgeHealth();
+    engageSiteLatch(
+      pre.reachable ? (pre.hasSession ? (pre.sessionId ?? null) : "") : lastToolsSessionId,
+    );
     const hadGate = (await readShopGateCookie()).present;
     // Clear Firefox gate BEFORE Tools DELETE — otherwise Desk republishes Bearer (~24s).
     await clearShopGateCookie();
@@ -345,7 +436,6 @@
     // Remint suppress (site-lock-tools-stays.md): DELETE-only came back ~24s when
     // Firefox still had a gate. We cleared the gate + DELETE+POST; still re-lock
     // a few times while quiet if Tools shows a session again (republish race).
-    scheduleSiteLockRemintSuppress();
     return {
       ok: true,
       locked: true,
@@ -354,38 +444,6 @@
       shouldReload: hadGate,
       via: locked.via,
     };
-  }
-
-  let remintSuppressTimers = [];
-  function scheduleSiteLockRemintSuppress() {
-    for (const id of remintSuppressTimers) {
-      try {
-        clearTimeout(id);
-      } catch {
-        // ignore
-      }
-    }
-    remintSuppressTimers = [];
-    for (const delay of [3_000, 12_000, 28_000]) {
-      remintSuppressTimers.push(
-        setTimeout(() => {
-          void (async () => {
-            if (!siteLockQuietActive()) return;
-            if (unlockHoldActive()) return;
-            const health = await probeToolsBridgeHealth();
-            if (health.reachable && health.hasSession) {
-              await lockToolsViaBridge();
-              // Keep quiet — intentional Tools unlock after site lock clears quiet
-              // only inside syncToolsSessionToSite when user truly unlocked Tools.
-            }
-          })();
-        }, delay),
-      );
-    }
-  }
-
-  function siteLockQuietActive(nowMs = Date.now()) {
-    return nowMs < siteLockQuietUntil;
   }
 
   /** Read bf_shop_gate from the default browser profile. Never logs the value. */
@@ -397,7 +455,10 @@
     }
     try {
       const cookie = await runtime.cookies.get({ url: `${base}/`, name });
-      if (cookie && cookie.value) return { present: true };
+      if (cookie && cookie.value) {
+        markGateSeen(true);
+        return { present: true };
+      }
       return { present: false, reason: "missing" };
     } catch {
       return { present: false, reason: "cookie_error" };
@@ -434,8 +495,13 @@
     // Tools now shows the unlock the hold was guarding. Holding on past this point
     // swallows a real lock 10s later (Tools lock edge, site Lock, gate removal).
     if (hasSession) unlockHoldUntil = 0;
+    const sessionId = data && typeof data.sessionId === "string" ? data.sessionId : undefined;
+    if (hasSession && sessionId) lastToolsSessionId = sessionId;
+    if (!hasSession) lastToolsSessionId = "";
     return {
       reachable: true,
+      sessionId,
+      locked: data && typeof data.locked === "boolean" ? data.locked : undefined,
       hasSession,
       person: data && data.person ? String(data.person) : "",
       reason: hasSession ? "has_session" : "no_session",
@@ -446,6 +512,8 @@
     const base = await shopBaseUrl();
     const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
     if (!runtime?.cookies?.remove) return { ok: false, reason: "no_cookies_api" };
+    deskGateWriteUntil = Date.now() + DESK_GATE_WRITE_MS;
+    markGateSeen(false);
     try {
       await runtime.cookies.remove({ url: `${base}/`, name });
       return { ok: true };
@@ -477,13 +545,17 @@
     if (Number.isFinite(parsed)) {
       details.expirationDate = Math.floor(parsed / 1000);
     }
+    deskGateWriteUntil = Date.now() + DESK_GATE_WRITE_MS;
+    lastDeskGateValue = String(value);
     try {
       await runtime.cookies.set(details);
+      markGateSeen(true);
       return { ok: true };
     } catch {
       try {
         delete details.sameSite;
         await runtime.cookies.set(details);
+        markGateSeen(true);
         return { ok: true };
       } catch {
         return { ok: false, reason: "set_failed" };
@@ -497,6 +569,9 @@
    */
   async function exchangeWidgetSessionToGate(token) {
     if (!token) return { error: "No Tools session token.", reason: "no_token" };
+    await latchReady;
+    if (siteLatch) return { error: "Website is locked.", reason: "site_locked" };
+    const epoch = latchEpoch;
     const base = await shopBaseUrl();
     let response;
     try {
@@ -537,6 +612,10 @@
         error: friendlyWidgetError(data && data.error, response.status),
         reason: "exchange_failed",
       };
+    }
+    if (epoch !== latchEpoch || siteLatch) {
+      await clearShopGateCookie();
+      return { error: "Website was locked mid-exchange.", reason: "site_locked" };
     }
     const gateToken = data.gateToken || data.gate || data.cookieValue || "";
     if (gateToken) {
@@ -591,13 +670,21 @@
   async function syncToolsSessionToSite({ reloadUnlockTabs = true, forceExchange = false } = {}) {
     const health = await probeToolsBridgeHealth();
 
-    // Website lock quiet: hold exchange only while Tools is still locked.
-    // If Tools has a live session again, the user unlocked Tools AFTER the site
-    // lock — clear quiet and fall through to exchange (never re-DELETE).
-    if (siteLockQuietActive() && !forceExchange) {
-      if (health.reachable && health.hasSession) {
-        siteLockQuietUntil = 0;
-      } else if (health.reachable && health.hasSession === false) {
+    await latchReady;
+    if (siteLatch) {
+      const verdict = latchVerdict(health);
+      if (verdict === "release") {
+        releaseSiteLatch();
+      } else if (verdict === "relock") {
+        await relockTools();
+        return {
+          ok: false,
+          locked: true,
+          shouldReload: false,
+          reason: "site_lock",
+          error: "Website locked — Tools session cleared.",
+        };
+      } else {
         if (unlockHoldActive()) {
           return {
             ok: true,
@@ -606,24 +693,33 @@
             siteGate: (await readShopGateCookie()).present,
           };
         }
-        const hadGate = (await readShopGateCookie()).present;
-        await clearShopGateCookie();
-        return {
-          ok: false,
-          locked: true,
-          shouldReload: hadGate && reloadUnlockTabs,
-          reason: "site_lock",
-          error: "Website locked — Tools session cleared.",
-        };
-      } else {
         return {
           ok: false,
           locked: true,
           shouldReload: false,
-          reason: "site_lock_pending",
-          error: "Website locked — waiting for Tools to clear session.",
+          reason: "site_lock",
+          error: "Website locked — stays locked until you unlock.",
         };
       }
+    }
+
+    if (
+      !siteLatch &&
+      !forceExchange &&
+      gateSeen &&
+      health.reachable &&
+      health.hasSession &&
+      !unlockHoldActive() &&
+      !(await readShopGateCookie()).present
+    ) {
+      await syncSiteLockToTools({ reloadShopTabs: true });
+      return {
+        ok: false,
+        locked: true,
+        shouldReload: false,
+        reason: "site_lock",
+        error: "Website was locked — Tools locked to match.",
+      };
     }
 
     if (health.reachable && health.hasSession === false) {
@@ -683,8 +779,6 @@
     if (!fromTools.ok) {
       return fromTools;
     }
-    // Importing from Tools means Tools unlocked — drop site-lock quiet window.
-    siteLockQuietUntil = 0;
     const stored = await storageGet(["shopWidgetToken"]);
     const token = stored.shopWidgetToken;
     const gateBefore = (await readShopGateCookie()).present;
@@ -726,6 +820,8 @@
    * Degrades cleanly when the route is missing (404/406): falls back to Tools/PIN.
    */
   async function importSiteGateSession() {
+    await latchReady;
+    const epoch = latchEpoch;
     const gate = await readShopGateCookie();
     if (gate.present) {
       // A just-unlocked shop page can race tab-complete auto-unlock before from-gate
@@ -782,6 +878,9 @@
       };
     }
 
+    if (epoch !== latchEpoch) {
+      return { error: "Website was locked mid-import.", reason: "site_locked" };
+    }
     const token = data?.token || data?.accessToken || data?.bearer || data?.widgetToken;
     const expiresAt = data?.expiresAt || data?.widgetExpiresAt;
     if (!token) return { error: "from-gate returned no token.", reason: "bad_payload" };
@@ -913,6 +1012,8 @@
 
   async function handleGateCookieRemoved() {
     // Unlock bounce: gateToken cookies.set can remove→set; do not lock Tools.
+    await latchReady;
+    if (siteLatch) return { skipped: "already_latched" };
     if (unlockHoldActive()) return { skipped: "unlock_hold" };
     const gate = await readShopGateCookie();
     if (gate.present) return { skipped: "gate_present" };
@@ -922,10 +1023,17 @@
     return syncSiteLockToTools({ reloadShopTabs: true });
   }
 
+  let lastRelockAt = 0;
+  let mirrorRetryAt = 0;
+  let mirrorRetries = 0;
+  const MIRROR_RETRY_MS = 3_000;
+  const MIRROR_RETRY_MAX = 20;
+
   async function tickBridgeSyncPoll() {
     if (bridgeWatchInFlight) return;
     bridgeWatchInFlight = true;
     try {
+      await latchReady;
       const health = await probeToolsBridgeHealth();
       if (!health.reachable) {
         lastBridgeHasSession = null;
@@ -933,19 +1041,43 @@
         return;
       }
       const has = Boolean(health.hasSession);
-      const fp = `${has ? 1 : 0}|${health.person || ""}|${health.reason || ""}`;
+      // Level-triggered: while the site is locked, a Tools session that is still the
+      // one we locked is never allowed to stand (belt and braces for a missed DELETE).
+      if (siteLatch && latchVerdict(health) === "relock" && Date.now() - lastRelockAt > 2_000) {
+        lastRelockAt = Date.now();
+        await relockTools();
+      }
+      const fp = `${has ? 1 : 0}|${health.person || ""}|${health.reason || ""}|${health.sessionId || ""}`;
       if (lastBridgeFingerprint !== fp) {
         const first = lastBridgeHasSession === null;
         const edge = !first && lastBridgeHasSession !== has;
+        const swapped = !first && has && lastBridgeHasSession === true;
         lastBridgeHasSession = has;
         lastBridgeFingerprint = fp;
-        if (first || edge) {
-          const synced = await syncToolsSessionToSite({ reloadUnlockTabs: true, forceExchange: has });
+        if (first || edge || swapped) {
+          mirrorRetries = 0;
+          const synced = await syncToolsSessionToSite({
+            reloadUnlockTabs: true,
+            forceExchange: has && !swapped,
+          });
           if (synced && synced.skipped === "unlock_hold") {
             // Edge was swallowed by the hold. Replay it once the hold ends.
             lastBridgeHasSession = null;
             lastBridgeFingerprint = "";
+          } else if (has && synced && !synced.ok && !synced.locked) {
+            mirrorRetryAt = Date.now() + MIRROR_RETRY_MS;
+          } else {
+            mirrorRetryAt = 0;
           }
+        }
+      } else if (has && mirrorRetryAt && Date.now() >= mirrorRetryAt && !siteLatch) {
+        // Tools unlocked but the site did not follow (failed exchange): keep trying.
+        if (mirrorRetries >= MIRROR_RETRY_MAX) {
+          mirrorRetryAt = 0;
+        } else {
+          mirrorRetries += 1;
+          const retried = await syncToolsSessionToSite({ reloadUnlockTabs: true });
+          mirrorRetryAt = retried && (retried.ok || retried.locked) ? 0 : Date.now() + MIRROR_RETRY_MS;
         }
       }
       // Same tick: Tools → Firefox person-settings (fun on/off).
@@ -1099,6 +1231,7 @@
     if (autoUnlockInFlight) return autoUnlockInFlight;
     autoUnlockInFlight = (async () => {
       try {
+        await latchReady;
         const stored = await storageGet(["deskAutoUnlockAt"]);
         const lastAt = Number(stored.deskAutoUnlockAt || 0);
         const bridgeEdge = reason === "bridge-edge" || reason === "bridge-watch";
@@ -1293,6 +1426,10 @@
   api.lockToolsViaBridge = lockToolsViaBridge;
   api.publishSessionToToolsBridge = publishSessionToToolsBridge;
   api.siteLockQuietActive = siteLockQuietActive;
+  api.latchReady = latchReady;
+  api.siteLatchState = () => (siteLatch ? { ...siteLatch } : null);
+  api.engageSiteLatch = engageSiteLatch;
+  api.releaseSiteLatch = releaseSiteLatch;
   api.reloadShopUnlockTabs = reloadShopUnlockTabs;
   api.ensureWidgetToken = ensureWidgetToken;
   api.tryAutoUnlock = tryAutoUnlock;
