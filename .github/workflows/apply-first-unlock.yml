@@ -1,0 +1,40 @@
+name: Apply first-unlock payload
+# One-shot: applies tmp/first-unlock onto this branch, verifies sha256 of every
+# changed file + runs the Desk lock tests, commits, then removes tmp/. Soft-skips
+# until the payload is complete. Delete this file once it has run.
+on:
+  push:
+    branches:
+      - cursor/desk-first-unlock-sticks-deb8
+    paths:
+      - tmp/first-unlock/**
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply, verify, commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in apply.py p1.patch last-test.txt expected.sha256; do
+            if [ ! -f "tmp/first-unlock/$f" ]; then echo "waiting for $f (green)"; exit 0; fi
+          done
+          python3 tmp/first-unlock/apply.py
+          npm run sync-extension >/dev/null
+          sha256sum -c tmp/first-unlock/expected.sha256
+          node --test test/desk-lock-unlock-gaps.test.mjs test/desk-first-unlock.test.mjs test/desk-manifest-parity.test.mjs test/desk-update.test.mjs
+          git rm -rq tmp/first-unlock
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Desk 0.1.35: first sign-in sticks (no stale-gate / /unlock-tab false lock)"
+          git push origin HEAD
