@@ -8,7 +8,11 @@
   const runtime = typeof browser !== "undefined" ? browser : chrome;
   const api = globalThis.AllDataRoLabels || {};
   const SUCCESS_WAIT_MS = api.SUCCESS_WAIT_MS || 18000;
-  const MODEL_GRACE_MS = 3500;
+  /** After Create is confirmed, how long to wait for the model before printing with it blank. */
+  const MODEL_GRACE_MS = api.MODEL_GRACE_MS || 6000;
+  /** A pointer-down snapshot this fresh still counts when the click-time read comes back empty. */
+  const PRE_CLICK_MAX_AGE_MS = 4000;
+  const CHECK_THROTTLE_MS = 150;
 
   let armed = false;
   let armedAt = 0;
@@ -16,9 +20,14 @@
   let armedHadUpdate = false;
   let armedHadCreate = false;
   let armedCreateEl = null;
-  let armedFields = { lastName: "", model: "", roNumber: "" };
+  let armedFields = { lastName: "", model: "", modelSource: "", roNumber: "" };
   let createArmId = "";
   let pendingTimer = null;
+  let confirmedAt = 0;
+  let graceTimer = null;
+  let checkTimer = null;
+  let lastCheckAt = 0;
+  let preClick = null;
   /** UI success seen but scrape still empty — keep polling; timeout uses scrape toast. */
   let sawUiConfirm = false;
   /** createArmId values that already got a print attempt — never key on customer/person. */
@@ -39,23 +48,53 @@
     armedHadUpdate = false;
     armedHadCreate = false;
     armedCreateEl = null;
-    armedFields = { lastName: "", model: "", roNumber: "" };
+    armedFields = { lastName: "", model: "", modelSource: "", roNumber: "" };
     sawUiConfirm = false;
+    confirmedAt = 0;
     // keep createArmId until print finishes so requestPrint can mark it
     if (pendingTimer) {
       clearTimeout(pendingTimer);
       pendingTimer = null;
     }
+    if (graceTimer) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
+    if (checkTimer) {
+      clearTimeout(checkTimer);
+      checkTimer = null;
+    }
+  }
+
+  function scrapeNow() {
+    return typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
+  }
+
+  /** Read the form just before the click lands; AllData can re-render on blur / mousedown. */
+  function notePreClick() {
+    const fields = scrapeNow();
+    preClick = { at: Date.now(), fields };
+  }
+
+  function remember(fields) {
+    if (typeof api.rememberCreateFields === "function") {
+      armedFields = { ...armedFields, ...api.rememberCreateFields(armedFields, fields) };
+    } else {
+      armedFields = {
+        ...armedFields,
+        lastName: String(fields.lastName || armedFields.lastName || "").trim(),
+        model: String(fields.model || armedFields.model || "").trim(),
+      };
+    }
   }
 
   function snapshotAtArm() {
-    const fields = typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
+    const fields = scrapeNow();
     armedBaselineRo = String(fields.roNumber || "").trim();
-    armedFields = {
-      lastName: String(fields.lastName || "").trim(),
-      model: String(fields.model || "").trim(),
-      roNumber: armedBaselineRo,
-    };
+    armedFields = { lastName: "", model: "", modelSource: "", roNumber: armedBaselineRo };
+    if (preClick && Date.now() - preClick.at <= PRE_CLICK_MAX_AGE_MS) remember(preClick.fields);
+    preClick = null;
+    remember(fields);
     const present =
       typeof api.createControlPresent === "function" && api.createControlPresent();
     // Click path sees shadow DOM; global scan might miss — trust the armed element.
@@ -70,18 +109,23 @@
     armed = true;
     armedAt = Date.now();
     sawUiConfirm = false;
+    confirmedAt = 0;
     if (pendingTimer) clearTimeout(pendingTimer);
     pendingTimer = setTimeout(() => {
-      if (armed) {
-        const scrapeMiss = sawUiConfirm;
-        disarm();
-        toast(
-          scrapeMiss
-            ? "Label skipped — could not read last name."
-            : "Label skipped — Create R/O success not confirmed.",
-          "skip",
-        );
+      if (!armed) return;
+      // Create was confirmed but the model never showed: print what we have, never drop the label.
+      if (confirmedAt) {
+        tryCompleteAfterCreate(true);
+        if (!armed) return;
       }
+      const scrapeMiss = sawUiConfirm;
+      disarm();
+      toast(
+        scrapeMiss
+          ? "Label skipped — could not read last name."
+          : "Label skipped — Create R/O success not confirmed.",
+        "skip",
+      );
     }, SUCCESS_WAIT_MS);
     scheduleSuccessChecks();
   }
@@ -120,6 +164,9 @@
   }
 
   function mergeScrapedWithArm(scraped) {
+    if (typeof api.mergeCreateFields === "function") {
+      return api.mergeCreateFields(scraped, armedFields);
+    }
     return {
       lastName: String(scraped.lastName || armedFields.lastName || "").trim(),
       model: String(scraped.model || armedFields.model || "").trim(),
@@ -190,10 +237,13 @@
     toast("Label skipped — unexpected Labels response.", "skip");
   }
 
-  function tryCompleteAfterCreate() {
+  function tryCompleteAfterCreate(force = false) {
     if (!armed) return;
-    const scrapedRaw = typeof api.scrapeWorkScreen === "function" ? api.scrapeWorkScreen() : {};
+    lastCheckAt = Date.now();
+    const scrapedRaw = scrapeNow();
     const scraped = mergeScrapedWithArm(scrapedRaw);
+    // The form is often wiped a beat after Create; keep the last good read.
+    remember(scrapedRaw);
     const createStillThere =
       typeof api.createControlPresent === "function" && api.createControlPresent();
     const updateThere =
@@ -218,20 +268,52 @@
         : { confirmed: false };
 
     if (!result.confirmed) return;
+    const now = Date.now();
+    if (!confirmedAt) confirmedAt = now;
+
+    const plan =
+      typeof api.planCreatePrint === "function"
+        ? api.planCreatePrint({
+            confirmed: true,
+            fields: scraped,
+            now,
+            confirmedAt,
+            modelGraceMs: MODEL_GRACE_MS,
+            deadlineAt: force ? now : armedAt + SUCCESS_WAIT_MS,
+          })
+        : { action: scraped.lastName ? "print" : "wait" };
 
     // UI confirmed but scrape empty — do NOT disarm yet. Dom/fields often settle
     // a beat after Create disappears; early "could not read" was aborting polls.
-    if (!scraped.lastName) {
+    if (plan.action === "no-last-name" || (plan.action === "wait" && !scraped.lastName)) {
       sawUiConfirm = true;
       return;
     }
-    // Model often settles a beat after last name. Give it a short grace, then print
-    // anyway with the model blank — every Create R/O prints.
-    if (!scraped.model && Date.now() - armedAt < MODEL_GRACE_MS) return;
+    // Model often settles a beat after last name. Wait out the grace from the moment Create was
+    // confirmed, then print anyway with the model blank — every Create R/O prints.
+    if (plan.action === "wait") {
+      if (!graceTimer) {
+        graceTimer = setTimeout(() => {
+          graceTimer = null;
+          if (armed) tryCompleteAfterCreate();
+        }, (plan.waitMs || 0) + 50);
+      }
+      return;
+    }
     const armId = createArmId;
     const fields = fieldsForPrint(scraped, armId);
     disarm();
     requestPrint(fields);
+  }
+
+  /** Mutation bursts are frequent on a busy SPA; a full scrape each time is wasteful. */
+  function scheduleThrottledCheck() {
+    if (!armed || checkTimer) return;
+    const wait = Math.max(0, CHECK_THROTTLE_MS - (Date.now() - lastCheckAt));
+    checkTimer = setTimeout(() => {
+      checkTimer = null;
+      if (armed) tryCompleteAfterCreate();
+    }, wait);
   }
 
   function scheduleSuccessChecks() {
@@ -269,6 +351,19 @@
     }
   }
 
+  function onPointerDown(event) {
+    for (const node of eventPath(event)) {
+      if (!node || node.nodeType !== 1) continue;
+      if (typeof api.isCreateControl === "function" && api.isCreateControl(node)) {
+        notePreClick();
+        return;
+      }
+    }
+  }
+
+  document.addEventListener("pointerdown", onPointerDown, true);
+  document.addEventListener("mousedown", onPointerDown, true);
+  document.addEventListener("touchstart", onPointerDown, true);
   document.addEventListener("click", onPointer, true);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -277,7 +372,7 @@
 
   // MutationObserver: if Create disappears after arm, try scrape.
   const mo = new MutationObserver(() => {
-    if (armed) tryCompleteAfterCreate();
+    if (armed) scheduleThrottledCheck();
   });
   mo.observe(document.documentElement, {
     childList: true,
