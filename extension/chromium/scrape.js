@@ -676,7 +676,7 @@
    */
   function evaluateCreateSuccess(state) {
     const scraped = state.scraped || {};
-    const hasFields = Boolean(scraped.lastName && scraped.model);
+    const hasFields = Boolean(scraped.lastName);
     const armedEl = state.armedCreateEl;
     const el = inspectArmedCreateControl(armedEl);
     const createStillThere = Boolean(state.createStillThere);
