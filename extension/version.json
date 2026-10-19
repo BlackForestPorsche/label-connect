@@ -1,6 +1,6 @@
 {
   "version": "0.1.39",
-  "message": "Desk 0.1.39 fixes the Create R/O label printing the license plate instead of the car model. The model now comes only from the vehicle Model / Year-Make-Model field: plate and plate-state fields are skipped, plate fragments like ABC 123 are rejected, and a plate shown on the page can never win. Last name and the label layout are unchanged.",
+  "message": "Desk 0.1.39 fixes the Create R/O label printing the license plate instead of the car model. The model now comes only from the vehicle Model / Year-Make-Model field: plate and plate-state fields are skipped, plate fragments like ABC 123 are rejected, and a plate shown on the page can never win. If no safe model is on the page the label still prints as the last name with the model left blank. Every Create R/O prints; the label layout is unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

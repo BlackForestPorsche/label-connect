@@ -221,8 +221,9 @@ export function normalizeRoPayload(raw) {
   const source = clean(raw.source ?? "alldata", 32) || "alldata";
   const dryRun = Boolean(raw.dryRun === true || raw.dryRun === "1" || raw.dryRun === 1);
 
-  if (!lastName || !model) {
-    return { ok: false, error: "Need lastName and model." };
+  // Every Create R/O prints: a missing/unsafe model prints blank ("{LastName} - ").
+  if (!lastName) {
+    return { ok: false, error: "Need lastName." };
   }
 
   return {
@@ -249,7 +250,7 @@ export function normalizeRoPayload(raw) {
 export function roLabelLines(fields) {
   const lastName = String(fields.lastName || "").trim();
   const model = String(fields.model || "").trim();
-  if (!lastName || !model) return [];
+  if (!lastName) return [];
   return [`${lastName} - ${model}`, OUT_MILEAGE_LINE];
 }
 
@@ -345,7 +346,7 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
   const media = mediaBySku(mediaList, "30252") ?? FALLBACK_MEDIA[0];
   const lines = roLabelLines(fields);
   if (lines.length < 2) {
-    throw new Error("Need lastName and model to render.");
+    throw new Error("Need lastName to render.");
   }
 
   const viewSafe = viewSafeRect(media, true);
