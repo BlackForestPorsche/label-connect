@@ -137,10 +137,9 @@ test("Labels: plate-shaped model strings never print", () => {
   assert.equal(cleanModel("328i"), "328i");
   assert.equal(cleanModel("Camry CA"), "Camry");
   assert.equal(cleanModel("Cayenne"), "Cayenne");
-  assert.equal(
-    normalizeRoPayload({ lastName: "Whatcott", model: "7ABC123", event: "create-ro" }).ok,
-    false,
-  );
+  const plated = normalizeRoPayload({ lastName: "Whatcott", model: "7ABC123", event: "create-ro" });
+  assert.equal(plated.ok, true);
+  assert.equal(plated.fields.model, "");
   assert.deepEqual(roLabelLines({ lastName: "Whatcott", model: "Cayenne" }), [
     "Whatcott - Cayenne",
     "Out Mileage _____________",
@@ -164,4 +163,42 @@ test("Chromium and Firefox scrape.js match shared (plate guard shipped)", () => 
       "Cayenne",
     );
   }
+});
+
+test("Every Create R/O prints: no safe model prints '{LastName} - ' with Out Mileage", () => {
+  assert.deepEqual(roLabelLines({ lastName: "Whatcott", model: "" }), [
+    "Whatcott - ",
+    "Out Mileage _____________",
+  ]);
+  for (const junk of ["7ABC123", "CA", "WP0AB2A99KS123456", "12345", "VIN:", undefined]) {
+    const r = normalizeRoPayload({ lastName: "Whatcott", model: junk, event: "create-ro" });
+    assert.equal(r.ok, true, `junk ${junk} must still print`);
+    assert.equal(r.fields.model, "");
+    assert.deepEqual(roLabelLines(r.fields), ["Whatcott - ", "Out Mileage _____________"]);
+  }
+  assert.equal(normalizeRoPayload({ model: "Macan", event: "create-ro" }).ok, false);
+});
+
+test("Blank-model label renders a PDF", async () => {
+  const { renderRoLabelPdf } = await import("../shared/ro-label.mjs");
+  const { pdf } = await renderRoLabelPdf({ lastName: "Whatcott", model: "" });
+  assert.ok(pdf.length > 200);
+  assert.equal(pdf.subarray(0, 4).toString(), "%PDF");
+});
+
+test("evaluateCreateSuccess confirms on last name alone so a blank-model label prints", () => {
+  const r = api.evaluateCreateSuccess({
+    armedHadCreate: true,
+    armedHadUpdate: false,
+    armedBaselineRo: "",
+    armedAt: Date.now() - 1000,
+    armedCreateEl: null,
+    scraped: { lastName: "Whatcott", model: "", roNumber: "J1" },
+    createStillThere: false,
+    updateThere: false,
+    pageSuccess: false,
+    now: Date.now(),
+  });
+  assert.equal(r.confirmed, true);
+  assert.equal(r.missingFields, undefined);
 });
