@@ -143,6 +143,7 @@
   }
 
   let activeValueGuard = null;
+  let activePlates = null;
 
   /**
    * Last name only — strip "LAST, FIRST", leading "J." / "J ", trailing bare
@@ -172,6 +173,96 @@
     // Last names are letters (hyphen/apostrophe ok) — reject digit codes.
     if (/\d/.test(last)) return "";
     return last;
+  }
+
+  /** Captions of fields that must never feed lastName/model (plate, plate state, VIN, account …). */
+  const NOISE_CAPTION_RE =
+    /\b(license|licence|plate|lic\.?\s*#|tag\s*#?|vin|account|acct|stock\s*#|plate\s*state|lic\.?\s*state|state|province|zip|postal|odometer|mileage|phone|email)\b/i;
+  const PLATE_CAPTION_RE =
+    /^\s*(license\s*plate|licence\s*plate|lic(?:ense)?\.?\s*pl(?:ate)?\.?|plate|tag|lic\.?)\s*(?:#|no\.?|number)?\s*[*:]?\s*$/i;
+
+  function shortCaption(text) {
+    const t = String(text || "").replace(/\s+/g, " ").trim();
+    return t && t.length <= 40 ? t : "";
+  }
+
+  /** Every caption we can tie to this control: attrs, label[for], wrapping label, nearby label text. */
+  function captionsForControl(input) {
+    const caps = [controlLabel(input)];
+    const doc = input.ownerDocument;
+    const id = input.getAttribute?.("id");
+    if (id && doc?.querySelectorAll) {
+      for (const lab of doc.querySelectorAll("label[for]")) {
+        if (lab.getAttribute("for") === id) caps.push(visibleText(lab));
+      }
+    }
+    const wrap = input.closest?.("label");
+    if (wrap) caps.push(visibleText(wrap));
+    const labelledBy = input.getAttribute?.("aria-labelledby");
+    if (labelledBy && doc?.getElementById) {
+      for (const part of labelledBy.split(/\s+/)) caps.push(visibleText(doc.getElementById(part)));
+    }
+    const prev = input.previousElementSibling;
+    if (prev && !/^(INPUT|SELECT|TEXTAREA)$/.test(prev.tagName)) caps.push(shortCaption(visibleText(prev)));
+    const parent = input.parentElement;
+    const lead = parent?.firstElementChild;
+    if (lead && lead !== input && !lead.contains(input) && !/^(INPUT|SELECT|TEXTAREA)$/.test(lead.tagName)) {
+      caps.push(shortCaption(visibleText(lead)));
+    }
+    if (parent && /^(TD|TH|DD)$/.test(parent.tagName) && parent.previousElementSibling) {
+      caps.push(shortCaption(visibleText(parent.previousElementSibling)));
+    }
+    return caps.filter(Boolean);
+  }
+
+  function isNoiseControl(input) {
+    return captionsForControl(input).some(
+      (cap) => NOISE_CAPTION_RE.test(cap) || FIELD_NOISE_HINT_RE.test(cap) || /^vin\b/i.test(cap),
+    );
+  }
+
+  function isPlateControl(input) {
+    return captionsForControl(input).some(
+      (cap) => PLATE_CAPTION_RE.test(cap) || /\b(license|licence)\s*plate\b/i.test(cap),
+    );
+  }
+
+  /** Plate strings shown on the Work screen (any layout) so a model candidate can be checked against them. */
+  function collectPlates(doc) {
+    const plates = new Set();
+    const add = (raw) => {
+      const text = String(raw || "").replace(/\s+/g, " ").trim();
+      if (!text || text.length > 16) return;
+      plates.add(text.replace(/[\s-]/g, "").toUpperCase());
+      for (const part of text.split(/[\s-]+/)) {
+        if (part.length >= 2) plates.add(part.toUpperCase());
+      }
+    };
+    for (const input of collectMatching(doc, "input, select, textarea")) {
+      if (isPlateControl(input)) add(input.value);
+    }
+    for (const node of collectMatching(doc, "label, span, div, th, td, dt, dd, strong, b, p")) {
+      const label = visibleText(node);
+      if (!label || label.length > 60 || node.children?.length) continue;
+      if (PLATE_CAPTION_RE.test(label)) {
+        const sib = node.nextElementSibling;
+        if (sib) {
+          const input = sib.matches?.("input, select, textarea") ? sib : sib.querySelector?.("input, select, textarea");
+          add(input ? input.value : visibleText(sib));
+        }
+        continue;
+      }
+      const inline = /^(?:license\s*plate|licence\s*plate|plate|tag|lic\.?\s*pl(?:ate)?\.?)\s*(?:#|no\.?)?\s*[:#]\s*(.+)$/i.exec(label);
+      if (inline) add(inline[1]);
+    }
+    return plates;
+  }
+
+  function isKnownPlate(value) {
+    if (!activePlates || !activePlates.size) return false;
+    const text = String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
+    if (!text) return false;
+    return activePlates.has(text.replace(/[\s-]/g, "")) || activePlates.has(text);
   }
 
   function acceptFieldValue(v) {
@@ -215,8 +306,7 @@
     if (!root?.querySelectorAll) return "";
     const inputs = root.querySelectorAll("input, select, textarea");
     for (const input of inputs) {
-      const hint = controlLabel(input);
-      if (/vin/i.test(hint) || FIELD_NOISE_HINT_RE.test(hint)) continue;
+      if (isNoiseControl(input)) continue;
       if (!String(input.value || "").trim()) continue;
       const v = acceptFieldValue(input.value);
       if (v) return v;
@@ -294,8 +384,7 @@
       if (forId) {
         const input = doc.getElementById(forId);
         if (input && "value" in input && String(input.value || "").trim()) {
-          const hint = controlLabel(input);
-          if (!FIELD_NOISE_HINT_RE.test(hint) && !/vin/i.test(hint)) {
+          if (!isNoiseControl(input)) {
             const v = acceptFieldValue(input.value);
             if (v) return v;
           }
@@ -305,8 +394,7 @@
       const sibling = node.nextElementSibling;
       if (sibling) {
         if ("value" in sibling && String(sibling.value || "").trim()) {
-          const hint = controlLabel(sibling);
-          if (!FIELD_NOISE_HINT_RE.test(hint) && !/vin/i.test(hint)) {
+          if (!isNoiseControl(sibling)) {
             const v = acceptFieldValue(sibling.value);
             if (v) return v;
           }
@@ -338,7 +426,7 @@
     const inputs = collectMatching(doc, "input, select, textarea");
     for (const input of inputs) {
       const hint = controlLabel(input);
-      if (/vin/i.test(hint) || FIELD_NOISE_HINT_RE.test(hint)) continue;
+      if (isNoiseControl(input)) continue;
       if (hintRe.test(hint) && String(input.value || "").trim()) {
         const v = acceptFieldValue(input.value);
         if (v) return v;
@@ -347,15 +435,25 @@
     return "";
   }
 
+  /** Model numbers that are all digits (911, 944 …); any other bare number is a plate/account fragment. */
+  const NUMERIC_MODELS = new Set(
+    "356 718 911 912 914 924 928 930 944 959 964 968 981 982 986 987 991 992 996 997".split(" "),
+  );
+
+  /** M3, X5, Q50, RX350, F-150, CX-5, GT3, RAV4 (letters then digits) or 328i, 530xi (digits then letters). */
+  function isModelCode(token) {
+    return /^[A-Za-z]{1,3}-?\d{1,3}[A-Za-z]{0,2}$/.test(token) || /^\d{3}[A-Za-z]{1,2}$/.test(token);
+  }
+
   function isModelToken(token) {
     if (!token || isScrapeNoise(token) || /^vin:?$/i.test(token)) return false;
     if (isStateOrRegionNoise(token)) return false;
     if (!/^[A-Za-z0-9][A-Za-z0-9-]{1,20}$/.test(token)) return false;
+    if (isKnownPorscheModel(token)) return true;
+    if (isKnownPlate(token)) return false;
     if (/\d/.test(token)) {
-      if (isKnownPorscheModel(token)) return true;
-      // M3, X5, Q50, 328i — short letter+digit codes. Plates/accounts are 5+ and already noise.
-      if (/^(?=.*[A-Za-z])[A-Za-z0-9-]{2,4}$/.test(token)) return true;
-      return /^\d{3}$/.test(token);
+      if (NUMERIC_MODELS.has(token)) return true;
+      return isModelCode(token);
     }
     return true;
   }
@@ -367,7 +465,7 @@
     if (!text || isScrapeNoise(text)) return "";
     text = text.replace(/^vin\s*:\s*/i, "").trim();
     if (!text || isScrapeNoise(text)) return "";
-    if (isStateOrRegionNoise(text) || looksLikeAddress(text)) return "";
+    if (isStateOrRegionNoise(text) || looksLikeAddress(text) || isKnownPlate(text)) return "";
     for (const model of PORSCHE_MODELS) {
       const re = new RegExp(`\\b${model}\\b`, "i");
       if (re.test(text)) return model;
@@ -375,22 +473,26 @@
     const tokens = text
       .split(/[\s,/|]+/)
       .filter(Boolean)
-      .filter((t) => !/^(?:19|20)\d{2}$/.test(t));
-    // "2019 BMW M3 CA": take what follows the make, never a trailing state code.
+      .filter((t) => !/^(?:19|20)\d{2}$/.test(t))
+      .filter((t) => !isStateOrRegionNoise(t) && !isScrapeNoise(t) && !/^vin:?$/i.test(t));
+    // "2019 BMW M3 CA": the model is what follows the make, never a plate or state around it.
     const makeIndex = tokens.findIndex((t) => KNOWN_MAKES.has(t.toLowerCase()));
     if (makeIndex >= 0) {
       const afterMake = tokens.slice(makeIndex + 1).find(isModelToken);
       if (afterMake) return afterMake;
     }
-    for (let i = tokens.length - 1; i >= 0; i -= 1) {
-      if (isModelToken(tokens[i])) return tokens[i];
-    }
-    return "";
+    // No make to anchor on: every remaining token must look like a model word. A leftover bare
+    // number or code ("ABC 123") means the text is a plate, not a vehicle.
+    if (!tokens.length || !tokens.every(isModelToken)) return "";
+    return tokens[tokens.length - 1];
   }
 
   function modelFromPage(doc) {
     const previousGuard = activeValueGuard;
-    activeValueGuard = (v) => !isStateOrRegionNoise(v) && !looksLikeAddress(v);
+    const previousPlates = activePlates;
+    activePlates = collectPlates(doc);
+    activeValueGuard = (v) =>
+      !isStateOrRegionNoise(v) && !looksLikeAddress(v) && !(isKnownPlate(v) && !isKnownPorscheModel(v));
     try {
       const direct =
         labeledValue(doc, /^\s*model\s*$/i) ||
@@ -403,16 +505,23 @@
         labeledValue(doc, /^\s*vehicle\s*$/i);
       const fromYmm = normalizeModelToken(ymm);
       if (fromYmm) return fromYmm;
+
+      let body = visibleText(doc.body).slice(0, 20000);
+      for (const plate of activePlates) {
+        if (plate.length >= 2) {
+          body = body.replace(new RegExp(`\\b${plate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), " ");
+        }
+      }
+      body = body.replace(/\b(?:license\s*plate|licence\s*plate|plate|tag)\s*#?\s*:?\s*\S+(?:\s+\S+)?/gi, " ");
+      for (const model of PORSCHE_MODELS) {
+        const re = new RegExp(`\\b${model}\\b`, "i");
+        if (re.test(body)) return model;
+      }
+      return "";
     } finally {
       activeValueGuard = previousGuard;
+      activePlates = previousPlates;
     }
-
-    const body = visibleText(doc.body).slice(0, 20000);
-    for (const model of PORSCHE_MODELS) {
-      const re = new RegExp(`\\b${model}\\b`, "i");
-      if (re.test(body)) return model;
-    }
-    return "";
   }
 
   function scrapeCustomerLastName(doc) {
@@ -567,7 +676,7 @@
    */
   function evaluateCreateSuccess(state) {
     const scraped = state.scraped || {};
-    const hasFields = Boolean(scraped.lastName && scraped.model);
+    const hasFields = Boolean(scraped.lastName);
     const armedEl = state.armedCreateEl;
     const el = inspectArmedCreateControl(armedEl);
     const createStillThere = Boolean(state.createStillThere);

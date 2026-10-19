@@ -8,6 +8,7 @@
   const runtime = typeof browser !== "undefined" ? browser : chrome;
   const api = globalThis.AllDataRoLabels || {};
   const SUCCESS_WAIT_MS = api.SUCCESS_WAIT_MS || 18000;
+  const MODEL_GRACE_MS = 3500;
 
   let armed = false;
   let armedAt = 0;
@@ -76,7 +77,7 @@
         disarm();
         toast(
           scrapeMiss
-            ? "Label skipped — could not read last name or model."
+            ? "Label skipped — could not read last name."
             : "Label skipped — Create R/O success not confirmed.",
           "skip",
         );
@@ -166,6 +167,7 @@
       toast("Label skipped — extension background unavailable.", "error");
       return;
     }
+
     if (!response || response.error) {
       toast(response?.error || "Label skipped — Labels error.", "error");
       return;
@@ -179,8 +181,8 @@
       markPrintedThisCreate(armId);
       toast(
         response.dryRun
-          ? `Dry run: ${fields.lastName} - ${fields.model}`
-          : `Printed ${fields.lastName} - ${fields.model}`,
+          ? `Dry run: ${fields.lastName} - ${fields.model}`.trimEnd()
+          : `Printed ${fields.lastName} - ${fields.model}`.trimEnd(),
         "ok",
       );
       return;
@@ -219,10 +221,13 @@
 
     // UI confirmed but scrape empty — do NOT disarm yet. Dom/fields often settle
     // a beat after Create disappears; early "could not read" was aborting polls.
-    if (!scraped.lastName || !scraped.model) {
+    if (!scraped.lastName) {
       sawUiConfirm = true;
       return;
     }
+    // Model often settles a beat after last name. Give it a short grace, then print
+    // anyway with the model blank — every Create R/O prints.
+    if (!scraped.model && Date.now() - armedAt < MODEL_GRACE_MS) return;
     const armId = createArmId;
     const fields = fieldsForPrint(scraped, armId);
     disarm();

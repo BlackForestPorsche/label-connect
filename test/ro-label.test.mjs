@@ -80,16 +80,16 @@ test("normalize strips LWhatcott glued initial", () => {
 
 test("normalize rejects VIN as lastName or model", () => {
   assert.equal(normalizeRoPayload({ lastName: "VIN:", model: "Boxster", event: "create-ro" }).ok, false);
-  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "VIN:", event: "create-ro" }).ok, false);
+  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "VIN:", event: "create-ro" }).fields.model, "");
   assert.equal(
-    normalizeRoPayload({ lastName: "Whatcott", model: "WP0AB2A99KS123456", event: "create-ro" }).ok,
-    false,
+    normalizeRoPayload({ lastName: "Whatcott", model: "WP0AB2A99KS123456", event: "create-ro" }).fields.model,
+    "",
   );
 });
 
 test("normalize rejects license plate / account as lastName or model", () => {
   assert.equal(normalizeRoPayload({ lastName: "ABC1234", model: "Boxster", event: "create-ro" }).ok, false);
-  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "12345", event: "create-ro" }).ok, false);
+  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "12345", event: "create-ro" }).fields.model, "");
   assert.equal(normalizeRoPayload({ lastName: "A98765", model: "XYZ99", event: "create-ro" }).ok, false);
   assert.equal(cleanModel("12345"), "");
   assert.equal(cleanModel("ABC1234"), "");
@@ -149,9 +149,11 @@ test("normalize rejects schedule and assign events", () => {
   assert.equal(normalizeRoPayload({ lastName: "A", model: "Macan", event: "new-ro" }).ok, false);
 });
 
-test("normalize rejects missing lastName or model", () => {
+test("normalize requires lastName; a missing model prints blank", () => {
   assert.equal(normalizeRoPayload({ model: "Macan", event: "create-ro" }).ok, false);
-  assert.equal(normalizeRoPayload({ lastName: "Owner", event: "create-ro" }).ok, false);
+  const r = normalizeRoPayload({ lastName: "Owner", event: "create-ro" });
+  assert.equal(r.ok, true);
+  assert.equal(r.fields.model, "");
 });
 
 test("cleanModel drops VIN junk", () => {
