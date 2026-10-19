@@ -147,6 +147,19 @@ export function extractLastName(fullName) {
   return last;
 }
 
+const NUMERIC_MODELS = new Set(
+  "356 718 911 912 914 924 928 930 944 959 964 968 981 982 986 987 991 992 996 997".split(" "),
+);
+
+function isNumericModel(token) {
+  return NUMERIC_MODELS.has(token);
+}
+
+/** M3, X5, Q50, RX350, F-150, CX-5 (letters then digits) or 328i, 530xi (digits then letters). */
+function isModelCode(token) {
+  return /^[A-Za-z]{1,3}-?\d{1,3}[A-Za-z]{0,2}$/.test(token) || /^\d{3}[A-Za-z]{1,2}$/.test(token);
+}
+
 /** Drop VIN / plate / account / empty junk; keep a short vehicle model token. */
 export function cleanModel(value) {
   let model = clean(value, MAX_LEN.model);
@@ -166,10 +179,12 @@ export function cleanModel(value) {
     .filter((token) => token && !isStateOrRegionNoise(token))
     .join(" ");
   if (!model) return "";
-  if (/\d/.test(model) && !isKnownPorscheModel(model)) {
-    // M3, X5, Q50, 944 — short model codes. Plates/accounts are rejected above.
-    if (!/^(?=.*[A-Za-z])[A-Za-z0-9-]{2,4}$/.test(model) && !/^\d{3}$/.test(model)) return "";
-  }
+  // Bare numbers and plate-shaped codes ("123", "7ABC 123") are never a model. Real codes: M3, X5, 328i, 944.
+  const tokens = model.split(/\s+/).filter(Boolean);
+  const plateShaped = tokens.some(
+    (token) => /\d/.test(token) && !isKnownPorscheModel(token) && !isNumericModel(token) && !isModelCode(token),
+  );
+  if (plateShaped) return "";
   return model.slice(0, MAX_LEN.model);
 }
 
