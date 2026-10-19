@@ -378,6 +378,14 @@
     return acceptFieldValue(stripped);
   }
 
+  /** Buttons and links ("Create R/O", "Save") are never a field value. */
+  function isActionControl(el) {
+    if (!el) return false;
+    if (/^(BUTTON|A)$/.test(el.tagName)) return true;
+    const role = el.getAttribute?.("role");
+    return role === "button" || role === "link";
+  }
+
   function labeledValue(doc, labelRe) {
     // Prefix form for "Customer: Whatcott" on one node (anchors at start).
     const labelPrefixRe = new RegExp(
@@ -409,9 +417,16 @@
           }
         }
       }
+      // A wrapper that already holds its own control ("Last Name" + input in one row) is the row,
+      // not a caption: its next sibling is the NEXT row, which must never supply this field.
+      if (node.querySelector?.("input, select, textarea")) {
+        const own = valueFromFieldWrapper(node, label);
+        if (own) return own;
+        continue;
+      }
       // Prefer immediate next sibling — parent.querySelector can jump to License Plate / Account.
       const sibling = node.nextElementSibling;
-      if (sibling) {
+      if (sibling && !isActionControl(sibling)) {
         if ("value" in sibling && String(sibling.value || "").trim()) {
           if (!isNoiseControl(sibling)) {
             const v = acceptFieldValue(sibling.value);
@@ -554,7 +569,8 @@
     return m ? normalizeModelToken(m[1]) : "";
   }
 
-  function modelFromPage(doc) {
+  /** Same scrape as modelFromPage, but says where the model came from: "field", "ymm" or "body". */
+  function modelFromPageWithSource(doc) {
     const previousGuard = activeValueGuard;
     const previousPlates = activePlates;
     activePlates = collectPlates(doc);
@@ -565,13 +581,13 @@
         labeledValue(doc, /^\s*(?:vehicle\s*|car\s*)?model(?:\s*name)?\s*$/i) ||
         findInputByHint(doc, /(^|[^a-z])model([^a-z]|$)/i);
       const fromDirect = normalizeModelToken(direct);
-      if (fromDirect) return fromDirect;
+      if (fromDirect) return { model: fromDirect, source: "field" };
 
       const ymm =
         labeledValue(doc, /^\s*(?:year[\s/]*make[\s/]*model|make[\s/]*model|ymm)\s*$/i) ||
         labeledValue(doc, /^\s*vehicle(?:\s*description)?\s*$/i);
       const fromYmm = normalizeModelToken(ymm);
-      if (fromYmm) return fromYmm;
+      if (fromYmm) return { model: fromYmm, source: "ymm" };
 
       let body = visibleText(doc.body).slice(0, 20000);
       for (const plate of activePlates) {
@@ -581,16 +597,20 @@
       }
       body = body.replace(/\b(?:license\s*plate|licence\s*plate|plate|tag)\s*#?\s*:?\s*\S+(?:\s+\S+)?/gi, " ");
       const fromBody = vehicleFromBodyText(body);
-      if (fromBody) return fromBody;
+      if (fromBody) return { model: fromBody, source: "body" };
       for (const model of PORSCHE_MODELS) {
         const re = new RegExp(`\\b${model}\\b`, "i");
-        if (re.test(body)) return model;
+        if (re.test(body)) return { model, source: "body" };
       }
-      return "";
+      return { model: "", source: "" };
     } finally {
       activeValueGuard = previousGuard;
       activePlates = previousPlates;
     }
+  }
+
+  function modelFromPage(doc) {
+    return modelFromPageWithSource(doc).model;
   }
 
   function scrapeCustomerLastName(doc) {
@@ -628,9 +648,9 @@
 
   function scrapeWorkScreen(doc = document) {
     const lastName = scrapeCustomerLastName(doc);
-    const model = modelFromPage(doc);
+    const { model, source } = modelFromPageWithSource(doc);
     const roNumber = scrapeRoNumber(doc);
-    return { lastName, model, roNumber };
+    return { lastName, model, modelSource: source, roNumber };
   }
 
   function isCreateControl(el) {
@@ -779,7 +799,72 @@
     return { confirmed: false, reason: "" };
   }
 
+  const trimStr = (v) => String(v == null ? "" : v).trim();
+
+  /**
+   * Fields for the print: what the page shows now, falling back to what the Create form showed
+   * (the SPA often re-renders or wipes the form the moment Create succeeds). A model read from a
+   * model field beats one fished out of page-wide text, which can belong to another vehicle.
+   */
+  function mergeCreateFields(current, remembered) {
+    const cur = current || {};
+    const mem = remembered || {};
+    const lastName = trimStr(cur.lastName) || trimStr(mem.lastName);
+    const curModel = trimStr(cur.model);
+    const memModel = trimStr(mem.model);
+    const curTrusted = Boolean(curModel) && cur.modelSource !== "body";
+    const memTrusted = Boolean(memModel) && mem.modelSource !== "body";
+    let model = "";
+    let modelSource = "";
+    if (curTrusted) {
+      model = curModel;
+      modelSource = cur.modelSource || "field";
+    } else if (memTrusted) {
+      model = memModel;
+      modelSource = mem.modelSource || "field";
+    } else if (curModel || memModel) {
+      model = curModel || memModel;
+      modelSource = "body";
+    }
+    return { lastName, model, modelSource, roNumber: trimStr(cur.roNumber) };
+  }
+
+  /** Fold a fresh scrape into the remembered fields; empty reads never erase a good value. */
+  function rememberCreateFields(remembered, current) {
+    const mem = remembered || {};
+    const cur = current || {};
+    const merged = mergeCreateFields(
+      { lastName: cur.lastName, model: cur.model, modelSource: cur.modelSource },
+      mem,
+    );
+    return { lastName: merged.lastName, model: merged.model, modelSource: merged.modelSource };
+  }
+
+  /**
+   * When to print after a Create click (pure; unit-tested). The model grace runs from the moment
+   * Create is confirmed, not from the click, so a slow Create cannot use up the grace before the
+   * page has had any chance to show the model. Past the deadline, whatever is known prints.
+   */
+  function planCreatePrint(state) {
+    const s = state || {};
+    const now = Number(s.now) || Date.now();
+    const lastName = trimStr(s.fields && s.fields.lastName);
+    const model = trimStr(s.fields && s.fields.model);
+    const graceMs = Number(s.modelGraceMs) >= 0 ? Number(s.modelGraceMs) : 6000;
+    const confirmedAt = Number(s.confirmedAt) || 0;
+    const deadlineAt = Number(s.deadlineAt) || Infinity;
+    const pastDeadline = now >= deadlineAt;
+    if (!s.confirmed || !confirmedAt) return { action: "wait" };
+    if (!lastName) return { action: pastDeadline ? "no-last-name" : "wait" };
+    if (model) return { action: "print" };
+    if (pastDeadline || now - confirmedAt >= graceMs) return { action: "print", modelBlank: true };
+    return { action: "wait", waitMs: Math.max(0, confirmedAt + graceMs - now) };
+  }
+
   api.scrapeWorkScreen = scrapeWorkScreen;
+  api.mergeCreateFields = mergeCreateFields;
+  api.rememberCreateFields = rememberCreateFields;
+  api.planCreatePrint = planCreatePrint;
   api.lastNameFromFull = lastNameFromFull;
   api.isVinNoise = isVinNoise;
   api.isPlateOrAccountNoise = isPlateOrAccountNoise;
