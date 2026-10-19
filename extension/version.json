@@ -1,6 +1,6 @@
 {
-  "version": "0.1.36",
-  "message": "Desk 0.1.36 fixes the first sign-in flashing and locking. Signing in once on Tools or the site now sticks on Tools, the site and Desk; Desk no longer reads a stale or just-minted gate as a website Lock.",
+  "version": "0.1.37",
+  "message": "Desk 0.1.37 fixes the Create R/O label showing CA instead of the car model. Line 1 is now Last name - the vehicle model (911, Cayenne, M3); a state code can no longer be used as the model.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }
