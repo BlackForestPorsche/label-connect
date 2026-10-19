@@ -70,6 +70,25 @@ export function isVinNoise(value) {
   return false;
 }
 
+const STATE_CODES = new Set(
+  (
+    "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC " +
+    "ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC PR VI GU AS MP " +
+    "AB BC MB NB NL NS NT NU ON PE QC SK YT"
+  ).split(" "),
+);
+
+/** A 1–2 letter token (state/region code like CA, or a stray trim letter) is never a model. */
+export function isStateOrRegionNoise(value) {
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\.$/, "");
+  if (!text) return false;
+  if (STATE_CODES.has(text.toUpperCase())) return true;
+  return /^[A-Za-z]{1,2}$/.test(text);
+}
+
 function isKnownPorscheModel(value) {
   const text = String(value ?? "")
     .replace(/\s+/g, " ")
@@ -141,7 +160,16 @@ export function cleanModel(value) {
   for (const known of PORSCHE_MODELS) {
     if (new RegExp(`\\b${known}\\b`, "i").test(model)) return known;
   }
-  if (/\d/.test(model) && !isKnownPorscheModel(model)) return "";
+  // Drop standalone state/region codes ("Camry CA" → "Camry"; "CA" → "").
+  model = model
+    .split(/[\s,]+/)
+    .filter((token) => token && !isStateOrRegionNoise(token))
+    .join(" ");
+  if (!model) return "";
+  if (/\d/.test(model) && !isKnownPorscheModel(model)) {
+    // M3, X5, Q50, 944 — short model codes. Plates/accounts are rejected above.
+    if (!/^(?=.*[A-Za-z])[A-Za-z0-9-]{2,4}$/.test(model) && !/^\d{3}$/.test(model)) return "";
+  }
   return model.slice(0, MAX_LEN.model);
 }
 
