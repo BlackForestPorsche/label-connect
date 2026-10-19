@@ -65,3 +65,10 @@ test("synced package files match extension/shared", () => {
     }
   }
 });
+
+test("Firefox: desktop min 140, Android min 142 (data_collection_permissions needs 142 on Android)", () => {
+  const gecko = firefox.browser_specific_settings.gecko;
+  assert.equal(gecko.strict_min_version, "140.0");
+  assert.deepEqual(gecko.data_collection_permissions, { required: ["none"] });
+  assert.equal(firefox.browser_specific_settings.gecko_android.strict_min_version, "142.0");
+});

@@ -1,6 +1,6 @@
 {
-  "version": "0.1.37",
-  "message": "Desk 0.1.37 fixes the Create R/O label showing CA instead of the car model. Line 1 is now Last name - the vehicle model (911, Cayenne, M3); a state code can no longer be used as the model.",
+  "version": "0.1.38",
+  "message": "Desk 0.1.38 is a packaging fix: Firefox for Android minimum is now 142 so the data-collection declaration is valid there. Desktop Firefox still needs 140+. Nothing changes on the shop PC.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }
