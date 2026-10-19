@@ -1,6 +1,6 @@
 {
-  "version": "0.1.40",
-  "message": "Desk 0.1.40 fixes the Create R/O label missing the car model. When the last name and the model are both on the page, the label now reads {LastName} - {Model} for any make, not just Porsche (BMW, Audi, Toyota, Chevrolet, Mercedes, Tesla and the rest), including models like GLC300, RX350, M340i, Silverado 1500 and Model Y. A license plate, plate state, VIN or account number is still never the model. Every Create R/O prints, and the label layout is unchanged.",
+  "version": "0.1.41",
+  "message": "Desk 0.1.41 fixes the Create R/O label that sometimes lost the car model or the last name after working for a while. Desk now waits for the model from the moment Create succeeds (not from the click), remembers the last name and model the form showed, no longer lets the next row or a button supply a field, and always prints in the end. The label still reads {LastName} - {Model}, a license plate, plate state, VIN or account number is never the model, and the layout is unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }
