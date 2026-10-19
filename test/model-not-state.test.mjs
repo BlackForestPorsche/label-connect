@@ -99,8 +99,8 @@ test("Chromium and Firefox scrape.js match shared (state-code guard shipped)", (
 });
 
 test("Labels: a state code (CA) is never printed as the model", () => {
-  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "CA", event: "create-ro" }).ok, false);
-  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "tx", event: "create-ro" }).ok, false);
+  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "CA", event: "create-ro" }).fields.model, "");
+  assert.equal(normalizeRoPayload({ lastName: "Whatcott", model: "tx", event: "create-ro" }).fields.model, "");
   assert.equal(cleanModel("CA"), "");
   assert.equal(cleanModel("Camry CA"), "Camry");
   assert.equal(cleanModel("M3"), "M3");
