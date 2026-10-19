@@ -97,6 +97,11 @@ function isKnownPorscheModel(value) {
   return PORSCHE_MODELS.some((model) => new RegExp(`^${model}$`, "i").test(text));
 }
 
+function digitTokensAreModelCodes(text) {
+  const digitTokens = text.split(/[\s,]+/).filter((t) => /\d/.test(t) && !/^(?:19|20)\d{2}$/.test(t));
+  return digitTokens.length > 0 && digitTokens.every((t) => isNumericModel(t) || isModelCode(t));
+}
+
 /**
  * License plate / account # values — never print as lastName or model.
  * Same heuristic as the Desk scrape (0.1.17+).
@@ -109,6 +114,10 @@ export function isPlateOrAccountNoise(value) {
   if (/^\s*(license\s*plate|account\s*#?|acct\.?\s*#?)\s*:?\s*$/i.test(text)) return true;
   if (/^(license\s*plate|account\s*#?|acct\.?\s*#?)\b/i.test(text)) return true;
   if (isKnownPorscheModel(text)) return false;
+  // GLC300 / RX350 / M340i are real model codes that look like a short plate.
+  if (!/\s/.test(text) && /^[A-Za-z]/.test(text) && isModelCode(text)) return false;
+  if (/\s/.test(text) && /^[A-Za-z]/.test(text) && digitTokensAreModelCodes(text)) return false;
+  if (/^[A-Z]?[a-z]{2,}\s+(?:\d{1,3}|[1-4]500)$/.test(text)) return false;
   const compact = text.replace(/[\s-]/g, "");
   if (/^[A-Z]?\d{4,}$/i.test(compact)) return true;
   if (/^(?=.*\d)[A-Z0-9]{5,8}$/i.test(compact)) return true;
@@ -157,7 +166,19 @@ function isNumericModel(token) {
 
 /** M3, X5, Q50, RX350, F-150, CX-5 (letters then digits) or 328i, 530xi (digits then letters). */
 function isModelCode(token) {
-  return /^[A-Za-z]{1,3}-?\d{1,3}[A-Za-z]{0,2}$/.test(token) || /^\d{3}[A-Za-z]{1,2}$/.test(token);
+  return (
+    /^[A-Za-z]{1,3}-?\d{1,3}[A-Za-z]{0,2}$/.test(token) ||
+    /^[A-Za-z]{1,3}\d{1,2}[A-Za-z]{1,2}\d{0,2}[A-Za-z]{0,2}$/.test(token) ||
+    /^\d{3}[A-Za-z]{1,2}$/.test(token)
+  );
+}
+
+const OTHER_MAKE_RE =
+  /\b(audi|bmw|mercedes(?:-benz)?|mini|volkswagen|vw|volvo|jaguar|land[\s-]*rover|ford|chevrolet|chevy|dodge|jeep|chrysler|ram|gmc|cadillac|buick|lincoln|toyota|lexus|honda|acura|nissan|infiniti|mazda|subaru|mitsubishi|hyundai|kia|genesis|tesla|fiat|alfa[\s-]*romeo|maserati|ferrari|lamborghini|bentley|aston[\s-]*martin|mclaren|lotus|saab|suzuki|scion|pontiac|saturn|isuzu)\b/i;
+
+/** A bare number that can follow a model word: "Silverado 1500", "Model 3". */
+function isModelNumberSuffix(prevToken, token) {
+  return Boolean(prevToken && /^(?:\d{1,3}|[1-4]500)$/.test(token) && /^[A-Z]?[a-z]{2,}$/.test(prevToken));
 }
 
 /** Drop VIN / plate / account / empty junk; keep a short vehicle model token. */
@@ -169,20 +190,29 @@ export function cleanModel(value) {
   // Strip a leading "VIN:" if a scraper glued it onto the model field.
   model = model.replace(/^vin\s*:\s*/i, "").trim();
   if (!model || isVinNoise(model) || isPlateOrAccountNoise(model)) return "";
-  // Prefer a known Porsche model token when the scraper's string is messy.
-  for (const known of PORSCHE_MODELS) {
-    if (new RegExp(`\\b${known}\\b`, "i").test(model)) return known;
+  const tesla = /(?:^|\s)model\s+([3SXY])(?=\s|$)/i.exec(model);
+  if (tesla) return `Model ${tesla[1].toUpperCase()}`;
+  // Prefer a known Porsche model token when the scraper's string is messy (not for other makes).
+  if (!OTHER_MAKE_RE.test(model)) {
+    for (const known of PORSCHE_MODELS) {
+      if (new RegExp(`\\b${known}\\b`, "i").test(model)) return known;
+    }
   }
   // Drop standalone state/region codes ("Camry CA" → "Camry"; "CA" → "").
   model = model
     .split(/[\s,]+/)
-    .filter((token) => token && !isStateOrRegionNoise(token))
+    .filter((token) => token && !isStateOrRegionNoise(token) && !/^(?:19|20)\d{2}$/.test(token))
     .join(" ");
   if (!model) return "";
   // Bare numbers and plate-shaped codes ("123", "7ABC 123") are never a model. Real codes: M3, X5, 328i, 944.
   const tokens = model.split(/\s+/).filter(Boolean);
   const plateShaped = tokens.some(
-    (token) => /\d/.test(token) && !isKnownPorscheModel(token) && !isNumericModel(token) && !isModelCode(token),
+    (token, i) =>
+      /\d/.test(token) &&
+      !isKnownPorscheModel(token) &&
+      !isNumericModel(token) &&
+      !isModelCode(token) &&
+      !isModelNumberSuffix(tokens[i - 1], token),
   );
   if (plateShaped) return "";
   return model.slice(0, MAX_LEN.model);

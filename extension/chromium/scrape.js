@@ -38,12 +38,16 @@
 
   const KNOWN_MAKES = new Set(
     (
-      "porsche audi bmw mercedes mercedes-benz mini volkswagen vw volvo jaguar land rover range ford chevrolet chevy " +
+      "porsche audi bmw mercedes mercedes-benz mini volkswagen vw volvo jaguar ford chevrolet chevy " +
       "dodge jeep chrysler ram gmc cadillac buick lincoln toyota lexus honda acura nissan infiniti mazda subaru " +
-      "mitsubishi hyundai kia genesis tesla fiat alfa romeo maserati ferrari lamborghini bentley aston martin " +
-      "mclaren lotus saab suzuki scion pontiac saturn oldsmobile mercury"
+      "mitsubishi hyundai kia genesis tesla fiat alfa_romeo maserati ferrari lamborghini bentley aston_martin " +
+      "mclaren lotus saab suzuki scion pontiac saturn oldsmobile mercury land_rover rover international isuzu " +
+      "smart datsun hummer plymouth"
     ).split(" "),
   );
+  const COMPOUND_MAKE_RE = /\b(land|alfa|aston)[\s-]+(rover|romeo|martin)\b/gi;
+  /** First word of a two-word model ("Grand Cherokee", "Range Rover", "Model 3"). */
+  const MODEL_PREFIX_WORDS = new Set(["grand", "range", "model", "new", "town", "santa", "park"]);
 
   /** Labels/values that must never become lastName or model (AllData Work screen). */
   const FIELD_NOISE_LABEL_RE =
@@ -97,6 +101,11 @@
     return false;
   }
 
+  function digitTokensAreModelCodes(text) {
+    const digitTokens = text.split(/[\s,]+/).filter((t) => /\d/.test(t) && !/^(?:19|20)\d{2}$/.test(t));
+    return digitTokens.length > 0 && digitTokens.every((t) => NUMERIC_MODELS.has(t) || isModelCode(t));
+  }
+
   /**
    * License plate / account # / similar Work-screen fields — never lastName or model.
    * Broad `[class*='row']` association was picking these as Customer/Model values.
@@ -109,6 +118,11 @@
     if (FIELD_NOISE_LABEL_RE.test(text)) return true;
     if (/^(license\s*plate|account\s*#?|acct\.?\s*#?)\b/i.test(text)) return true;
     if (isKnownPorscheModel(text)) return false;
+    // GLC300 / RX350 / M340i are real model codes that look like a short plate. Plates are
+    // excluded by caption and by the plates collected from the page, not by shape alone.
+    if (!/\s/.test(text) && /^[A-Za-z]/.test(text) && isModelCode(text)) return false;
+    if (/\s/.test(text) && /^[A-Za-z]/.test(text) && digitTokensAreModelCodes(text)) return false;
+    if (/^[A-Z]?[a-z]{2,}\s+(?:\d{1,3}|[1-4]500)$/.test(text)) return false;
     const compact = text.replace(/[\s-]/g, "");
     // Account-like: optional letter prefix + 4+ digits, or pure digit id.
     if (/^[A-Z]?\d{4,}$/i.test(compact)) return true;
@@ -189,30 +203,35 @@
   /** Every caption we can tie to this control: attrs, label[for], wrapping label, nearby label text. */
   function captionsForControl(input) {
     const caps = [controlLabel(input)];
+    const near = [];
     const doc = input.ownerDocument;
     const id = input.getAttribute?.("id");
     if (id && doc?.querySelectorAll) {
       for (const lab of doc.querySelectorAll("label[for]")) {
-        if (lab.getAttribute("for") === id) caps.push(visibleText(lab));
+        if (lab.getAttribute("for") === id) near.push(visibleText(lab));
       }
     }
     const wrap = input.closest?.("label");
-    if (wrap) caps.push(visibleText(wrap));
+    if (wrap) near.push(visibleText(wrap));
     const labelledBy = input.getAttribute?.("aria-labelledby");
     if (labelledBy && doc?.getElementById) {
-      for (const part of labelledBy.split(/\s+/)) caps.push(visibleText(doc.getElementById(part)));
+      for (const part of labelledBy.split(/\s+/)) near.push(visibleText(doc.getElementById(part)));
     }
     const prev = input.previousElementSibling;
-    if (prev && !/^(INPUT|SELECT|TEXTAREA)$/.test(prev.tagName)) caps.push(shortCaption(visibleText(prev)));
-    const parent = input.parentElement;
-    const lead = parent?.firstElementChild;
-    if (lead && lead !== input && !lead.contains(input) && !/^(INPUT|SELECT|TEXTAREA)$/.test(lead.tagName)) {
-      caps.push(shortCaption(visibleText(lead)));
+    if (prev && !/^(INPUT|SELECT|TEXTAREA)$/.test(prev.tagName)) near.push(shortCaption(visibleText(prev)));
+    // Row-lead and table-label captions are only a fallback: in a flat row ("Plate [..] Model [..]")
+    // the lead belongs to the first field, and must not mark the Model input as the plate.
+    if (!near.some(Boolean)) {
+      const parent = input.parentElement;
+      const lead = parent?.firstElementChild;
+      if (lead && lead !== input && !lead.contains(input) && !/^(INPUT|SELECT|TEXTAREA)$/.test(lead.tagName)) {
+        near.push(shortCaption(visibleText(lead)));
+      }
+      if (parent && /^(TD|TH|DD)$/.test(parent.tagName) && parent.previousElementSibling) {
+        near.push(shortCaption(visibleText(parent.previousElementSibling)));
+      }
     }
-    if (parent && /^(TD|TH|DD)$/.test(parent.tagName) && parent.previousElementSibling) {
-      caps.push(shortCaption(visibleText(parent.previousElementSibling)));
-    }
-    return caps.filter(Boolean);
+    return caps.concat(near).filter(Boolean);
   }
 
   function isNoiseControl(input) {
@@ -442,7 +461,11 @@
 
   /** M3, X5, Q50, RX350, F-150, CX-5, GT3, RAV4 (letters then digits) or 328i, 530xi (digits then letters). */
   function isModelCode(token) {
-    return /^[A-Za-z]{1,3}-?\d{1,3}[A-Za-z]{0,2}$/.test(token) || /^\d{3}[A-Za-z]{1,2}$/.test(token);
+    return (
+      /^[A-Za-z]{1,3}-?\d{1,3}[A-Za-z]{0,2}$/.test(token) ||
+      /^[A-Za-z]{1,3}\d{1,2}[A-Za-z]{1,2}\d{0,2}[A-Za-z]{0,2}$/.test(token) ||
+      /^\d{3}[A-Za-z]{1,2}$/.test(token)
+    );
   }
 
   function isModelToken(token) {
@@ -458,6 +481,21 @@
     return true;
   }
 
+  /** A bare number that can follow a model word: "Silverado 1500", "Model 3", "3 Series". */
+  function isModelNumberSuffix(prevWord, token) {
+    return Boolean(
+      prevWord && /^(?:\d{1,3}|[1-4]500)$/.test(token) && /^[A-Z]?[a-z]{2,}$/.test(prevWord),
+    );
+  }
+
+  function hasNonPorscheMake(text) {
+    const words = text
+      .replace(COMPOUND_MAKE_RE, (m) => m.toLowerCase().replace(/[\s-]+/g, "_"))
+      .toLowerCase()
+      .split(/[\s,/|]+/);
+    return words.some((w) => KNOWN_MAKES.has(w) && w !== "porsche");
+  }
+
   function normalizeModelToken(raw) {
     let text = String(raw || "")
       .replace(/\s+/g, " ")
@@ -466,25 +504,54 @@
     text = text.replace(/^vin\s*:\s*/i, "").trim();
     if (!text || isScrapeNoise(text)) return "";
     if (isStateOrRegionNoise(text) || looksLikeAddress(text) || isKnownPlate(text)) return "";
-    for (const model of PORSCHE_MODELS) {
-      const re = new RegExp(`\\b${model}\\b`, "i");
-      if (re.test(text)) return model;
+    const tesla = /(?:^|\s)model\s+([3SXY])(?=\s|$)/i.exec(text);
+    if (tesla) return `Model ${tesla[1].toUpperCase()}`;
+    if (!hasNonPorscheMake(text)) {
+      for (const model of PORSCHE_MODELS) {
+        const re = new RegExp(`\\b${model}\\b`, "i");
+        if (re.test(text)) return model;
+      }
     }
     const tokens = text
+      .replace(COMPOUND_MAKE_RE, (m) => m.replace(/[\s-]+/g, "_"))
       .split(/[\s,/|]+/)
       .filter(Boolean)
       .filter((t) => !/^(?:19|20)\d{2}$/.test(t))
-      .filter((t) => !isStateOrRegionNoise(t) && !isScrapeNoise(t) && !/^vin:?$/i.test(t));
+      .filter((t) => !isStateOrRegionNoise(t) && (!isScrapeNoise(t) || /^[1-4]500$/.test(t)) && !/^vin:?$/i.test(t));
     // "2019 BMW M3 CA": the model is what follows the make, never a plate or state around it.
     const makeIndex = tokens.findIndex((t) => KNOWN_MAKES.has(t.toLowerCase()));
     if (makeIndex >= 0) {
-      const afterMake = tokens.slice(makeIndex + 1).find(isModelToken);
-      if (afterMake) return afterMake;
+      const rest = tokens.slice(makeIndex + 1);
+      const at = rest.findIndex(isModelToken);
+      if (at >= 0) {
+        const first = rest[at];
+        const next = rest[at + 1];
+        if (MODEL_PREFIX_WORDS.has(first.toLowerCase()) && next && isModelToken(next)) return `${first} ${next}`;
+        if (next && isModelNumberSuffix(first, next)) return `${first} ${next}`;
+        return first;
+      }
     }
     // No make to anchor on: every remaining token must look like a model word. A leftover bare
     // number or code ("ABC 123") means the text is a plate, not a vehicle.
-    if (!tokens.length || !tokens.every(isModelToken)) return "";
-    return tokens[tokens.length - 1];
+    const kept = [];
+    for (const t of tokens) {
+      if (isModelToken(t)) kept.push(t);
+      else if (isModelNumberSuffix(kept[kept.length - 1], t)) kept.push(t);
+      else return "";
+    }
+    if (!kept.length) return "";
+    const last = kept[kept.length - 1];
+    if (/^(?:\d{1,3}|[1-4]500)$/.test(last) && !NUMERIC_MODELS.has(last)) return `${kept[kept.length - 2]} ${last}`;
+    const code = kept.find((t) => /\d/.test(t) && isModelCode(t));
+    return code || last;
+  }
+
+  /** "2019 Toyota Camry", "2021 Mercedes-Benz GLC300" anywhere on the page, year then make then model. */
+  function vehicleFromBodyText(body) {
+    const makes = [...KNOWN_MAKES].map((m) => m.replace(/_/g, "[\\s-]+").replace(/-/g, "[\\s-]?")).join("|");
+    const re = new RegExp(`\\b(?:19|20)\\d{2}\\s+((?:${makes})\\s+[A-Za-z0-9-]+(?:\\s+[A-Za-z0-9-]+)?)`, "i");
+    const m = re.exec(body);
+    return m ? normalizeModelToken(m[1]) : "";
   }
 
   function modelFromPage(doc) {
@@ -495,14 +562,14 @@
       !isStateOrRegionNoise(v) && !looksLikeAddress(v) && !(isKnownPlate(v) && !isKnownPorscheModel(v));
     try {
       const direct =
-        labeledValue(doc, /^\s*model\s*$/i) ||
+        labeledValue(doc, /^\s*(?:vehicle\s*|car\s*)?model(?:\s*name)?\s*$/i) ||
         findInputByHint(doc, /(^|[^a-z])model([^a-z]|$)/i);
       const fromDirect = normalizeModelToken(direct);
       if (fromDirect) return fromDirect;
 
       const ymm =
-        labeledValue(doc, /^\s*year\s*\/?\s*make\s*\/?\s*model\s*$/i) ||
-        labeledValue(doc, /^\s*vehicle\s*$/i);
+        labeledValue(doc, /^\s*(?:year[\s/]*make[\s/]*model|make[\s/]*model|ymm)\s*$/i) ||
+        labeledValue(doc, /^\s*vehicle(?:\s*description)?\s*$/i);
       const fromYmm = normalizeModelToken(ymm);
       if (fromYmm) return fromYmm;
 
@@ -513,6 +580,8 @@
         }
       }
       body = body.replace(/\b(?:license\s*plate|licence\s*plate|plate|tag)\s*#?\s*:?\s*\S+(?:\s+\S+)?/gi, " ");
+      const fromBody = vehicleFromBodyText(body);
+      if (fromBody) return fromBody;
       for (const model of PORSCHE_MODELS) {
         const re = new RegExp(`\\b${model}\\b`, "i");
         if (re.test(body)) return model;
