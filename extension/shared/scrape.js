@@ -4,7 +4,7 @@
  * Tighten selectors after a live DevTools pass (no Manjaro GUI automation).
  *
  * Label payload is lastName + model only. Never scrape VIN, license plate, or
- * account # into either field. Last name strips first initial
+ * account # into either field; a 1–2 letter state/region code (CA) is never a model. Last name strips first initial
  * ("J. Whatcott", "LWhatcott" → "Whatcott").
  */
 (function (root) {
@@ -26,6 +26,24 @@
     "GT4",
     "GTS",
   ];
+
+  /** US states, DC/territories, Canadian provinces — a 2-letter code is never a model. */
+  const STATE_CODES = new Set(
+    (
+      "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC " +
+      "ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY DC PR VI GU AS MP " +
+      "AB BC MB NB NL NS NT NU ON PE QC SK YT"
+    ).split(" "),
+  );
+
+  const KNOWN_MAKES = new Set(
+    (
+      "porsche audi bmw mercedes mercedes-benz mini volkswagen vw volvo jaguar land rover range ford chevrolet chevy " +
+      "dodge jeep chrysler ram gmc cadillac buick lincoln toyota lexus honda acura nissan infiniti mazda subaru " +
+      "mitsubishi hyundai kia genesis tesla fiat alfa romeo maserati ferrari lamborghini bentley aston martin " +
+      "mclaren lotus saab suzuki scion pontiac saturn oldsmobile mercury"
+    ).split(" "),
+  );
 
   /** Labels/values that must never become lastName or model (AllData Work screen). */
   const FIELD_NOISE_LABEL_RE =
@@ -103,6 +121,29 @@
     return isVinNoise(value) || isPlateOrAccountNoise(value);
   }
 
+  /** "CA", "Tx.", or any 1–2 letter token: a state/region code or trim letter, never a model. */
+  function isStateOrRegionNoise(value) {
+    const text = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\.$/, "");
+    if (!text) return false;
+    if (STATE_CODES.has(text.toUpperCase())) return true;
+    return /^[A-Za-z]{1,2}$/.test(text);
+  }
+
+  /** "Anytown, CA 92101" / "CA 92101" — address blobs must not feed the model scrape. */
+  function looksLikeAddress(value) {
+    const text = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return false;
+    if (/\b\d{5}(?:-\d{4})?\b/.test(text)) return true;
+    return /,\s*[A-Za-z]{2}\b\.?\s*$/.test(text) && STATE_CODES.has(text.slice(-2).toUpperCase());
+  }
+
+  let activeValueGuard = null;
+
   /**
    * Last name only — strip "LAST, FIRST", leading "J." / "J ", trailing bare
    * initial, and glued shop codes like "LWhatcott" → "Whatcott".
@@ -136,6 +177,7 @@
   function acceptFieldValue(v) {
     const text = String(v || "").trim();
     if (!text || isScrapeNoise(text)) return "";
+    if (activeValueGuard && !activeValueGuard(text)) return "";
     return text;
   }
 
@@ -305,6 +347,19 @@
     return "";
   }
 
+  function isModelToken(token) {
+    if (!token || isScrapeNoise(token) || /^vin:?$/i.test(token)) return false;
+    if (isStateOrRegionNoise(token)) return false;
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]{1,20}$/.test(token)) return false;
+    if (/\d/.test(token)) {
+      if (isKnownPorscheModel(token)) return true;
+      // M3, X5, Q50, 328i — short letter+digit codes. Plates/accounts are 5+ and already noise.
+      if (/^(?=.*[A-Za-z])[A-Za-z0-9-]{2,4}$/.test(token)) return true;
+      return /^\d{3}$/.test(token);
+    }
+    return true;
+  }
+
   function normalizeModelToken(raw) {
     let text = String(raw || "")
       .replace(/\s+/g, " ")
@@ -312,31 +367,45 @@
     if (!text || isScrapeNoise(text)) return "";
     text = text.replace(/^vin\s*:\s*/i, "").trim();
     if (!text || isScrapeNoise(text)) return "";
+    if (isStateOrRegionNoise(text) || looksLikeAddress(text)) return "";
     for (const model of PORSCHE_MODELS) {
       const re = new RegExp(`\\b${model}\\b`, "i");
       if (re.test(text)) return model;
     }
-    // Do not fall back to arbitrary last tokens (Account # / plate bleed).
-    // Only accept a clean alphabetic model word with no digits.
-    const token = text.split(/[\s,/|]+/).filter(Boolean).pop();
-    if (!token || isScrapeNoise(token) || /^vin:?$/i.test(token)) return "";
-    if (/\d/.test(token) && !isKnownPorscheModel(token)) return "";
-    if (!/^[A-Za-z][A-Za-z0-9-]{1,20}$/.test(token)) return "";
-    return token;
+    const tokens = text
+      .split(/[\s,/|]+/)
+      .filter(Boolean)
+      .filter((t) => !/^(?:19|20)\d{2}$/.test(t));
+    // "2019 BMW M3 CA": take what follows the make, never a trailing state code.
+    const makeIndex = tokens.findIndex((t) => KNOWN_MAKES.has(t.toLowerCase()));
+    if (makeIndex >= 0) {
+      const afterMake = tokens.slice(makeIndex + 1).find(isModelToken);
+      if (afterMake) return afterMake;
+    }
+    for (let i = tokens.length - 1; i >= 0; i -= 1) {
+      if (isModelToken(tokens[i])) return tokens[i];
+    }
+    return "";
   }
 
   function modelFromPage(doc) {
-    const direct =
-      labeledValue(doc, /^\s*model\s*$/i) ||
-      findInputByHint(doc, /(^|[^a-z])model([^a-z]|$)/i);
-    const fromDirect = normalizeModelToken(direct);
-    if (fromDirect) return fromDirect;
+    const previousGuard = activeValueGuard;
+    activeValueGuard = (v) => !isStateOrRegionNoise(v) && !looksLikeAddress(v);
+    try {
+      const direct =
+        labeledValue(doc, /^\s*model\s*$/i) ||
+        findInputByHint(doc, /(^|[^a-z])model([^a-z]|$)/i);
+      const fromDirect = normalizeModelToken(direct);
+      if (fromDirect) return fromDirect;
 
-    const ymm =
-      labeledValue(doc, /^\s*year\s*\/?\s*make\s*\/?\s*model\s*$/i) ||
-      labeledValue(doc, /^\s*vehicle\s*$/i);
-    const fromYmm = normalizeModelToken(ymm);
-    if (fromYmm) return fromYmm;
+      const ymm =
+        labeledValue(doc, /^\s*year\s*\/?\s*make\s*\/?\s*model\s*$/i) ||
+        labeledValue(doc, /^\s*vehicle\s*$/i);
+      const fromYmm = normalizeModelToken(ymm);
+      if (fromYmm) return fromYmm;
+    } finally {
+      activeValueGuard = previousGuard;
+    }
 
     const body = visibleText(doc.body).slice(0, 20000);
     for (const model of PORSCHE_MODELS) {
@@ -536,6 +605,8 @@
   api.lastNameFromFull = lastNameFromFull;
   api.isVinNoise = isVinNoise;
   api.isPlateOrAccountNoise = isPlateOrAccountNoise;
+  api.isStateOrRegionNoise = isStateOrRegionNoise;
+  api.normalizeModelToken = normalizeModelToken;
   api.isCreateControl = isCreateControl;
   api.isForbiddenControl = isForbiddenControl;
   api.createControlPresent = createControlPresent;
