@@ -1,6 +1,6 @@
 {
-  "version": "0.1.41",
-  "message": "Desk 0.1.41 fixes the Create R/O label that sometimes lost the car model or the last name after working for a while. Desk now waits for the model from the moment Create succeeds (not from the click), remembers the last name and model the form showed, no longer lets the next row or a button supply a field, and always prints in the end. The label still reads {LastName} - {Model}, a license plate, plate state, VIN or account number is never the model, and the layout is unchanged.",
+  "version": "0.1.42",
+  "message": "Desk 0.1.42 fixes the Labels page printing one label when Copies was set to 2. The Copies box is now read at the moment you press Print, and the page no longer resets it back to 1 while the printer status refreshes. Create R/O auto-print is unchanged: one label, still {LastName} - {Model} with Out Mileage.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }
