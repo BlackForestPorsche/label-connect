@@ -1,6 +1,7 @@
 import { code128 } from "/shared/code128.mjs";
 import { prefersTurn, viewSize, viewSafeRect, formatInches, FALLBACK_MEDIA } from "/shared/media.mjs";
 import { fitTextLayout, LINE_HEIGHT } from "/shared/text-fit.mjs";
+import { normalizeCopies } from "/shared/copies.mjs";
 
 const $ = (id) => document.getElementById(id);
 
@@ -458,7 +459,9 @@ function renderSizes() {
     : "No roll read yet. Pick the label that is loaded. Print still goes to the 550.";
   $("turn").checked = Boolean(doc?.turned);
   $("name").value = doc?.name ?? "";
-  $("copies").value = String(doc?.copies || 1);
+  // The poll re-renders every time the roll or printer state moves. Do not
+  // overwrite a count Logan is typing and has not committed yet.
+  if (document.activeElement !== $("copies")) $("copies").value = String(doc?.copies || 1);
 }
 
 function renderStatus() {
@@ -626,8 +629,16 @@ async function refreshPrinter() {
   if (changed) render();
 }
 
+function commitCopies() {
+  const doc = active();
+  if (!doc) return 1;
+  doc.copies = normalizeCopies($("copies").value);
+  return doc.copies;
+}
+
 async function printLabel() {
   const doc = active();
+  const copies = commitCopies();
   const media = state.printer?.roll ?? mediaOf(doc);
   $("error").textContent = "";
   $("print").disabled = true;
@@ -643,14 +654,15 @@ async function printLabel() {
         "x-page-size": media.key,
         "x-width-pt": String(media.widthPt),
         "x-height-pt": String(media.heightPt),
-        "x-copies": String(doc.copies || 1),
+        "x-copies": String(copies),
       },
       body: blob,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || "The 550 did not take the label.");
     $("error").classList.remove("error");
-    $("error").textContent = payload.job || "Sent to the LabelWriter 550.";
+    const sent = payload.job || "Sent to the LabelWriter 550.";
+    $("error").textContent = copies > 1 ? `${sent} (${copies} copies)` : sent;
   } catch (error) {
     $("error").classList.add("error");
     $("error").textContent = error instanceof Error ? error.message : "The 550 did not take the label.";
@@ -704,9 +716,12 @@ function bootFromStorage() {
 
 $("print").addEventListener("click", printLabel);
 $("print-mobile").addEventListener("click", printLabel);
+$("copies").addEventListener("input", () => {
+  commitCopies();
+  scheduleSave();
+});
 $("copies").addEventListener("change", () => {
-  const doc = active();
-  doc.copies = Math.min(20, Math.max(1, Number($("copies").value) || 1));
+  $("copies").value = String(commitCopies());
   scheduleSave();
 });
 $("name").addEventListener("input", () => {
