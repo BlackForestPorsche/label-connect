@@ -1,6 +1,6 @@
 {
-  "version": "0.1.42",
-  "message": "Desk 0.1.42 fixes the Labels page printing one label when Copies was set to 2. The Copies box is now read at the moment you press Print, and the page no longer resets it back to 1 while the printer status refreshes. Create R/O auto-print is unchanged: one label, still {LastName} - {Model} with Out Mileage.",
+  "version": "0.1.43",
+  "message": "Desk 0.1.43 follows a Tools sign-in onto the shop page. If Tools is a different person, Firefox gets that person's gate and the open shop tab reloads. Home and the PIN screen leave for that person. Create R/O auto-print is unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

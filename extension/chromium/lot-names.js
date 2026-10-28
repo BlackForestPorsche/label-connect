@@ -268,6 +268,19 @@
       .toLowerCase();
   }
 
+  /**
+   * Person id baked into a shop gate (`v2.<until>.<person>.<kind>.<mac>`).
+   * Empty when the value is not that shape. Never log the cookie.
+   */
+  function personFromGateValue(value) {
+    const parts = String(value || "").split(".");
+    let person = "";
+    if (parts[0] === "v2" && parts.length === 5) person = parts[2];
+    else if (parts[0] === "v1" && parts.length === 4) person = parts[2];
+    person = normalizePerson(person);
+    return PERSON_ID_RE.test(person) ? person : "";
+  }
+
   function friendlyWidgetError(code, status) {
     const key = String(code || "").trim().toLowerCase();
     if (key === "unauthorized" || status === 401) {
@@ -649,9 +662,9 @@
         noteGateExpiry(
           Number.isFinite(cookie.expirationDate) ? cookie.expirationDate * 1000 : 0,
         );
-        return { present: true };
+        return { present: true, person: personFromGateValue(cookie.value) };
       }
-      return { present: false, reason: "missing" };
+      return { present: false, person: "", reason: "missing" };
     } catch {
       // A failed read is "don't know", never "the site is locked".
       return { present: false, unknown: true, reason: "cookie_error" };
@@ -735,7 +748,6 @@
       path: "/",
       secure: true,
       httpOnly: true,
-      sameSite: "no_restriction",
     };
     const parsed = expiresAt ? Date.parse(expiresAt) : NaN;
     if (Number.isFinite(parsed)) {
@@ -743,22 +755,24 @@
     }
     deskGateWriteUntil = Date.now() + DESK_GATE_WRITE_MS;
     lastDeskGateValue = String(value);
-    try {
-      await runtime.cookies.set(details);
-      markGateSeen(true);
-      noteGateExpiry(details.expirationDate ? details.expirationDate * 1000 : 0);
-      return { ok: true };
-    } catch {
+    // Shop writes SameSite=Lax on shop.blackforestautomotive.com. None is only
+    // for a different host. Try Lax first so the page's gate check receives it.
+    const attempts = [
+      { ...details, sameSite: "lax" },
+      { ...details, sameSite: "no_restriction" },
+      { ...details },
+    ];
+    for (const attempt of attempts) {
       try {
-        delete details.sameSite;
-        await runtime.cookies.set(details);
+        await runtime.cookies.set(attempt);
         markGateSeen(true);
         noteGateExpiry(details.expirationDate ? details.expirationDate * 1000 : 0);
         return { ok: true };
       } catch {
-        return { ok: false, reason: "set_failed" };
+        // next attribute set
       }
     }
+    return { ok: false, reason: "set_failed" };
   }
 
   /**
@@ -838,20 +852,34 @@
     };
   }
 
-  async function reloadShopUnlockTabs() {
-    if (!runtime?.tabs?.query || !runtime?.tabs?.reload) return { reloaded: 0 };
+  /**
+   * After Tools → Firefox exchange, the shop SPA will not notice a new gate on its own.
+   * `/unlock` never checks the cookie in beforeLoad (it polls), and other pages cache
+   * the previous person. Send `/unlock` home and reload every other shop tab when the
+   * person changed or the jar was empty. Otherwise only reload `/unlock` tabs.
+   */
+  async function reloadShopUnlockTabs({ leaveUnlock = false } = {}) {
+    if (!runtime?.tabs?.query) return { reloaded: 0 };
     let tabs = [];
     try {
       tabs = await runtime.tabs.query({ url: ["https://shop.blackforestautomotive.com/*"] });
     } catch {
       return { reloaded: 0 };
     }
+    const base = await shopBaseUrl();
     let reloaded = 0;
     for (const tab of tabs || []) {
       if (tab?.id == null || typeof tab.url !== "string") continue;
-      if (!tab.url.includes("/unlock")) continue;
+      const onUnlock = tab.url.includes("/unlock");
+      if (!leaveUnlock && !onUnlock) continue;
       try {
-        await runtime.tabs.reload(tab.id);
+        if (leaveUnlock && onUnlock && runtime.tabs.update) {
+          await runtime.tabs.update(tab.id, { url: `${base}/` });
+        } else if (runtime.tabs.reload) {
+          await runtime.tabs.reload(tab.id);
+        } else {
+          continue;
+        }
         reloaded += 1;
       } catch {
         // ignore
@@ -863,7 +891,9 @@
   /**
    * End-to-end: Tools :8788 Bearer → Firefox/Chromium bf_shop_gate.
    * Lock Tools (bridge up, no session) → clear stale site gate so refresh stays locked.
-   * forceExchange=true on explicit Sync Tools (heal stale gate); auto path skips when gate present.
+   * forceExchange=true on explicit Sync Tools (heal stale gate).
+   * Auto path skips only when the Firefox gate is already this Tools person.
+   * A different person still exchanges — extension status is not the shop page.
    */
   async function syncToolsSessionToSite({ reloadUnlockTabs = true, forceExchange = false } = {}) {
     const health = await probeToolsBridgeHealth();
@@ -1000,8 +1030,13 @@
     }
     const stored = await storageGet(["shopWidgetToken"]);
     const token = stored.shopWidgetToken;
-    const gateBefore = (await readShopGateCookie()).present;
-    if (gateBefore && !forceExchange && !gateRenewalDue()) {
+    const gateNow = await readShopGateCookie();
+    const gateBefore = gateNow.present;
+    const toolsPerson = normalizePerson(fromTools.person || "");
+    const differentPerson = Boolean(
+      gateBefore && toolsPerson && gateNow.person && toolsPerson !== gateNow.person,
+    );
+    if (gateBefore && !forceExchange && !differentPerson && !gateRenewalDue()) {
       return {
         ok: true,
         person: fromTools.person,
@@ -1021,9 +1056,10 @@
         deskOk: true,
       };
     }
-    const shouldReload = !gateBefore || forceExchange;
+    const healPage = !gateBefore || differentPerson;
+    const shouldReload = healPage || forceExchange;
     if (shouldReload && reloadUnlockTabs) {
-      await reloadShopUnlockTabs();
+      await reloadShopUnlockTabs({ leaveUnlock: healPage });
     }
     return {
       ok: true,

@@ -14,6 +14,7 @@ function toolsSiteSyncAction({
   siteLockQuiet,
   toolsJarGate = false,
   unlockHold = false,
+  personMismatch = false,
 }) {
   if (siteLockQuiet && !forceExchange) {
     // Tools live again after a website lock → clear quiet and exchange (never re-DELETE).
@@ -37,7 +38,7 @@ function toolsSiteSyncAction({
   }
   if (!bridgeReachable) return "skip_tools";
   if (!hasSession) return "skip_tools";
-  if (gatePresent && !forceExchange) return "keep_gate";
+  if (gatePresent && !forceExchange && !personMismatch) return "keep_gate";
   // beta 0.1.36+ returns gateToken in exchange JSON for cookies.set.
   return "exchange_with_gateToken";
 }
@@ -125,6 +126,19 @@ test("Tools unlocked + gate present skips auto exchange", () => {
       forceExchange: false,
     }),
     "keep_gate",
+  );
+});
+
+test("Tools person differs from the Firefox gate → exchange", () => {
+  assert.equal(
+    toolsSiteSyncAction({
+      bridgeReachable: true,
+      hasSession: true,
+      gatePresent: true,
+      forceExchange: false,
+      personMismatch: true,
+    }),
+    "exchange_with_gateToken",
   );
 });
 

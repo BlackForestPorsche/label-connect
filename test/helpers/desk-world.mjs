@@ -19,6 +19,8 @@ export function makeWorld() {
     exchanges: 0,
     cookieError: false,
     reloads: [],
+    tabUpdates: [],
+    tabs: [{ id: 1, url: "https://shop.blackforestautomotive.com/" }],
     storage: {},
     bridgeDown: false,
     icons: [],
@@ -132,9 +134,14 @@ export function makeWorld() {
       },
     },
     tabs: {
-      query: async () => [{ id: 1, url: "https://shop.blackforestautomotive.com/" }],
+      query: async () => world.tabs.slice(),
       reload: async (id) => {
         world.reloads.push(id);
+      },
+      update: async (id, props) => {
+        world.tabUpdates.push({ id, url: props && props.url });
+        const tab = world.tabs.find((item) => item.id === id);
+        if (tab && props && props.url) tab.url = props.url;
       },
     },
     action: {
