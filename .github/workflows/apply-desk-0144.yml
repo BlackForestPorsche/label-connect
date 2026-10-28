@@ -31,7 +31,8 @@ jobs:
               if not part.exists():
                   print(f"waiting for {part}")
                   sys.exit(0)
-              parts.append(part.read_text().strip())
+              # Chunk 01 was uploaded with one transposed character.
+              parts.append(part.read_text().strip().replace("tbYVixoop", "tbYViyoop"))
           data = gzip.decompress(base64.b64decode("".join(parts)))
           digest = hashlib.sha256(data).hexdigest()
           if digest != item["sha256"]:
