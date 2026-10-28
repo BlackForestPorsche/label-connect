@@ -1,6 +1,6 @@
 {
-  "version": "0.1.43",
-  "message": "Desk 0.1.43 follows a Tools sign-in onto the shop page. If Tools is a different person, Firefox gets that person's gate and the open shop tab reloads. Home and the PIN screen leave for that person. Create R/O auto-print is unchanged.",
+  "version": "0.1.44",
+  "message": "Desk 0.1.44 signs the shop page in from Tools with a first-party handoff, and a shop sign-in turns the Desk widget green. The page cookie is what counts. Create R/O auto-print is unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

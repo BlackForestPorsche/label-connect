@@ -469,7 +469,7 @@
     return typeof url === "string" && SHOP_HOST_RE.test(url);
   }
 
-  runtime.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  runtime.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || typeof message !== "object") return false;
     if (message.type === "print-ro") {
       printRo(message.payload).then(sendResponse);
@@ -536,12 +536,17 @@
         sendResponse({ error: "Lot helper missing." });
         return false;
       }
-      // Tools unlock → Firefox gate (exchange). forceExchange heals stale gate /
-      // post-lock quiet. Also clears gate when Tools locked.
+      // Tools unlock → shop handoff when the page says it is signed out.
+      // A page that just signed in must not have its cookie cleared.
+      const senderTab = sender && sender.tab && sender.tab.id != null ? sender.tab.id : null;
       api
         .syncToolsSessionToSite({
           reloadUnlockTabs: true,
           forceExchange: Boolean(message.forceExchange),
+          pageSignedIn: typeof message.pageSignedIn === "boolean" ? message.pageSignedIn : undefined,
+          pagePerson: typeof message.pagePerson === "string" ? message.pagePerson : "",
+          handoffNavigate: message.handoffNavigate !== false,
+          tabId: message.tabId != null ? message.tabId : senderTab,
         })
         .then(sendResponse);
       return true;

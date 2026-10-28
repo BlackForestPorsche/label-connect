@@ -143,6 +143,40 @@
   const FOREIGN_REMOVAL_SETTLE_MS = 1_500;
   let deskGateWriteUntil = 0;
   let lastDeskGateValue = "";
+  /** Page-context report: the shop tab's own cookie, not the extension jar. */
+  const PAGE_GATE_REPORT_MS = 120_000;
+  const HANDOFF_DEBOUNCE_MS = 10_000;
+  const HANDOFF_MAX_PER_SESSION = 3;
+  let lastPageGateReport = null;
+  let lastHandoffAt = 0;
+  let lastHandoffSessionId = "";
+  let handoffCountForSession = 0;
+
+  function notePageGate({ ok, person, tabId } = {}) {
+    lastPageGateReport = {
+      ok: Boolean(ok),
+      person: normalizePerson(person),
+      tabId: tabId == null ? null : tabId,
+      at: Date.now(),
+    };
+  }
+
+  function freshPageGateReport(nowMs = Date.now()) {
+    if (!lastPageGateReport) return null;
+    if (nowMs - lastPageGateReport.at > PAGE_GATE_REPORT_MS) return null;
+    return lastPageGateReport;
+  }
+
+  function isShopHandoffUrl(url, base) {
+    try {
+      const parsed = new URL(url);
+      const expected = new URL(base);
+      if (parsed.origin !== expected.origin) return false;
+      return /^\/api\/widget\/session\/handoff\/[A-Za-z0-9_-]{20,}$/.test(parsed.pathname);
+    } catch {
+      return false;
+    }
+  }
   /** After Tools→site exchange, ignore gate-removal → site-lock (unlock bounce). */
   const UNLOCK_HOLD_MS = 35_000;
   let unlockHoldUntil = 0;
@@ -889,13 +923,86 @@
   }
 
   /**
-   * End-to-end: Tools :8788 Bearer → Firefox/Chromium bf_shop_gate.
-   * Lock Tools (bridge up, no session) → clear stale site gate so refresh stays locked.
-   * forceExchange=true on explicit Sync Tools (heal stale gate).
-   * Auto path skips only when the Firefox gate is already this Tools person.
-   * A different person still exchanges — extension status is not the shop page.
+   * Tools Bearer → one-time shop handoff URL. GET of that URL Set-Cookies on a
+   * document response the page will actually send. Extension cookies.set does not.
    */
-  async function syncToolsSessionToSite({ reloadUnlockTabs = true, forceExchange = false } = {}) {
+  async function mintShopHandoff(token) {
+    if (!token) return { ok: false, reason: "no_token" };
+    const base = await shopBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/api/widget/session/handoff`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+        cache: "no-store",
+      });
+    } catch {
+      return { ok: false, reason: "network" };
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, reason: "unauthorized" };
+    }
+    if (response.status === 429) return { ok: false, reason: "rate_limited" };
+    const url = data && typeof data.url === "string" ? data.url : "";
+    if (!response.ok || !isShopHandoffUrl(url, base)) {
+      return { ok: false, reason: "handoff_failed" };
+    }
+    return { ok: true, url };
+  }
+
+  /** Open the handoff in the signed-out shop tab. One tab: the ticket is single-use. */
+  async function navigateShopHandoff(url, preferredTabId) {
+    if (!url || !runtime?.tabs?.query || !runtime?.tabs?.update) return { navigated: false };
+    let tabs = [];
+    try {
+      tabs = await runtime.tabs.query({ url: ["https://shop.blackforestautomotive.com/*"] });
+    } catch {
+      return { navigated: false };
+    }
+    const shop = (tabs || []).filter((tab) => tab && tab.id != null);
+    const preferred = shop.find((tab) => tab.id === preferredTabId);
+    const unlock = shop.find((tab) => String(tab.url || "").includes("/unlock"));
+    const target = preferred || unlock;
+    if (!target) return { navigated: false };
+    try {
+      await runtime.tabs.update(target.id, { url });
+      return { navigated: true, tabId: target.id };
+    } catch {
+      return { navigated: false };
+    }
+  }
+
+  /**
+   * End-to-end: Tools :8788 Bearer → shop page.
+   * The page jar is not the extension jar. When the shop tab says it is signed
+   * out, open the one-time handoff so the server Set-Cookies for that tab.
+   * When the shop tab says it just signed in, do not clear its cookie while
+   * Tools is still locked. Extension cookies.set remains the fallback when the
+   * page has not reported and the jar is empty or a different person.
+   * forceExchange=true on explicit Sync Tools (heal stale gate).
+   */
+  async function syncToolsSessionToSite({
+    reloadUnlockTabs = true,
+    forceExchange = false,
+    pageSignedIn,
+    pagePerson = "",
+    handoffNavigate = true,
+    tabId = null,
+  } = {}) {
+    if (typeof pageSignedIn === "boolean") {
+      notePageGate({ ok: pageSignedIn, person: pagePerson, tabId });
+    }
     const health = await probeToolsBridgeHealth();
 
     await latchReady;
@@ -983,6 +1090,17 @@
           siteGate: (await readShopGateCookie()).present,
         };
       }
+      // Shop tab just signed in. Tools health has not caught up. Do not wipe the
+      // cookie the page needs, or the Desk widget never receives that login.
+      if (pageSignedIn === true) {
+        return {
+          ok: true,
+          skipped: "page_signed_in",
+          reason: "page_signed_in",
+          shouldReload: false,
+          siteGate: (await readShopGateCookie()).present,
+        };
+      }
       const hadGate = (await readShopGateCookie()).present;
       await clearShopGateCookie();
       const stored = await storageGet(["shopWidgetTokenSource"]);
@@ -1036,7 +1154,79 @@
     const differentPerson = Boolean(
       gateBefore && toolsPerson && gateNow.person && toolsPerson !== gateNow.person,
     );
-    if (gateBefore && !forceExchange && !differentPerson && !gateRenewalDue()) {
+    const pagePersonNorm = normalizePerson(pagePerson);
+    const pageDifferent = Boolean(
+      pageSignedIn === true && toolsPerson && pagePersonNorm && toolsPerson !== pagePersonNorm,
+    );
+    // The open shop tab already has this person. The extension jar is irrelevant.
+    if (pageSignedIn === true && !pageDifferent && !forceExchange && !differentPerson && !gateRenewalDue()) {
+      return {
+        ok: true,
+        person: fromTools.person,
+        source: "tools-bridge",
+        siteGate: true,
+        shouldReload: false,
+        reason: "page_signed_in",
+      };
+    }
+    // Page is on the PIN screen (or a different person). A cookie cookies.get can
+    // see is not a cookie peekShopGate will accept. First-party handoff is.
+    if (pageSignedIn === false || pageDifferent) {
+      const sessionId = String(health.sessionId || lastToolsSessionId || "");
+      const nowMs = Date.now();
+      if (sessionId && sessionId !== lastHandoffSessionId) handoffCountForSession = 0;
+      const debounced =
+        !forceExchange &&
+        sessionId &&
+        lastHandoffSessionId === sessionId &&
+        nowMs - lastHandoffAt < HANDOFF_DEBOUNCE_MS;
+      if (debounced) {
+        return {
+          ok: true,
+          person: fromTools.person,
+          source: "tools-bridge",
+          siteGate: gateBefore,
+          shouldReload: false,
+          skipped: "handoff_debounce",
+          reason: "handoff_debounce",
+        };
+      }
+      if (!forceExchange && handoffCountForSession >= HANDOFF_MAX_PER_SESSION) {
+        return {
+          ok: true,
+          person: fromTools.person,
+          source: "tools-bridge",
+          siteGate: gateBefore,
+          shouldReload: false,
+          skipped: "handoff_limit",
+          reason: "handoff_limit",
+        };
+      }
+      lastHandoffAt = nowMs;
+      lastHandoffSessionId = sessionId;
+      handoffCountForSession += 1;
+      const handed = await mintShopHandoff(token);
+      if (handed.ok) {
+        armUnlockHold();
+        let navigated = false;
+        if (handoffNavigate !== false && reloadUnlockTabs) {
+          const nav = await navigateShopHandoff(handed.url, tabId);
+          navigated = Boolean(nav.navigated);
+        }
+        return {
+          ok: true,
+          person: fromTools.person,
+          source: "tools-handoff",
+          siteGate: gateBefore,
+          shouldReload: false,
+          handoffUrl: handed.url,
+          navigated,
+        };
+      }
+      lastHandoffAt = 0;
+      handoffCountForSession = Math.max(0, handoffCountForSession - 1);
+    }
+    if (gateBefore && !forceExchange && !differentPerson && !gateRenewalDue() && pageSignedIn !== false) {
       return {
         ok: true,
         person: fromTools.person,
@@ -1070,9 +1260,33 @@
     };
   }
 
+  async function shopGateCookieValue() {
+    const base = await shopBaseUrl();
+    const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
+    if (!runtime?.cookies?.get) return "";
+    try {
+      const cookie = await runtime.cookies.get({ url: `${base}/`, name });
+      return cookie && cookie.value ? String(cookie.value) : "";
+    } catch {
+      return "";
+    }
+  }
+
+  async function postShopFromGate(base, headers) {
+    return fetch(`${base}/api/widget/session/from-gate`, {
+      method: "POST",
+      headers,
+      credentials: "include",
+      body: "{}",
+      cache: "no-store",
+    });
+  }
+
   /**
    * Website shop session → Desk Bearer via POST /api/widget/session/from-gate.
    * Degrades cleanly when the route is missing (404/406): falls back to Tools/PIN.
+   * Background fetch does not send SameSite=Lax, so this passes the jar value when
+   * cookies.get can see it. The shop tab's own fetch is what sees a real site login.
    */
   async function importSiteGateSession() {
     await latchReady;
@@ -1092,17 +1306,24 @@
     }
 
     const base = await shopBaseUrl();
+    const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
+    const gateValue = await shopGateCookieValue();
+    const headers = { Accept: "application/json", "Content-Type": "application/json" };
+    // Extension fetch does not attach SameSite=Lax. Send the jar value when we have it.
+    // The page's own from-gate call is the path that actually sees the site login.
+    if (gateValue) headers.Cookie = `${name}=${gateValue}`;
     let response;
     try {
-      response = await fetch(`${base}/api/widget/session/from-gate`, {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        credentials: "include",
-        body: "{}",
-        cache: "no-store",
-      });
+      response = await postShopFromGate(base, headers);
     } catch {
-      return { error: "Could not reach the shop from-gate API.", reason: "network" };
+      try {
+        response = await postShopFromGate(base, {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        });
+      } catch {
+        return { error: "Could not reach the shop from-gate API.", reason: "network" };
+      }
     }
 
     let data = null;
@@ -1362,6 +1583,21 @@
         }
       }
       // While both sides are signed in, extend the Firefox gate before it runs out.
+      // A shop tab that already said it is signed out keeps getting a handoff until
+      // that tab reports the page cookie, even when the extension jar looks full.
+      if (has && !siteLatch) {
+        const page = freshPageGateReport();
+        if (page && page.ok === false && Date.now() - lastHandoffAt >= HANDOFF_DEBOUNCE_MS) {
+          await syncToolsSessionToSite({
+            reloadUnlockTabs: true,
+            forceExchange: false,
+            pageSignedIn: false,
+            pagePerson: page.person,
+            tabId: page.tabId,
+            handoffNavigate: true,
+          });
+        }
+      }
       if (has && !siteLatch && !unlockHoldActive()) {
         await tickGateRenewal();
       }
