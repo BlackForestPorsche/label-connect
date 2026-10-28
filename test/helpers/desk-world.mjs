@@ -17,6 +17,7 @@ export function makeWorld() {
     jar: new Map(),
     jarExp: new Map(),
     exchanges: 0,
+    handoffs: 0,
     cookieError: false,
     reloads: [],
     tabUpdates: [],
@@ -89,6 +90,14 @@ export function makeWorld() {
           person: "logan",
           gateToken: "v2.gate",
           expiresAt: new Date(now + 3_600_000).toISOString(),
+        });
+      }
+      if (u.pathname === "/api/widget/session/handoff" && method === "POST") {
+        world.handoffs += 1;
+        const auth = String((init.headers && (init.headers.Authorization || init.headers.authorization)) || "");
+        if (!auth.includes("Bearer ")) return json(401, { error: "unauthorized" });
+        return json(200, {
+          url: "https://shop.blackforestautomotive.com/api/widget/session/handoff/ticket-ticket-ticket-ticket-ticket",
         });
       }
       if (u.pathname === "/api/widget/session/from-gate") {

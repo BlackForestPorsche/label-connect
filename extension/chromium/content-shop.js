@@ -3,8 +3,9 @@
  * Shop site ↔ Desk:
  * - Capture unlock JSON widgetToken when present
  * - Capture website Lock → site-lock → Tools DELETE + POST /v1/lock
- * - On shop page load: Tools→website unlock (Bearer :8788 → exchange → bf_shop_gate)
- *   and from-gate nudge when the jar already has a gate (Desk lot names)
+ * - On shop page load: the page itself POSTs from-gate (SameSite=Lax is visible here)
+ *   and, when that is signed out, opens the Tools handoff so the PIN page gets a
+ *   real Set-Cookie. Extension cookies.set is not a cookie this page will send.
  *
  * Live shop Lock (beta 0.1.36+) posts to `/_serverFn/<hash>` — the client bundle has
  * no `lockShop` string. Matching only lockShop|clearGateSession misses that path, so
@@ -33,28 +34,74 @@
     lastPathname = "";
   }
   let lastReportedSiteLockAt = 0;
+  /** True once this document's own from-gate call saw a shop cookie. */
+  let pageGateOk = false;
+  let pagePullTimer = 0;
+  let pagePullInFlight = null;
+  let nextPagePullAt = 0;
+  let handoffLeaving = false;
 
-  function extractUnlock(raw) {
-    if (typeof raw !== "string" || raw.indexOf("widgetToken") === -1) return null;
-    let data;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      return null;
+  function jsonStringField(raw, key) {
+    const match = new RegExp(`"${key}"\\s*:\\s*"([^"\\\\]*)"`).exec(String(raw || ""));
+    return match ? match[1] : "";
+  }
+
+  function widgetSessionFrom(value, depth) {
+    if (!value || depth > 8) return null;
+    if (typeof value === "string") {
+      if (value.indexOf("widgetToken") === -1) return null;
+      try {
+        return widgetSessionFrom(JSON.parse(value), depth + 1);
+      } catch {
+        return null;
+      }
     }
-    const candidates = [data, data && data.data, data && data.payload, data && data.result].filter(
-      Boolean,
-    );
-    for (const obj of candidates) {
-      if (!obj || !obj.widgetToken || !obj.widgetExpiresAt) continue;
+    if (typeof value !== "object") return null;
+    if (typeof value.widgetToken === "string" && value.widgetToken && value.widgetExpiresAt) {
       return {
-        token: String(obj.widgetToken),
-        expiresAt: String(obj.widgetExpiresAt),
-        person: obj.person ? String(obj.person) : "",
+        token: String(value.widgetToken),
+        expiresAt: String(value.widgetExpiresAt),
+        person: value.person ? String(value.person) : "",
         source: "shop-site",
       };
     }
+    const list = Array.isArray(value) ? value : Object.keys(value).map((key) => value[key]);
+    for (const item of list) {
+      const found = widgetSessionFrom(item, depth + 1);
+      if (found) return found;
+    }
     return null;
+  }
+
+  function extractUnlock(raw) {
+    if (typeof raw !== "string" || raw.indexOf("widgetToken") === -1) return null;
+    try {
+      const found = widgetSessionFrom(JSON.parse(raw), 0);
+      if (found) return found;
+    } catch {
+      // TanStack framed / seroval bodies are not one JSON value.
+    }
+    const token = jsonStringField(raw, "widgetToken");
+    const expiresAt = jsonStringField(raw, "widgetExpiresAt");
+    if (!token || !expiresAt) return null;
+    return {
+      token,
+      expiresAt,
+      person: jsonStringField(raw, "person"),
+      source: "shop-site",
+    };
+  }
+
+  function isHandoffUrl(url) {
+    try {
+      const parsed = new URL(url, location.origin);
+      return (
+        parsed.origin === location.origin &&
+        /^\/api\/widget\/session\/handoff\/[A-Za-z0-9_-]{20,}$/.test(parsed.pathname)
+      );
+    } catch {
+      return false;
+    }
   }
 
   function looksLikeLock(url, method, body) {
@@ -130,23 +177,25 @@
   }
 
   function publish(session) {
-    if (!session) return;
+    if (!session) return Promise.resolve(null);
     lastUnlockResponseAt = Date.now();
     recentServerFnPostAt = 0;
-    if (!runtime?.runtime?.sendMessage) return;
+    pageGateOk = true;
+    if (!runtime?.runtime?.sendMessage) return Promise.resolve(null);
     const send = () =>
       runtime.runtime.sendMessage({ type: "shop-site-session", payload: session });
     try {
       // Website unlock JSON → Desk → POST :8788 (site→Tools). Retry once on reject.
-      Promise.resolve(send())
+      return Promise.resolve(send())
         .catch(() => send())
-        .catch(() => {});
+        .catch(() => null);
     } catch {
-      // ignore
+      return Promise.resolve(null);
     }
   }
 
   function reportSiteLock() {
+    pageGateOk = false;
     const now = Date.now();
     // Soft-nav + fetch can both fire; debounce so Tools gets one DELETE.
     if (now - lastReportedSiteLockAt < 800) return;
@@ -170,6 +219,10 @@
       const path = location.pathname || "";
       const previous = lastPathname;
       lastPathname = path;
+      if (/\/unlock\b/i.test(previous) && !/\/unlock\b/i.test(path)) {
+        pageGateOk = false;
+        schedulePagePull(true);
+      }
       if (!/\/unlock\b/i.test(path)) return;
       // Only a move INTO /unlock is a Lock. Router state writes while already sitting on
       // /unlock (the unlock form itself) are not.
@@ -182,52 +235,39 @@
     }
   }
 
-  function onShopLoadSync() {
-    if (!runtime?.runtime?.sendMessage) return;
+  async function onShopLoadSync() {
+    if (!runtime?.runtime?.sendMessage || handoffLeaving) return;
     const onUnlock = /\/unlock\b/i.test(location.pathname || "");
     try {
-      // Locked /unlock: Tools→site ONLY (never site-session-import remint).
-      // Unlocked pages: site→Tools FIRST so a fresh website unlock publishes to
-      // :8788 before tools-to-site can clear the Firefox gate (unlock flash).
       if (onUnlock) {
         // Delivery fallback: full /unlock load asks background to DELETE+POST
         // if Tools still has a session (skipped during unlock-hold).
-        runtime.runtime
-          .sendMessage({ type: "site-unlock-page" })
-          .catch(() => {});
-        runtime.runtime
-          .sendMessage({
-            type: "tools-to-site-unlock",
-            forceExchange: false,
-            skipSitePublish: true,
-          })
-          .then((response) => {
-            if (response && response.ok && response.shouldReload) {
-              location.reload();
-            }
-          })
-          .catch(() => {});
+        runtime.runtime.sendMessage({ type: "site-unlock-page" }).catch(() => {});
+      }
+      // Page fetch sends SameSite=Lax. Background from-gate does not, so a site
+      // login never reached :8788 and the Desk widget stayed red.
+      const page = await pullPageGate();
+      const response = await runtime.runtime.sendMessage({
+        type: "tools-to-site-unlock",
+        forceExchange: false,
+        pageSignedIn: Boolean(page && page.ok),
+        pagePerson: page && page.person ? page.person : "",
+        handoffNavigate: false,
+      });
+      if (!response || handoffLeaving) return;
+      if (response.handoffUrl && isHandoffUrl(response.handoffUrl)) {
+        handoffLeaving = true;
+        location.assign(response.handoffUrl);
         return;
       }
-      runtime.runtime
-        .sendMessage({ type: "site-session-import" })
-        .catch(() => {})
-        .then(() =>
-          runtime.runtime.sendMessage({
-            type: "tools-to-site-unlock",
-            forceExchange: false,
-          }),
-        )
-        .then((response) => {
-          if (!response) return;
-          if (response.skipped === "unlock_hold" || response.reason === "unlock_hold") return;
-          if (response.locked && response.shouldReload) {
-            location.reload();
-          } else if (response.ok && response.shouldReload) {
-            location.reload();
-          }
-        })
-        .catch(() => {});
+      if (response.skipped === "unlock_hold" || response.reason === "unlock_hold") return;
+      if (response.skipped === "page_signed_in" || response.reason === "page_signed_in") return;
+      if (response.skipped === "handoff_debounce" || response.reason === "handoff_debounce") return;
+      if (response.locked && response.shouldReload) {
+        location.reload();
+      } else if (response.ok && response.shouldReload) {
+        location.reload();
+      }
     } catch {
       // ignore
     }
@@ -264,6 +304,9 @@
             }
             const session = extractUnlock(text);
             if (session) publish(session);
+            else if (!pageGateOk && String(method || "GET").toUpperCase() === "POST") {
+              schedulePagePull(false);
+            }
             // Bare {ok:true} on known lock URL (Tools preload parity / #67).
             if (
               response.ok &&
@@ -494,6 +537,79 @@
       // ignore
     }
   }, 350);
+
+  /**
+   * Same-origin POST so the browser attaches the page's bf_shop_gate.
+   * Returns {ok, person}. Publishes the bearer before resolving when signed in.
+   */
+  function pullPageGate() {
+    if (pagePullInFlight) return pagePullInFlight;
+    pagePullInFlight = pullPageGateOnce().finally(() => {
+      pagePullInFlight = null;
+    });
+    return pagePullInFlight;
+  }
+
+  async function pullPageGateOnce() {
+    let response;
+    try {
+      response = await originalFetch("/api/widget/session/from-gate", {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: "{}",
+        cache: "no-store",
+      });
+    } catch {
+      return { ok: false, reason: "network", person: "" };
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    const token = data && (data.token || data.accessToken || data.bearer || data.widgetToken);
+    if (!response.ok || !token) {
+      pageGateOk = false;
+      return { ok: false, status: response.status, person: "" };
+    }
+    const session = {
+      token: String(token),
+      expiresAt: String(data.expiresAt || data.widgetExpiresAt || ""),
+      person: data.person ? String(data.person) : "",
+      source: "shop-site",
+    };
+    await publish(session);
+    return { ok: true, person: session.person };
+  }
+
+  function schedulePagePull(force) {
+    if (pageGateOk && !force) return;
+    const wait = force ? 250 : Math.max(250, nextPagePullAt - Date.now());
+    window.clearTimeout(pagePullTimer);
+    pagePullTimer = window.setTimeout(() => {
+      nextPagePullAt = Date.now() + 8_000;
+      pullPageGate()
+        .then((page) => {
+          if (!page || !page.ok || !runtime?.runtime?.sendMessage) return;
+          return runtime.runtime.sendMessage({
+            type: "tools-to-site-unlock",
+            forceExchange: false,
+            pageSignedIn: true,
+            pagePerson: page.person || "",
+            handoffNavigate: false,
+          });
+        })
+        .catch(() => {});
+    }, wait);
+  }
+
+  // Site PIN on `/` does not navigate. Keep asking the page jar until it signs in.
+  window.setInterval(() => {
+    if (pageGateOk || handoffLeaving) return;
+    schedulePagePull(false);
+  }, 8_000);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", onShopLoadSync, { once: true });

@@ -50,6 +50,63 @@ test("no Firefox gate reloads the open shop page, not only /unlock", async () =>
   assert.deepEqual(w.world.reloads, [1]);
 });
 
+test("PIN page signed out still handoffs when the extension jar already has the same person", async () => {
+  const w = makeWorld();
+  w.world.jar.set(GATE, "v2.1893456000000.logan.desk.abc");
+  w.world.tabs = [{ id: 7, url: "https://shop.blackforestautomotive.com/unlock" }];
+  w.toolsUnlock();
+  const result = await w.api.syncToolsSessionToSite({
+    reloadUnlockTabs: true,
+    forceExchange: false,
+    pageSignedIn: false,
+    handoffNavigate: true,
+    tabId: 7,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.source, "tools-handoff");
+  assert.equal(w.world.exchanges, 0);
+  assert.equal(w.world.handoffs, 1);
+  assert.equal(w.world.jar.get(GATE), "v2.1893456000000.logan.desk.abc");
+  assert.equal(w.world.reloads.length, 0);
+  assert.equal(w.world.tabUpdates.length, 1);
+  assert.match(w.world.tabUpdates[0].url, /\/api\/widget\/session\/handoff\/[A-Za-z0-9_-]{20,}$/);
+});
+
+test("shop tab handoff URL is not also opened by the background", async () => {
+  const w = makeWorld();
+  w.toolsUnlock();
+  const result = await w.api.syncToolsSessionToSite({
+    reloadUnlockTabs: true,
+    pageSignedIn: false,
+    handoffNavigate: false,
+  });
+  assert.equal(result.ok, true);
+  assert.match(result.handoffUrl, /\/api\/widget\/session\/handoff\/[A-Za-z0-9_-]{20,}$/);
+  assert.equal(w.world.tabUpdates.length, 0);
+  assert.equal(w.world.exchanges, 0);
+  const again = await w.api.syncToolsSessionToSite({
+    pageSignedIn: false,
+    handoffNavigate: false,
+  });
+  assert.equal(again.reason, "handoff_debounce");
+  assert.equal(w.world.handoffs, 1);
+});
+
+test("page signed in while Tools is locked does not clear the shop gate", async () => {
+  const w = makeWorld();
+  w.world.jar.set(GATE, "v2.1893456000000.logan.desk.abc");
+  w.toolsLock();
+  const result = await w.api.syncToolsSessionToSite({
+    reloadUnlockTabs: true,
+    pageSignedIn: true,
+    pagePerson: "logan",
+  });
+  assert.equal(result.skipped, "page_signed_in");
+  assert.equal(result.shouldReload, false);
+  assert.equal(w.world.jar.get(GATE), "v2.1893456000000.logan.desk.abc");
+  assert.equal(w.world.reloads.length, 0);
+});
+
 test("/unlock tab is sent home after Tools fills an empty gate", async () => {
   const w = makeWorld();
   w.world.tabs = [{ id: 7, url: "https://shop.blackforestautomotive.com/unlock?next=/lot" }];
