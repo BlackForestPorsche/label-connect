@@ -1,6 +1,6 @@
 {
-  "version": "0.1.45",
-  "message": "Desk 0.1.45 keeps the shop sign-in when Tools is locked, and a site sign-in reaches Desk by a page navigation. Tools sign-in still takes the shop off the PIN page. Create R/O auto-print is unchanged.",
+  "version": "0.1.46",
+  "message": "Desk 0.1.46 reads the shop sign-in in the page and opens the Tools handoff on the PIN page, including the home screen. Create R/O auto-print is unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }
