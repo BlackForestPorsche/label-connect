@@ -547,6 +547,7 @@
           pagePerson: typeof message.pagePerson === "string" ? message.pagePerson : "",
           handoffNavigate: message.handoffNavigate !== false,
           tabId: message.tabId != null ? message.tabId : senderTab,
+          shopLoad: message.shopLoad === true,
         })
         .then(sendResponse);
       return true;

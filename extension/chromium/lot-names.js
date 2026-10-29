@@ -146,11 +146,9 @@
   /** Page-context report: the shop tab's own cookie, not the extension jar. */
   const PAGE_GATE_REPORT_MS = 120_000;
   const HANDOFF_DEBOUNCE_MS = 10_000;
-  const HANDOFF_MAX_PER_SESSION = 3;
   let lastPageGateReport = null;
   let lastHandoffAt = 0;
   let lastHandoffSessionId = "";
-  let handoffCountForSession = 0;
 
   function notePageGate({ ok, person, tabId } = {}) {
     lastPageGateReport = {
@@ -988,8 +986,10 @@
    * The page jar is not the extension jar. When the shop tab says it is signed
    * out, open the one-time handoff so the server Set-Cookies for that tab.
    * When the shop tab says it just signed in, do not clear its cookie while
-   * Tools is still locked. Extension cookies.set remains the fallback when the
-   * page has not reported and the jar is empty or a different person.
+   * Tools is still locked. A shop load also keeps the cookie: deleting it here
+   * is what signed the site out. An observed Tools lock (session was on, now off)
+   * still clears. Extension cookies.set remains the fallback when the page has
+   * not reported and the jar is empty or a different person.
    * forceExchange=true on explicit Sync Tools (heal stale gate).
    */
   async function syncToolsSessionToSite({
@@ -999,6 +999,7 @@
     pagePerson = "",
     handoffNavigate = true,
     tabId = null,
+    shopLoad = false,
   } = {}) {
     if (typeof pageSignedIn === "boolean") {
       notePageGate({ ok: pageSignedIn, person: pagePerson, tabId });
@@ -1101,6 +1102,17 @@
           siteGate: (await readShopGateCookie()).present,
         };
       }
+      // Shop load, or the first look at a Tools that is already locked. The site
+      // session is its own cookie. Clearing it here sends a signed-in shop back to PIN.
+      if (shopLoad) {
+        return {
+          ok: true,
+          skipped: "shop_load",
+          reason: "shop_load",
+          shouldReload: false,
+          siteGate: (await readShopGateCookie()).present,
+        };
+      }
       const hadGate = (await readShopGateCookie()).present;
       await clearShopGateCookie();
       const stored = await storageGet(["shopWidgetTokenSource"]);
@@ -1174,7 +1186,6 @@
     if (pageSignedIn === false || pageDifferent) {
       const sessionId = String(health.sessionId || lastToolsSessionId || "");
       const nowMs = Date.now();
-      if (sessionId && sessionId !== lastHandoffSessionId) handoffCountForSession = 0;
       const debounced =
         !forceExchange &&
         sessionId &&
@@ -1191,20 +1202,8 @@
           reason: "handoff_debounce",
         };
       }
-      if (!forceExchange && handoffCountForSession >= HANDOFF_MAX_PER_SESSION) {
-        return {
-          ok: true,
-          person: fromTools.person,
-          source: "tools-bridge",
-          siteGate: gateBefore,
-          shouldReload: false,
-          skipped: "handoff_limit",
-          reason: "handoff_limit",
-        };
-      }
       lastHandoffAt = nowMs;
       lastHandoffSessionId = sessionId;
-      handoffCountForSession += 1;
       const handed = await mintShopHandoff(token);
       if (handed.ok) {
         armUnlockHold();
@@ -1224,7 +1223,6 @@
         };
       }
       lastHandoffAt = 0;
-      handoffCountForSession = Math.max(0, handoffCountForSession - 1);
     }
     if (gateBefore && !forceExchange && !differentPerson && !gateRenewalDue() && pageSignedIn !== false) {
       return {
@@ -1485,6 +1483,8 @@
   let lastBridgeHasSession = null;
   let lastBridgeFingerprint = "";
   let bridgeWatchInFlight = false;
+  /** A Tools lock arrived during unlock-hold and must still clear the gate once the hold ends. */
+  let replayToolsLock = false;
 
   async function handleGateCookieRemoved(info = {}) {
     // Unlock bounce: gateToken cookies.set can remove→set; do not lock Tools.
@@ -1558,14 +1558,21 @@
         lastBridgeFingerprint = fp;
         if (first || edge || swapped) {
           mirrorRetries = 0;
+          // Opening on a Tools that is already locked is not a lock click. A shop
+          // sign-in must survive that. A real lock edge, including one replayed
+          // after unlock-hold, still clears the gate.
+          const openingLocked = first && !has && !replayToolsLock;
+          if (replayToolsLock && !has) replayToolsLock = false;
           const synced = await syncToolsSessionToSite({
             reloadUnlockTabs: true,
             forceExchange: has && !swapped,
+            shopLoad: openingLocked,
           });
           if (synced && synced.skipped === "unlock_hold") {
             // Edge was swallowed by the hold. Replay it once the hold ends.
             lastBridgeHasSession = null;
             lastBridgeFingerprint = "";
+            if (!has) replayToolsLock = true;
           } else if (has && synced && !synced.ok && !synced.locked) {
             mirrorRetryAt = Date.now() + MIRROR_RETRY_MS;
           } else {
@@ -1742,7 +1749,7 @@
 
   /**
    * Background happy path:
-   * 1) Tools bridge up + locked → clear Firefox bf_shop_gate (no stale website unlock)
+   * 1) Observed Tools lock → clear Firefox bf_shop_gate. A shop load does not.
    * 2) Tools bridge up + session → import Bearer + exchange into Firefox jar
    * 3) else from-gate (site cookie) then Tools :8788 for Desk lot names
    * Alarm/idle path is throttled; bridge-watch edges bypass this (push on change).
@@ -1768,8 +1775,11 @@
             !unlockHoldActive() &&
             !siteLockQuietActive()
           ) {
-            // Real Tools lock (not mid-website-unlock) — clear stale Firefox gate.
-            return syncToolsSessionToSite({ reloadUnlockTabs: true });
+            // Real Tools lock (not mid-website-unlock). A shop load keeps the site cookie.
+            return syncToolsSessionToSite({
+              reloadUnlockTabs: true,
+              shopLoad: reason === "shop-tab-complete",
+            });
           }
           if (unlockHoldActive() && health.reachable && health.hasSession === false) {
             return { ok: true, skipped: "unlock_hold_throttle", reason };
@@ -1798,7 +1808,11 @@
         const health = await probeToolsBridgeHealth();
         if (health.reachable) {
           // Prefer Tools as source of truth when bridge is up (unlock + lock).
-          const synced = await syncToolsSessionToSite({ reloadUnlockTabs: true });
+          // shop-tab-complete must not delete bf_shop_gate just because Tools is locked.
+          const synced = await syncToolsSessionToSite({
+            reloadUnlockTabs: true,
+            shopLoad: reason === "shop-tab-complete",
+          });
           if (synced.ok) {
             await setPinBadge(false);
             return { ok: true, source: synced.source || "tools-bridge", reason, siteGate: true };
