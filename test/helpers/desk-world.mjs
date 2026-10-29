@@ -115,9 +115,8 @@ export function makeWorld(options = {}) {
         const credentials = String(init.credentials || "");
         const principal = world.fetchPrincipal || "extension";
         world.fromGateCalls.push({ credentials, deskSetCookie, principal });
-        // Firefox strips bf_shop_gate on an extension fetch, including
-        // scripting.executeScript. Only the shop page's own request sends it.
-        if (principal === "page" && credentials === "include" && !deskSetCookie && world.jar.has(GATE)) {
+        // 0.1.42: credentials include sends the jar cookie. A Cookie header is not used.
+        if (credentials === "include" && !deskSetCookie && world.jar.has(GATE)) {
           return json(200, {
             ok: true,
             token: `bearer-site-${++world.mint}`,

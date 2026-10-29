@@ -1,6 +1,6 @@
 {
-  "version": "0.1.49",
-  "message": "Desk 0.1.49 Sync asks the open shop page to POST from-gate with credentials include and return the token. The extension does not POST that request. Create R/O auto-print is unchanged.",
+  "version": "0.1.50",
+  "message": "Desk 0.1.50 restores the 0.1.42 shop sync: read bf_shop_gate, then POST from-gate with credentials include. Create R/O auto-print is unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

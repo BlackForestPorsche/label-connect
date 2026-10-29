@@ -27,20 +27,18 @@ function readBody(req) {
   });
 }
 
-test("Sync asks the shop page to POST from-gate and does not executeScript it", () => {
+test("unlocked shop sync is the 0.1.42 cookies.get then credentials-include from-gate", () => {
   const src = fs.readFileSync(path.join(root, "extension/shared/content-shop.js"), "utf8");
   const lot = fs.readFileSync(path.join(root, "extension/shared/lot-names.js"), "utf8");
-  assert.equal(src.includes("function pagePostFromGate"), true);
-  assert.equal(src.includes('credentials:"include"'), true);
-  assert.equal(src.includes('source:"bf-desk-from-gate"'), true);
-  assert.equal(src.includes('message.type === "page-post-from-gate"'), true);
-  assert.equal(src.includes("event.source"), false);
-  assert.equal(src.includes("pull-shop-gate"), false);
-  assert.equal(src.includes("scripting.executeScript("), false);
-  assert.equal(lot.includes('type: "page-post-from-gate"'), true);
-  assert.equal(lot.includes("scripting.executeScript("), false);
-  assert.equal(lot.includes("readShopGateInPage"), false);
-  assert.equal(lot.includes("headers.Cookie"), false);
+  const fn = lot.slice(lot.indexOf("async function importSiteGateSession"), lot.indexOf("async function importToolsWidgetSession"));
+  assert.equal(src.includes('type: "site-session-import"'), true);
+  assert.equal(src.includes("pagePostFromGate"), false);
+  assert.equal(src.includes("page-post-from-gate"), false);
+  assert.match(fn, /credentials:\s*"include"/);
+  assert.equal(fn.includes("page-post-from-gate"), false);
+  assert.equal(fn.includes("scripting.executeScript("), false);
+  assert.equal(fn.includes("headers.Cookie"), false);
+  assert.equal(fn.includes("Cookie:"), false);
 });
 
 test("an unlocked page sends bf_shop_gate on from-gate; a Desk Cookie header does not", async () => {
@@ -120,7 +118,7 @@ test("an unlocked page sends bf_shop_gate on from-gate; a Desk Cookie header doe
     const credentials = init.credentials || "";
     const principal = init.__principal || "extension";
     let attached = false;
-    if (principal === "page" && credentials === "include" && !deskSetCookie && pageJar.has(GATE)) {
+    if (credentials === "include" && !deskSetCookie && pageJar.has(GATE)) {
       headers.Cookie = `${GATE}=${pageJar.get(GATE)}`;
       attached = true;
     }
@@ -204,17 +202,6 @@ test("an unlocked page sends bf_shop_gate on from-gate; a Desk Cookie header doe
     assert.equal(sent.at(-1).deskSetCookie, true);
     assert.equal(sent.at(-1).attached, false);
 
-    const extensionInclude = await liveFetch(FROM_GATE, {
-      method: "POST",
-      credentials: "include",
-      __principal: "extension",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: "{}",
-    });
-    assert.equal(extensionInclude.status, 401);
-    assert.equal(sent.at(-1).principal, "extension");
-    assert.equal(sent.at(-1).attached, false);
-
     sent.length = 0;
     shopHits.length = 0;
     toolHits.length = 0;
@@ -236,14 +223,12 @@ test("an unlocked page sends bf_shop_gate on from-gate; a Desk Cookie header doe
     assert.equal(w.world.icons.at(-1), "green");
     assert.equal(w.world.jar.get(GATE), GATE_VALUE);
     assert.equal(w.world.pageExecutions.length, 0);
-    assert.equal(w.world.tabMessages.length, 1);
-    assert.equal(w.world.tabMessages[0].type, "page-post-from-gate");
-    assert.equal(w.world.tabMessages[0].tabId, 1);
+    assert.equal(w.world.tabMessages.length, 0);
 
     const posts = sent.filter((hit) => hit.path === "/api/widget/session/from-gate" && hit.method === "POST");
     assert.equal(posts.length, 1);
     assert.equal(posts[0].credentials, "include");
-    assert.equal(posts[0].principal, "page");
+    assert.equal(posts[0].principal, "extension");
     assert.equal(posts[0].deskSetCookie, false);
     assert.equal(posts[0].attached, true);
     const seen = shopHits.filter((hit) => hit.path === "/api/widget/session/from-gate" && hit.method === "POST");
@@ -265,14 +250,9 @@ test("an unlocked page sends bf_shop_gate on from-gate; a Desk Cookie header doe
     assert.equal(blocked.reason, "no_gate_cookie");
     assert.equal(missed.world.storage.shopWidgetToken || "", "");
     assert.equal(missed.world.pageExecutions.length, 0);
-    assert.equal(missed.world.tabMessages[0].type, "page-post-from-gate");
+    assert.equal(missed.world.tabMessages.length, 0);
     const missedPosts = sent.filter((hit) => hit.path === "/api/widget/session/from-gate");
-    assert.equal(missedPosts.length, 1);
-    assert.equal(missedPosts[0].credentials, "include");
-    assert.equal(missedPosts[0].principal, "page");
-    assert.equal(missedPosts[0].deskSetCookie, false);
-    assert.equal(missedPosts[0].attached, false);
-    assert.equal(shopHits[0].hadCookie, false);
+    assert.equal(missedPosts.length, 0);
     assert.equal(toolHits.filter((hit) => hit.path === "/v1/widget-session").length, 0);
   } finally {
     await new Promise((resolve) => shop.close(resolve));
