@@ -3,12 +3,11 @@
  * Shop site ↔ Desk:
  * - Capture unlock JSON widgetToken when present
  * - Capture website Lock → site-lock → Tools DELETE + POST /v1/lock
- * - On shop page load: the page itself POSTs from-gate (SameSite=Lax is sent by the
- *   page, not by an extension fetch or a JSON document). A signed-in response
- *   turns the Desk widget on and is posted to Tools. A signed-out response opens
- *   the Tools handoff so the PIN page, including the home screen, leaves. A shop
- *   load must not delete bf_shop_gate. The page message is matched by origin,
- *   because Firefox does not treat event.source as the content-script window.
+ * - On shop page load, and every few seconds until it succeeds, ask the background
+ *   to run the page's own POST /api/widget/session/from-gate with credentials
+ *   include. That is the request that sends bf_shop_gate. An extension fetch is
+ *   not used. A signed-in response turns the Desk widget on. A signed-out load
+ *   still asks Tools for a handoff. A shop load must not delete bf_shop_gate.
  *
  * Live shop Lock (beta 0.1.36+) posts to `/_serverFn/<hash>` — the client bundle has
  * no `lockShop` string. Matching only lockShop|clearGateSession misses that path, so
@@ -162,6 +161,20 @@
     }
   }
 
+  /**
+   * Live unlock JSON is {ok, person, mustChange, view} and has no widget token.
+   * The isolated fetch hook must not throw on that body.
+   */
+  function looksLikeShopUnlock(url, text) {
+    const raw = typeof text === "string" ? text : "";
+    if (!/"ok"\s*:\s*true/.test(raw)) return false;
+    if (!/"person"\s*:/.test(raw)) return false;
+    if (!/"mustChange"\s*:/.test(raw) && !/"view"\s*:/.test(raw)) return false;
+    if (/widgetToken|from-gate|gateToken/i.test(raw)) return false;
+    if (/from-gate/i.test(String(url || ""))) return false;
+    return true;
+  }
+
   /** lockShop often returns bare {ok:true} with empty body on the request. */
   function looksLikeLockResponse(url, method, text) {
     if (String(method || "GET").toUpperCase() !== "POST") return false;
@@ -246,56 +259,21 @@
   }
 
   /**
-   * Page-world POST. Firefox sends SameSite=Lax for the shop page.
-   * A content-script fetch and a background fetch do not, and the JSON document
-   * from a top-level POST never becomes a Desk session.
+   * Ask the background to run from-gate in the page (credentials include).
+   * The background stores the token. This tab does not fetch it.
    */
-  function pullPageGateInPage() {
-    return new Promise((resolve) => {
-      const requestId = `bf-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      let settled = false;
-      const finish = (result) => {
-        if (settled) return;
-        settled = true;
-        window.removeEventListener("message", onMessage);
-        resolve(result);
-      };
-      const onMessage = (event) => {
-        const data = event && event.data;
-        if (!data || data.source !== "bf-desk-from-gate" || data.requestId !== requestId) return;
-        let origin = "";
-        try {
-          origin = location.origin;
-        } catch {
-          return;
-        }
-        // The page posts this. Firefox content scripts do not see event.source
-        // as their own window, so that check dropped a signed-in from-gate token.
-        if (event.origin !== origin) return;
-        finish({
-          ok: Boolean(data.ok && data.token),
-          token: data.token ? String(data.token) : "",
-          expiresAt: data.expiresAt ? String(data.expiresAt) : "",
-          person: data.person ? String(data.person) : "",
-        });
-      };
-      window.addEventListener("message", onMessage);
-      try {
-        const script = document.createElement("script");
-        script.textContent =
-          "(function(){var id=" +
-          JSON.stringify(requestId) +
-          ";fetch(" +
-          JSON.stringify(FROM_GATE_PATH) +
-          ',{method:"POST",credentials:"include",headers:{"Accept":"application/json","Content-Type":"application/json"},body:"{}"}).then(function(r){return r.json().then(function(data){return {ok:r.ok,data:data};}).catch(function(){return {ok:false,data:null};});}).then(function(payload){var data=payload&&payload.data||{};window.postMessage({source:"bf-desk-from-gate",requestId:id,ok:Boolean(payload&&payload.ok&&data.token),token:data.token||"",expiresAt:data.expiresAt||data.widgetExpiresAt||"",person:data.person||""},location.origin);}).catch(function(){window.postMessage({source:"bf-desk-from-gate",requestId:id,ok:false,token:"",expiresAt:"",person:""},location.origin);});})();';
-        (document.documentElement || document.head).appendChild(script);
-        script.remove();
-      } catch {
-        finish({ ok: false, token: "", expiresAt: "", person: "" });
-        return;
-      }
-      window.setTimeout(() => finish({ ok: false, token: "", expiresAt: "", person: "" }), 4000);
-    });
+  function requestPageGate() {
+    if (!runtime?.runtime?.sendMessage || handoffLeaving || pageGateOk) return Promise.resolve(null);
+    try {
+      return Promise.resolve(runtime.runtime.sendMessage({ type: "pull-shop-gate" }))
+        .then((page) => {
+          if (page && page.ok) pageGateOk = true;
+          return page;
+        })
+        .catch(() => null);
+    } catch {
+      return Promise.resolve(null);
+    }
   }
 
   async function askShopSession() {
@@ -309,26 +287,8 @@
       if (onUnlock) {
         runtime.runtime.sendMessage({ type: "site-unlock-page" }).catch(() => {});
       }
-      const page = await pullPageGateInPage();
-      if (handoffLeaving) return;
-      if (page.ok && page.token) {
-        pageGateOk = true;
-        await publish({
-          token: page.token,
-          expiresAt: page.expiresAt,
-          person: page.person,
-          source: "shop-site",
-        });
-        await runtime.runtime.sendMessage({
-          type: "tools-to-site-unlock",
-          forceExchange: false,
-          pageSignedIn: true,
-          pagePerson: page.person || "",
-          handoffNavigate: false,
-          shopLoad: true,
-        });
-        return;
-      }
+      const page = await requestPageGate();
+      if (handoffLeaving || (page && page.ok)) return;
       pageGateOk = false;
       const response = await runtime.runtime.sendMessage({
         type: "tools-to-site-unlock",
@@ -567,14 +527,7 @@
   if (runtime?.runtime?.onMessage?.addListener) {
     try {
       runtime.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-        if (!message) return false;
-        if (message.type === "pull-shop-gate") {
-          pullPageGateInPage()
-            .then((page) => sendResponse(page))
-            .catch(() => sendResponse({ ok: false, token: "", expiresAt: "", person: "" }));
-          return true;
-        }
-        if (message.type !== "apply-tools-person-settings") return false;
+        if (!message || message.type !== "apply-tools-person-settings") return false;
         sendResponse(applyToolsPersonSettings(message));
         return false;
       });
@@ -635,6 +588,13 @@
       askShopSession();
     }, force ? 200 : 400);
   }
+
+  // Retry the page from-gate while the icon is still red. Not a handoff, and
+  // not the 400ms poll: the shop allows 20 from-gate calls a minute.
+  window.setInterval(() => {
+    if (handoffLeaving || pageGateOk || isFromGateDocument()) return;
+    requestPageGate();
+  }, 4000);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", onShopLoadSync, { once: true });

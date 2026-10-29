@@ -25,6 +25,8 @@ export function makeWorld(options = {}) {
     storage: {},
     bridgeDown: false,
     icons: [],
+    fromGateCalls: [],
+    pageExecutions: [],
   };
 
   const fakeSetTimeout = (fn, ms = 0) => {
@@ -102,12 +104,22 @@ export function makeWorld(options = {}) {
         });
       }
       if (u.pathname === "/api/widget/session/from-gate") {
-        if (!world.jar.has(GATE)) return json(401, { error: "unauthorized" });
-        return json(200, {
-          token: `bearer-site-${++world.mint}`,
-          expiresAt: new Date(now + 3_600_000).toISOString(),
-          person: "logan",
-        });
+        const headers = init.headers || {};
+        const cookieHeader = String(headers.Cookie || headers.cookie || "");
+        const deskSetCookie = cookieHeader.split(";").some((part) => part.trim().startsWith(`${GATE}=`));
+        const credentials = String(init.credentials || "");
+        world.fromGateCalls.push({ credentials, deskSetCookie });
+        // The page jar is attached only for credentials include. A Cookie header
+        // on an extension fetch is not that request.
+        if (credentials === "include" && world.jar.has(GATE)) {
+          return json(200, {
+            ok: true,
+            token: `bearer-site-${++world.mint}`,
+            expiresAt: new Date(now + 3_600_000).toISOString(),
+            person: "logan",
+          });
+        }
+        return json(401, { error: "unauthorized" });
       }
     }
     return json(404, {});
@@ -151,6 +163,15 @@ export function makeWorld(options = {}) {
       remove: async ({ name }) => {
         world.jar.delete(name);
         world.jarExp.delete(name);
+      },
+    },
+    scripting: {
+      executeScript: async ({ target, world: scriptWorld, func }) => {
+        const tabId = target && target.tabId != null ? target.tabId : null;
+        world.pageExecutions.push({ world: scriptWorld || "", tabId });
+        if (scriptWorld !== "MAIN" || typeof func !== "function") return [{ result: { ok: false } }];
+        const result = await func();
+        return [{ result }];
       },
     },
     tabs: {
