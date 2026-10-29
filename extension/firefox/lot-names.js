@@ -514,6 +514,7 @@
     });
     await setPinBadge(false);
     // Website → Tools unlock: push Bearer into :8788 so Tools SPA leaves /unlock.
+    let toolsPublished = false;
     if (
       publishToTools &&
       token &&
@@ -522,13 +523,14 @@
       const expiresIso = Number.isFinite(parsedExpiry)
         ? new Date(parsedExpiry).toISOString()
         : new Date(Date.now() + ttlMs).toISOString();
-      await publishSessionToToolsBridge({
+      const published = await publishSessionToToolsBridge({
         token,
         expiresAt: expiresIso,
         person: normalized,
       });
+      toolsPublished = Boolean(published && published.ok);
     }
-    return { ok: true, person: normalized, source: src };
+    return { ok: true, person: normalized, source: src, toolsPublished };
   }
 
   /**
@@ -680,27 +682,84 @@
     };
   }
 
-  /** Read bf_shop_gate from the default browser profile. Never logs the value. */
-  async function readShopGateCookie() {
+  /**
+   * Host-only bf_shop_gate (path /, no Domain). Firefox Total Cookie Protection
+   * stores that first-party cookie under the shop top-level site. cookies.get
+   * without partitionKey reads a different jar and misses the unlocked page.
+   */
+  function shopGateQueries(base, name) {
+    const url = `${base}/`;
+    const queries = [{ url, name }];
+    try {
+      const topLevelSite = new URL(url).origin;
+      if (topLevelSite) queries.push({ url, name, partitionKey: { topLevelSite } });
+    } catch {
+      // unpartitioned query only
+    }
+    return queries;
+  }
+
+  async function findShopGateCookie() {
     const base = await shopBaseUrl();
     const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
     if (!runtime?.cookies?.get) {
-      return { present: false, unknown: true, reason: "no_cookies_api" };
+      return { present: false, unknown: true, reason: "no_cookies_api", value: "", person: "" };
     }
-    try {
-      const cookie = await runtime.cookies.get({ url: `${base}/`, name });
-      if (cookie && cookie.value) {
-        markGateSeen(true);
-        noteGateExpiry(
-          Number.isFinite(cookie.expirationDate) ? cookie.expirationDate * 1000 : 0,
-        );
-        return { present: true, person: personFromGateValue(cookie.value) };
+    const queries = shopGateQueries(base, name);
+    let failures = 0;
+    const consider = (cookie, partitioned) => {
+      if (!cookie || !cookie.value) return null;
+      markGateSeen(true);
+      noteGateExpiry(
+        Number.isFinite(cookie.expirationDate) ? cookie.expirationDate * 1000 : 0,
+      );
+      return {
+        present: true,
+        value: String(cookie.value),
+        person: personFromGateValue(cookie.value),
+        partitioned: Boolean(partitioned),
+      };
+    };
+    for (const query of queries) {
+      try {
+        const found = consider(await runtime.cookies.get(query), query.partitionKey);
+        if (found) return found;
+      } catch {
+        failures += 1;
       }
-      return { present: false, person: "", reason: "missing" };
-    } catch {
-      // A failed read is "don't know", never "the site is locked".
-      return { present: false, unknown: true, reason: "cookie_error" };
     }
+    if (runtime.cookies.getAll) {
+      for (const query of queries) {
+        try {
+          const details = query.partitionKey
+            ? { name, partitionKey: query.partitionKey }
+            : { url: query.url, name };
+          const all = await runtime.cookies.getAll(details);
+          const cookie = (all || []).find((item) => item && item.value);
+          const found = consider(cookie, query.partitionKey);
+          if (found) return found;
+        } catch {
+          failures += 1;
+        }
+      }
+    }
+    const attempts = queries.length * (runtime.cookies.getAll ? 2 : 1);
+    if (failures === attempts) {
+      return { present: false, unknown: true, reason: "cookie_error", value: "", person: "" };
+    }
+    return { present: false, value: "", person: "", reason: "missing" };
+  }
+
+  /** Read bf_shop_gate from the default browser profile. Never logs the value. */
+  async function readShopGateCookie() {
+    const found = await findShopGateCookie();
+    return {
+      present: Boolean(found.present),
+      person: found.person || "",
+      unknown: Boolean(found.unknown),
+      reason: found.reason,
+      partitioned: Boolean(found.partitioned),
+    };
   }
 
   /**
@@ -755,12 +814,16 @@
     deskGateWriteUntil = Date.now() + DESK_GATE_WRITE_MS;
     markGateSeen(false);
     noteGateExpiry(0);
-    try {
-      await runtime.cookies.remove({ url: `${base}/`, name });
-      return { ok: true };
-    } catch {
-      return { ok: false, reason: "remove_failed" };
+    let removed = false;
+    for (const query of shopGateQueries(base, name)) {
+      try {
+        await runtime.cookies.remove(query);
+        removed = true;
+      } catch {
+        // try the other jar
+      }
     }
+    return removed ? { ok: true } : { ok: false, reason: "remove_failed" };
   }
 
   /**
@@ -789,11 +852,18 @@
     lastDeskGateValue = String(value);
     // Shop writes SameSite=Lax on shop.blackforestautomotive.com. None is only
     // for a different host. Try Lax first so the page's gate check receives it.
+    let topLevelSite = "";
+    try {
+      topLevelSite = new URL(`${base}/`).origin;
+    } catch {
+      topLevelSite = "";
+    }
     const attempts = [
+      topLevelSite ? { ...details, sameSite: "lax", partitionKey: { topLevelSite } } : null,
       { ...details, sameSite: "lax" },
       { ...details, sameSite: "no_restriction" },
       { ...details },
-    ];
+    ].filter(Boolean);
     for (const attempt of attempts) {
       try {
         await runtime.cookies.set(attempt);
@@ -1026,6 +1096,7 @@
     handoffNavigate = true,
     tabId = null,
     shopLoad = false,
+    observedToolsLock = false,
   } = {}) {
     if (typeof pageSignedIn === "boolean") {
       notePageGate({ ok: pageSignedIn, person: pagePerson, tabId });
@@ -1117,27 +1188,39 @@
           siteGate: (await readShopGateCookie()).present,
         };
       }
-      // Shop tab just signed in. Tools health has not caught up. Do not wipe the
-      // cookie the page needs, or the Desk widget never receives that login.
-      if (pageSignedIn === true) {
-        return {
-          ok: true,
-          skipped: "page_signed_in",
-          reason: "page_signed_in",
-          shouldReload: false,
-          siteGate: (await readShopGateCookie()).present,
-        };
-      }
-      // Shop load, or the first look at a Tools that is already locked. The site
-      // session is its own cookie. Clearing it here sends a signed-in shop back to PIN.
-      if (shopLoad) {
-        return {
-          ok: true,
-          skipped: "shop_load",
-          reason: "shop_load",
-          shouldReload: false,
-          siteGate: (await readShopGateCookie()).present,
-        };
+      // Not a Tools lock click. An unlocked shop page (cookie in the page jar,
+      // including Firefox's first-party partition) must sign Tools and Desk in.
+      // A shop load that cannot see a session still must not delete the cookie.
+      if (!observedToolsLock) {
+        const imported = await importSiteGateSession();
+        if (imported && imported.ok && imported.toolsPublished !== false) {
+          return {
+            ok: true,
+            person: imported.person || "",
+            source: "site-gate",
+            reason: "site_signed_in",
+            shouldReload: false,
+            siteGate: true,
+          };
+        }
+        if (pageSignedIn === true) {
+          return {
+            ok: true,
+            skipped: "page_signed_in",
+            reason: "page_signed_in",
+            shouldReload: false,
+            siteGate: (await readShopGateCookie()).present,
+          };
+        }
+        if (shopLoad || pageSignedIn !== false) {
+          return {
+            ok: true,
+            skipped: shopLoad ? "shop_load" : "tools_already_locked",
+            reason: shopLoad ? "shop_load" : "tools_already_locked",
+            shouldReload: false,
+            siteGate: (await readShopGateCookie()).present,
+          };
+        }
       }
       const hadGate = (await readShopGateCookie()).present;
       await clearShopGateCookie();
@@ -1285,15 +1368,38 @@
   }
 
   async function shopGateCookieValue() {
-    const base = await shopBaseUrl();
-    const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
-    if (!runtime?.cookies?.get) return "";
+    const found = await findShopGateCookie();
+    return found.value || "";
+  }
+
+  /**
+   * Ask an open shop tab to POST from-gate in the page. That fetch sends
+   * SameSite=Lax. An extension fetch does not, and a Cookie header may be dropped.
+   */
+  async function pullGateTokenFromShopTabs() {
+    if (!runtime?.tabs?.query || !runtime?.tabs?.sendMessage) return null;
+    let tabs = [];
     try {
-      const cookie = await runtime.cookies.get({ url: `${base}/`, name });
-      return cookie && cookie.value ? String(cookie.value) : "";
+      tabs = await runtime.tabs.query({ url: ["https://shop.blackforestautomotive.com/*"] });
     } catch {
-      return "";
+      return null;
     }
+    for (const tab of tabs || []) {
+      if (tab?.id == null) continue;
+      try {
+        const page = await runtime.tabs.sendMessage(tab.id, { type: "pull-shop-gate" });
+        if (page && page.ok && page.token) {
+          return {
+            token: String(page.token),
+            expiresAt: page.expiresAt ? String(page.expiresAt) : "",
+            person: page.person ? String(page.person) : "",
+          };
+        }
+      } catch {
+        // tab has no content script yet
+      }
+    }
+    return null;
   }
 
   async function postShopFromGate(base, headers) {
@@ -1320,6 +1426,19 @@
       // A just-unlocked shop page can race tab-complete auto-unlock before from-gate
       // lands in Tools. Hold until Tools shows the session (probe releases it).
       armUnlockHold();
+    }
+    const fromPage = await pullGateTokenFromShopTabs();
+    if (fromPage && fromPage.token) {
+      if (epoch !== latchEpoch) {
+        return { error: "Website was locked mid-import.", reason: "site_locked" };
+      }
+      return storeWidgetToken({
+        token: fromPage.token,
+        expiresAt: fromPage.expiresAt,
+        person: fromPage.person,
+        source: "site-gate",
+        publishToTools: true,
+      });
     }
     if (!gate.present) {
       return {
@@ -1588,11 +1707,13 @@
           // sign-in must survive that. A real lock edge, including one replayed
           // after unlock-hold, still clears the gate.
           const openingLocked = first && !has && !replayToolsLock;
+          const observedToolsLock = !has && !openingLocked;
           if (replayToolsLock && !has) replayToolsLock = false;
           const synced = await syncToolsSessionToSite({
             reloadUnlockTabs: true,
             forceExchange: has && !swapped,
             shopLoad: openingLocked,
+            observedToolsLock,
           });
           if (synced && synced.skipped === "unlock_hold") {
             // Edge was swallowed by the hold. Replay it once the hold ends.
@@ -1843,9 +1964,12 @@
             reloadUnlockTabs: true,
             shopLoad: reason === "shop-tab-complete",
           });
-          if (synced.ok) {
+          if (synced.ok && !synced.skipped) {
             await setPinBadge(false);
             return { ok: true, source: synced.source || "tools-bridge", reason, siteGate: true };
+          }
+          if (synced.ok && synced.skipped) {
+            return { ...synced, reason: reason || synced.reason };
           }
           if (synced.locked) {
             return { ...synced, reason: reason || synced.reason };

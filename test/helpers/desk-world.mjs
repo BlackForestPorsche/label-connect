@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 export const GATE = "bf_shop_gate";
 
-export function makeWorld() {
+export function makeWorld(options = {}) {
   let now = 1_800_000_000_000;
   let timerId = 0;
   const timers = new Map();
@@ -41,6 +41,7 @@ export function makeWorld() {
   });
 
   async function fakeFetch(url, init = {}) {
+    if (typeof options.liveFetch === "function") return options.liveFetch(url, init);
     const method = String(init.method || "GET").toUpperCase();
     const u = new URL(url);
     if (u.hostname === "127.0.0.1") {
@@ -125,12 +126,22 @@ export function makeWorld() {
       },
     },
     cookies: {
-      get: async ({ name }) => {
+      get: async ({ name, partitionKey }) => {
         if (world.cookieError) throw new Error("cookie store unavailable");
+        world.cookieGets = world.cookieGets || [];
+        world.cookieGets.push(partitionKey && partitionKey.topLevelSite ? partitionKey.topLevelSite : "");
+        if (world.partitionOnly) {
+          const site = partitionKey && partitionKey.topLevelSite;
+          if (site !== "https://shop.blackforestautomotive.com") return null;
+        }
         if (!world.jar.has(name)) return null;
         const cookie = { name, value: world.jar.get(name) };
         if (world.jarExp.has(name)) cookie.expirationDate = world.jarExp.get(name);
         return cookie;
+      },
+      getAll: async (details = {}) => {
+        const one = await runtime.cookies.get(details);
+        return one ? [one] : [];
       },
       set: async ({ name, value, expirationDate }) => {
         world.jar.set(name, value);
