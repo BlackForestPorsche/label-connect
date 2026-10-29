@@ -1,6 +1,6 @@
 {
-  "version": "0.1.48",
-  "message": "Desk 0.1.48 asks the shop page to POST from-gate with credentials include so Firefox sends bf_shop_gate. An extension fetch is not used. Create R/O auto-print is unchanged.",
+  "version": "0.1.49",
+  "message": "Desk 0.1.49 Sync asks the open shop page to POST from-gate with credentials include and return the token. The extension does not POST that request. Create R/O auto-print is unchanged.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }
