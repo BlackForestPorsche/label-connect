@@ -3,9 +3,10 @@
  * Shop site ↔ Desk:
  * - Capture unlock JSON widgetToken when present
  * - Capture website Lock → site-lock → Tools DELETE + POST /v1/lock
- * - On shop page load: the page itself POSTs from-gate (SameSite=Lax is visible here)
- *   and, when that is signed out, opens the Tools handoff so the PIN page gets a
- *   real Set-Cookie. Extension cookies.set is not a cookie this page will send.
+ * - On shop page load: a top-level POST to from-gate (SameSite=Lax rides a page
+ *   navigation; a content-script or background fetch stays 401). When that page
+ *   is signed out and Tools is signed in, open the one-time handoff so the PIN
+ *   page leaves. A shop load must not delete bf_shop_gate.
  *
  * Live shop Lock (beta 0.1.36+) posts to `/_serverFn/<hash>` — the client bundle has
  * no `lockShop` string. Matching only lockShop|clearGateSession misses that path, so
@@ -37,9 +38,11 @@
   /** True once this document's own from-gate call saw a shop cookie. */
   let pageGateOk = false;
   let pagePullTimer = 0;
-  let pagePullInFlight = null;
-  let nextPagePullAt = 0;
   let handoffLeaving = false;
+  const FROM_GATE_PATH = "/api/widget/session/from-gate";
+  const RETURN_KEY = "bf-desk-return";
+  const RESULT_KEY = "bf-desk-from-gate-result";
+  const TRIED_KEY = "bf-desk-from-gate-tried";
 
   function jsonStringField(raw, key) {
     const match = new RegExp(`"${key}"\\s*:\\s*"([^"\\\\]*)"`).exec(String(raw || ""));
@@ -235,8 +238,173 @@
     }
   }
 
+  function storageGetItem(key) {
+    try {
+      return sessionStorage.getItem(key) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function storageSetItem(key, value) {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      // ignore
+    }
+  }
+
+  function storageRemoveItem(key) {
+    try {
+      sessionStorage.removeItem(key);
+    } catch {
+      // ignore
+    }
+  }
+
+  function isFromGateDocument() {
+    try {
+      return String(location.pathname || "").replace(/\/+$/, "") === FROM_GATE_PATH;
+    } catch {
+      return false;
+    }
+  }
+
+  function safeReturnUrl(raw) {
+    try {
+      const url = new URL(raw || "/", location.origin);
+      if (url.origin !== location.origin) return `${location.origin}/`;
+      if (url.pathname.replace(/\/+$/, "") === FROM_GATE_PATH) return `${location.origin}/`;
+      return url.href;
+    } catch {
+      return `${location.origin}/`;
+    }
+  }
+
+  function sessionFromGateText(raw) {
+    const text = String(raw || "");
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      const start = text.indexOf("{");
+      const end = text.lastIndexOf("}");
+      if (start >= 0 && end > start) {
+        try {
+          data = JSON.parse(text.slice(start, end + 1));
+        } catch {
+          data = null;
+        }
+      }
+    }
+    if (!data || typeof data !== "object") return null;
+    const token = data.token || data.accessToken || data.bearer || data.widgetToken;
+    if (!token) return null;
+    return {
+      token: String(token),
+      expiresAt: String(data.expiresAt || data.widgetExpiresAt || ""),
+      person: data.person ? String(data.person) : "",
+      source: "shop-site",
+    };
+  }
+
+  function waitForDocumentBody() {
+    if (document.body) return Promise.resolve();
+    return new Promise((resolve) => {
+      document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+    });
+  }
+
+  async function finishFromGateDocument() {
+    await waitForDocumentBody();
+    let text = "";
+    try {
+      text = document.body ? document.body.innerText || document.body.textContent || "" : "";
+    } catch {
+      text = "";
+    }
+    const session = sessionFromGateText(text);
+    if (session) await publish(session);
+    storageSetItem(
+      RESULT_KEY,
+      JSON.stringify({
+        ok: Boolean(session),
+        person: session ? session.person : "",
+        at: Date.now(),
+      }),
+    );
+    const back = safeReturnUrl(storageGetItem(RETURN_KEY));
+    storageRemoveItem(RETURN_KEY);
+    location.replace(back);
+  }
+
+  function takeFromGateResult() {
+    const raw = storageGetItem(RESULT_KEY);
+    if (!raw) return null;
+    storageRemoveItem(RESULT_KEY);
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      if (Date.now() - Number(parsed.at || 0) > 60_000) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function triedFromGate() {
+    return storageGetItem(TRIED_KEY) === "1";
+  }
+
+  function markTriedFromGate() {
+    storageSetItem(TRIED_KEY, "1");
+  }
+
+  function clearTriedFromGate() {
+    storageRemoveItem(TRIED_KEY);
+  }
+
+  function submitFromGateForm() {
+    const go = () => {
+      try {
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = FROM_GATE_PATH;
+        const parent = document.body || document.documentElement;
+        if (!parent) return;
+        parent.appendChild(form);
+        form.submit();
+      } catch {
+        // ignore
+      }
+    };
+    if (document.body || document.documentElement) go();
+    else document.addEventListener("DOMContentLoaded", go, { once: true });
+  }
+
+  /** Top-level same-origin POST. Firefox attaches SameSite=Lax. A fetch does not. */
+  function beginFromGateNavigation() {
+    if (handoffLeaving || isFromGateDocument() || triedFromGate()) return false;
+    markTriedFromGate();
+    storageSetItem(RETURN_KEY, location.href);
+    submitFromGateForm();
+    return true;
+  }
+
+  function looksLikeShopUnlock(url, text) {
+    if (typeof text !== "string" || !text) return false;
+    if (looksLikeLock(url, "POST", text)) return false;
+    if (/widgetToken|from-gate|gateToken/i.test(text)) return false;
+    return /"ok"\s*:\s*true/.test(text) && /"person"\s*:/.test(text) && /"mustChange"|"view"/.test(text);
+  }
+
   async function onShopLoadSync() {
     if (!runtime?.runtime?.sendMessage || handoffLeaving) return;
+    if (isFromGateDocument()) {
+      await finishFromGateDocument();
+      return;
+    }
+    const prior = takeFromGateResult();
     const onUnlock = /\/unlock\b/i.test(location.pathname || "");
     try {
       if (onUnlock) {
@@ -244,30 +412,39 @@
         // if Tools still has a session (skipped during unlock-hold).
         runtime.runtime.sendMessage({ type: "site-unlock-page" }).catch(() => {});
       }
-      // Page fetch sends SameSite=Lax. Background from-gate does not, so a site
-      // login never reached :8788 and the Desk widget stayed red.
-      const page = await pullPageGate();
-      const response = await runtime.runtime.sendMessage({
-        type: "tools-to-site-unlock",
-        forceExchange: false,
-        pageSignedIn: Boolean(page && page.ok),
-        pagePerson: page && page.person ? page.person : "",
-        handoffNavigate: false,
-      });
-      if (!response || handoffLeaving) return;
-      if (response.handoffUrl && isHandoffUrl(response.handoffUrl)) {
-        handoffLeaving = true;
-        location.assign(response.handoffUrl);
+      if (prior && prior.ok) {
+        pageGateOk = true;
+        clearTriedFromGate();
+        await runtime.runtime.sendMessage({
+          type: "tools-to-site-unlock",
+          forceExchange: false,
+          pageSignedIn: true,
+          pagePerson: prior.person || "",
+          handoffNavigate: false,
+          shopLoad: true,
+        });
+        if (onUnlock) location.replace(`${location.origin}/`);
         return;
       }
-      if (response.skipped === "unlock_hold" || response.reason === "unlock_hold") return;
-      if (response.skipped === "page_signed_in" || response.reason === "page_signed_in") return;
-      if (response.skipped === "handoff_debounce" || response.reason === "handoff_debounce") return;
-      if (response.locked && response.shouldReload) {
-        location.reload();
-      } else if (response.ok && response.shouldReload) {
-        location.reload();
+      if (prior && prior.ok === false) {
+        // Site cookie was not accepted. Tools signed in must still leave the PIN.
+        const response = await runtime.runtime.sendMessage({
+          type: "tools-to-site-unlock",
+          forceExchange: false,
+          pageSignedIn: false,
+          pagePerson: "",
+          handoffNavigate: false,
+          shopLoad: true,
+        });
+        if (!response || handoffLeaving) return;
+        if (response.handoffUrl && isHandoffUrl(response.handoffUrl)) {
+          handoffLeaving = true;
+          clearTriedFromGate();
+          location.assign(response.handoffUrl);
+        }
+        return;
       }
+      beginFromGateNavigation();
     } catch {
       // ignore
     }
@@ -304,9 +481,7 @@
             }
             const session = extractUnlock(text);
             if (session) publish(session);
-            else if (!pageGateOk && String(method || "GET").toUpperCase() === "POST") {
-              schedulePagePull(false);
-            }
+            else if (looksLikeShopUnlock(url, text)) schedulePagePull(true);
             // Bare {ok:true} on known lock URL (Tools preload parity / #67).
             if (
               response.ok &&
@@ -349,6 +524,7 @@
         }
         const session = extractUnlock(this.responseText);
         if (session) publish(session);
+        else if (looksLikeShopUnlock(this.__bfUrl, this.responseText)) schedulePagePull(true);
       } catch {
         // ignore
       }
@@ -539,77 +715,19 @@
   }, 350);
 
   /**
-   * Same-origin POST so the browser attaches the page's bf_shop_gate.
-   * Returns {ok, person}. Publishes the bearer before resolving when signed in.
+   * After a shop PIN success that did not include a widget token, leave the page
+   * once for from-gate. A repeating fetch never sends SameSite=Lax.
    */
-  function pullPageGate() {
-    if (pagePullInFlight) return pagePullInFlight;
-    pagePullInFlight = pullPageGateOnce().finally(() => {
-      pagePullInFlight = null;
-    });
-    return pagePullInFlight;
-  }
-
-  async function pullPageGateOnce() {
-    let response;
-    try {
-      response = await originalFetch("/api/widget/session/from-gate", {
-        method: "POST",
-        credentials: "include",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: "{}",
-        cache: "no-store",
-      });
-    } catch {
-      return { ok: false, reason: "network", person: "" };
-    }
-    let data = null;
-    try {
-      data = await response.json();
-    } catch {
-      data = null;
-    }
-    const token = data && (data.token || data.accessToken || data.bearer || data.widgetToken);
-    if (!response.ok || !token) {
-      pageGateOk = false;
-      return { ok: false, status: response.status, person: "" };
-    }
-    const session = {
-      token: String(token),
-      expiresAt: String(data.expiresAt || data.widgetExpiresAt || ""),
-      person: data.person ? String(data.person) : "",
-      source: "shop-site",
-    };
-    await publish(session);
-    return { ok: true, person: session.person };
-  }
-
   function schedulePagePull(force) {
+    if (handoffLeaving || isFromGateDocument()) return;
     if (pageGateOk && !force) return;
-    const wait = force ? 250 : Math.max(250, nextPagePullAt - Date.now());
     window.clearTimeout(pagePullTimer);
     pagePullTimer = window.setTimeout(() => {
-      nextPagePullAt = Date.now() + 8_000;
-      pullPageGate()
-        .then((page) => {
-          if (!page || !page.ok || !runtime?.runtime?.sendMessage) return;
-          return runtime.runtime.sendMessage({
-            type: "tools-to-site-unlock",
-            forceExchange: false,
-            pageSignedIn: true,
-            pagePerson: page.person || "",
-            handoffNavigate: false,
-          });
-        })
-        .catch(() => {});
-    }, wait);
+      if (handoffLeaving || isFromGateDocument() || pageGateOk) return;
+      if (force) clearTriedFromGate();
+      beginFromGateNavigation();
+    }, force ? 200 : 400);
   }
-
-  // Site PIN on `/` does not navigate. Keep asking the page jar until it signs in.
-  window.setInterval(() => {
-    if (pageGateOk || handoffLeaving) return;
-    schedulePagePull(false);
-  }, 8_000);
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", onShopLoadSync, { once: true });

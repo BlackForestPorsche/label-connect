@@ -107,6 +107,61 @@ test("page signed in while Tools is locked does not clear the shop gate", async 
   assert.equal(w.world.reloads.length, 0);
 });
 
+test("shop load while Tools is locked keeps the shop gate", async () => {
+  const w = makeWorld();
+  w.world.jar.set(GATE, "v2.1893456000000.logan.desk.abc");
+  w.toolsLock();
+  const result = await w.api.syncToolsSessionToSite({
+    reloadUnlockTabs: true,
+    shopLoad: true,
+  });
+  assert.equal(result.skipped, "shop_load");
+  assert.equal(result.shouldReload, false);
+  assert.notEqual(result.reason, "tools_locked");
+  assert.equal(w.world.jar.get(GATE), "v2.1893456000000.logan.desk.abc");
+  assert.equal(w.world.reloads.length, 0);
+});
+
+test("shop load on the PIN page still handoffs when Tools is signed in", async () => {
+  const w = makeWorld();
+  w.world.jar.set(GATE, "v2.1893456000000.logan.desk.abc");
+  w.world.tabs = [{ id: 7, url: "https://shop.blackforestautomotive.com/unlock" }];
+  w.toolsUnlock();
+  const result = await w.api.syncToolsSessionToSite({
+    reloadUnlockTabs: true,
+    forceExchange: false,
+    pageSignedIn: false,
+    handoffNavigate: false,
+    shopLoad: true,
+    tabId: 7,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.source, "tools-handoff");
+  assert.match(result.handoffUrl, /\/api\/widget\/session\/handoff\/[A-Za-z0-9_-]{20,}$/);
+  assert.equal(w.world.handoffs, 1);
+  assert.equal(w.world.exchanges, 0);
+  assert.equal(w.world.tabUpdates.length, 0);
+});
+
+test("shop tab complete while Tools is locked does not clear the shop gate", async () => {
+  const w = makeWorld();
+  w.world.jar.set(GATE, "v2.1893456000000.logan.desk.abc");
+  w.toolsLock();
+  const result = await w.api.tryAutoUnlock({ force: false, reason: "shop-tab-complete" });
+  assert.notEqual(result.reason, "tools_locked");
+  assert.equal(w.world.jar.get(GATE), "v2.1893456000000.logan.desk.abc");
+  assert.equal(w.world.reloads.length, 0);
+});
+
+test("first look at a locked Tools does not clear the shop gate", async () => {
+  const w = makeWorld();
+  w.world.jar.set(GATE, "v2.1893456000000.logan.desk.abc");
+  w.toolsLock();
+  await w.api.tickBridgeSyncPoll();
+  assert.equal(w.world.jar.get(GATE), "v2.1893456000000.logan.desk.abc");
+  assert.equal(w.world.reloads.length, 0);
+});
+
 test("/unlock tab is sent home after Tools fills an empty gate", async () => {
   const w = makeWorld();
   w.world.tabs = [{ id: 7, url: "https://shop.blackforestautomotive.com/unlock?next=/lot" }];
