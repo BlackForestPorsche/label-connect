@@ -1373,11 +1373,64 @@
   }
 
   /**
-   * Ask an open shop tab to POST from-gate in the page. That fetch sends
-   * SameSite=Lax. An extension fetch does not, and a Cookie header may be dropped.
+   * Runs in the shop page (scripting world MAIN). Firefox attaches SameSite=Lax
+   * bf_shop_gate only for this page fetch. An extension fetch, including one
+   * that sets a Cookie header, does not.
    */
+  async function readShopGateInPage() {
+    const origin =
+      typeof location !== "undefined" && location && location.origin
+        ? location.origin
+        : "https://shop.blackforestautomotive.com";
+    try {
+      const response = await fetch(`${origin}/api/widget/session/from-gate`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: "{}",
+        cache: "no-store",
+      });
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      if (!response.ok || !data || !data.token) return { ok: false };
+      return {
+        ok: true,
+        token: String(data.token),
+        expiresAt: String(data.expiresAt || data.widgetExpiresAt || ""),
+        person: String(data.person || ""),
+      };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  async function pullShopGateFromTab(tabId) {
+    if (tabId == null || !runtime?.scripting?.executeScript) return null;
+    let injected;
+    try {
+      injected = await runtime.scripting.executeScript({
+        target: { tabId },
+        world: "MAIN",
+        func: readShopGateInPage,
+      });
+    } catch {
+      return null;
+    }
+    const result = injected && injected[0] && injected[0].result;
+    if (!result || !result.ok || !result.token) return null;
+    return {
+      token: String(result.token),
+      expiresAt: result.expiresAt ? String(result.expiresAt) : "",
+      person: result.person ? String(result.person) : "",
+    };
+  }
+
   async function pullGateTokenFromShopTabs() {
-    if (!runtime?.tabs?.query || !runtime?.tabs?.sendMessage) return null;
+    if (!runtime?.tabs?.query) return null;
     let tabs = [];
     try {
       tabs = await runtime.tabs.query({ url: ["https://shop.blackforestautomotive.com/*"] });
@@ -1386,129 +1439,42 @@
     }
     for (const tab of tabs || []) {
       if (tab?.id == null) continue;
-      try {
-        const page = await runtime.tabs.sendMessage(tab.id, { type: "pull-shop-gate" });
-        if (page && page.ok && page.token) {
-          return {
-            token: String(page.token),
-            expiresAt: page.expiresAt ? String(page.expiresAt) : "",
-            person: page.person ? String(page.person) : "",
-          };
-        }
-      } catch {
-        // tab has no content script yet
-      }
+      const page = await pullShopGateFromTab(tab.id);
+      if (page && page.token) return page;
     }
     return null;
   }
 
-  async function postShopFromGate(base, headers) {
-    return fetch(`${base}/api/widget/session/from-gate`, {
-      method: "POST",
-      headers,
-      credentials: "include",
-      body: "{}",
-      cache: "no-store",
-    });
-  }
-
-  /**
-   * Website shop session → Desk Bearer via POST /api/widget/session/from-gate.
-   * Degrades cleanly when the route is missing (404/406): falls back to Tools/PIN.
-   * Background fetch does not send SameSite=Lax, so this passes the jar value when
-   * cookies.get can see it. The shop tab's own fetch is what sees a real site login.
-   */
-  async function importSiteGateSession() {
+  async function adoptPageShopGate(tabId) {
     await latchReady;
     const epoch = latchEpoch;
-    const gate = await readShopGateCookie();
-    if (gate.present) {
-      // A just-unlocked shop page can race tab-complete auto-unlock before from-gate
-      // lands in Tools. Hold until Tools shows the session (probe releases it).
-      armUnlockHold();
+    const page = tabId != null ? await pullShopGateFromTab(tabId) : await pullGateTokenFromShopTabs();
+    if (epoch !== latchEpoch) {
+      return { error: "Website was locked mid-import.", reason: "site_locked" };
     }
-    const fromPage = await pullGateTokenFromShopTabs();
-    if (fromPage && fromPage.token) {
-      if (epoch !== latchEpoch) {
-        return { error: "Website was locked mid-import.", reason: "site_locked" };
-      }
-      return storeWidgetToken({
-        token: fromPage.token,
-        expiresAt: fromPage.expiresAt,
-        person: fromPage.person,
-        source: "site-gate",
-        publishToTools: true,
-      });
-    }
-    if (!gate.present) {
+    if (!page || !page.token) {
       return {
         error:
           "Shop site is not signed in in this browser profile. Unlock shop.blackforestautomotive.com first.",
         reason: "no_gate_cookie",
       };
     }
-
-    const base = await shopBaseUrl();
-    const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
-    const gateValue = await shopGateCookieValue();
-    const headers = { Accept: "application/json", "Content-Type": "application/json" };
-    // Extension fetch does not attach SameSite=Lax. Send the jar value when we have it.
-    // The page's own from-gate call is the path that actually sees the site login.
-    if (gateValue) headers.Cookie = `${name}=${gateValue}`;
-    let response;
-    try {
-      response = await postShopFromGate(base, headers);
-    } catch {
-      try {
-        response = await postShopFromGate(base, {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        });
-      } catch {
-        return { error: "Could not reach the shop from-gate API.", reason: "network" };
-      }
-    }
-
-    let data = null;
-    try {
-      data = await response.json();
-    } catch {
-      data = null;
-    }
-
-    if (response.status === 404 || response.status === 406) {
-      return {
-        error:
-          "Shop is signed in, but from-gate is not on the site yet. Unlock Tools or enter desk PIN (Grok paste: grok-widget-from-gate).",
-        reason: "from_gate_missing",
-        gatePresent: true,
-      };
-    }
-    if (response.status === 401 || response.status === 403) {
-      return {
-        error: "Shop cookie was rejected. Unlock the shop site again in this browser profile.",
-        reason: "unauthorized",
-      };
-    }
-    if (!response.ok) {
-      return {
-        error: friendlyWidgetError(data && data.error, response.status),
-        reason: "from_gate_error",
-      };
-    }
-
-    if (epoch !== latchEpoch) {
-      return { error: "Website was locked mid-import.", reason: "site_locked" };
-    }
-    const token = data?.token || data?.accessToken || data?.bearer || data?.widgetToken;
-    const expiresAt = data?.expiresAt || data?.widgetExpiresAt;
-    if (!token) return { error: "from-gate returned no token.", reason: "bad_payload" };
+    armUnlockHold();
     return storeWidgetToken({
-      token,
-      expiresAt,
-      person: data.person,
+      token: page.token,
+      expiresAt: page.expiresAt,
+      person: page.person,
       source: "site-gate",
+      publishToTools: true,
     });
+  }
+
+  /**
+   * Website shop session → Desk Bearer. The shop page POSTs from-gate with
+   * credentials include. An extension fetch is not used.
+   */
+  async function importSiteGateSession() {
+    return adoptPageShopGate(null);
   }
 
   async function importToolsWidgetSession() {
@@ -2104,6 +2070,8 @@
   api.friendlyWidgetError = friendlyWidgetError;
   api.createWidgetSession = createWidgetSession;
   api.importSiteGateSession = importSiteGateSession;
+  api.adoptPageShopGate = adoptPageShopGate;
+  api.readShopGateInPage = readShopGateInPage;
   api.importToolsWidgetSession = importToolsWidgetSession;
   api.storeWidgetToken = storeWidgetToken;
   api.readShopGateCookie = readShopGateCookie;
