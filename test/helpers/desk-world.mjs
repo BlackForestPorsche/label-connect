@@ -27,6 +27,8 @@ export function makeWorld(options = {}) {
     icons: [],
     fromGateCalls: [],
     pageExecutions: [],
+    tabMessages: [],
+    fetchPrincipal: "extension",
   };
 
   const fakeSetTimeout = (fn, ms = 0) => {
@@ -43,7 +45,10 @@ export function makeWorld(options = {}) {
   });
 
   async function fakeFetch(url, init = {}) {
-    if (typeof options.liveFetch === "function") return options.liveFetch(url, init);
+    const principal = world.fetchPrincipal || "extension";
+    if (typeof options.liveFetch === "function") {
+      return options.liveFetch(url, { ...init, __principal: principal });
+    }
     const method = String(init.method || "GET").toUpperCase();
     const u = new URL(url);
     if (u.hostname === "127.0.0.1") {
@@ -108,10 +113,11 @@ export function makeWorld(options = {}) {
         const cookieHeader = String(headers.Cookie || headers.cookie || "");
         const deskSetCookie = cookieHeader.split(";").some((part) => part.trim().startsWith(`${GATE}=`));
         const credentials = String(init.credentials || "");
-        world.fromGateCalls.push({ credentials, deskSetCookie });
-        // The page jar is attached only for credentials include. A Cookie header
-        // on an extension fetch is not that request.
-        if (credentials === "include" && world.jar.has(GATE)) {
+        const principal = world.fetchPrincipal || "extension";
+        world.fromGateCalls.push({ credentials, deskSetCookie, principal });
+        // Firefox strips bf_shop_gate on an extension fetch, including
+        // scripting.executeScript. Only the shop page's own request sends it.
+        if (principal === "page" && credentials === "include" && !deskSetCookie && world.jar.has(GATE)) {
           return json(200, {
             ok: true,
             token: `bearer-site-${++world.mint}`,
@@ -169,13 +175,52 @@ export function makeWorld(options = {}) {
       executeScript: async ({ target, world: scriptWorld, func }) => {
         const tabId = target && target.tabId != null ? target.tabId : null;
         world.pageExecutions.push({ world: scriptWorld || "", tabId });
-        if (scriptWorld !== "MAIN" || typeof func !== "function") return [{ result: { ok: false } }];
-        const result = await func();
-        return [{ result }];
+        const previous = world.fetchPrincipal;
+        world.fetchPrincipal = "extension";
+        try {
+          if (scriptWorld !== "MAIN" || typeof func !== "function") return [{ result: { ok: false } }];
+          const result = await func();
+          return [{ result }];
+        } finally {
+          world.fetchPrincipal = previous || "extension";
+        }
       },
     },
     tabs: {
       query: async () => world.tabs.slice(),
+      sendMessage: async (tabId, message) => {
+        world.tabMessages.push({ tabId, type: message && message.type });
+        if (!message || message.type !== "page-post-from-gate") return null;
+        const tab = world.tabs.find((item) => item.id === tabId);
+        if (!tab || !String(tab.url || "").startsWith("https://shop.blackforestautomotive.com/")) return null;
+        const previous = world.fetchPrincipal;
+        world.fetchPrincipal = "page";
+        try {
+          const response = await fakeFetch("https://shop.blackforestautomotive.com/api/widget/session/from-gate", {
+            method: "POST",
+            credentials: "include",
+            headers: { Accept: "application/json", "Content-Type": "application/json" },
+            body: "{}",
+          });
+          let data = null;
+          try {
+            data = await response.json();
+          } catch {
+            data = null;
+          }
+          if (!response.ok || !data || !data.token) {
+            return { ok: false, token: "", expiresAt: "", person: "" };
+          }
+          return {
+            ok: true,
+            token: String(data.token),
+            expiresAt: String(data.expiresAt || ""),
+            person: String(data.person || ""),
+          };
+        } finally {
+          world.fetchPrincipal = previous || "extension";
+        }
+      },
       reload: async (id) => {
         world.reloads.push(id);
       },

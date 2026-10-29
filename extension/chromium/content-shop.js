@@ -3,11 +3,11 @@
  * Shop site ↔ Desk:
  * - Capture unlock JSON widgetToken when present
  * - Capture website Lock → site-lock → Tools DELETE + POST /v1/lock
- * - On shop page load, and every few seconds until it succeeds, ask the background
- *   to run the page's own POST /api/widget/session/from-gate with credentials
+ * - On shop page load, on Sync, and every few seconds until it succeeds, this
+ *   page injects its own POST /api/widget/session/from-gate with credentials
  *   include. That is the request that sends bf_shop_gate. An extension fetch is
- *   not used. A signed-in response turns the Desk widget on. A signed-out load
- *   still asks Tools for a handoff. A shop load must not delete bf_shop_gate.
+ *   not used. The token is posted back to Desk. A signed-out load still asks
+ *   Tools for a handoff. A shop load must not delete bf_shop_gate.
  *
  * Live shop Lock (beta 0.1.36+) posts to `/_serverFn/<hash>` — the client bundle has
  * no `lockShop` string. Matching only lockShop|clearGateSession misses that path, so
@@ -259,21 +259,68 @@
   }
 
   /**
-   * Ask the background to run from-gate in the page (credentials include).
-   * The background stores the token. This tab does not fetch it.
+   * Page script, not an extension fetch. Firefox attaches SameSite=Lax
+   * bf_shop_gate only for this document's own request. scripting.executeScript
+   * does not.
    */
-  function requestPageGate() {
-    if (!runtime?.runtime?.sendMessage || handoffLeaving || pageGateOk) return Promise.resolve(null);
-    try {
-      return Promise.resolve(runtime.runtime.sendMessage({ type: "pull-shop-gate" }))
-        .then((page) => {
-          if (page && page.ok) pageGateOk = true;
-          return page;
-        })
-        .catch(() => null);
-    } catch {
-      return Promise.resolve(null);
-    }
+  function pagePostFromGate() {
+    return new Promise((resolve) => {
+      const requestId = `bf-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("message", onMessage);
+        resolve(result);
+      };
+      const onMessage = (event) => {
+        const data = event && event.data;
+        if (!data || data.source !== "bf-desk-from-gate" || data.requestId !== requestId) return;
+        let origin = "";
+        try {
+          origin = location.origin;
+        } catch {
+          return;
+        }
+        if (event.origin !== origin) return;
+        finish({
+          ok: Boolean(data.ok && data.token),
+          token: data.token ? String(data.token) : "",
+          expiresAt: data.expiresAt ? String(data.expiresAt) : "",
+          person: data.person ? String(data.person) : "",
+        });
+      };
+      window.addEventListener("message", onMessage);
+      try {
+        const script = document.createElement("script");
+        script.textContent =
+          "(function(){var id=" +
+          JSON.stringify(requestId) +
+          ";fetch(" +
+          JSON.stringify(FROM_GATE_PATH) +
+          ',{method:"POST",credentials:"include",headers:{"Accept":"application/json","Content-Type":"application/json"},body:"{}",cache:"no-store"}).then(function(r){return r.json().then(function(data){return {ok:r.ok,data:data};}).catch(function(){return {ok:false,data:null};});}).then(function(payload){var data=payload&&payload.data||{};window.postMessage({source:"bf-desk-from-gate",requestId:id,ok:Boolean(payload&&payload.ok&&data.token),token:data.token||"",expiresAt:data.expiresAt||data.widgetExpiresAt||"",person:data.person||""},location.origin);}).catch(function(){window.postMessage({source:"bf-desk-from-gate",requestId:id,ok:false,token:"",expiresAt:"",person:""},location.origin);});})();';
+        const parent = document.documentElement || document.head || document.body;
+        parent.appendChild(script);
+        script.remove();
+      } catch {
+        finish({ ok: false, token: "", expiresAt: "", person: "" });
+        return;
+      }
+      window.setTimeout(() => finish({ ok: false, token: "", expiresAt: "", person: "" }), 4000);
+    });
+  }
+
+  async function acceptPageGate() {
+    const page = await pagePostFromGate();
+    if (!page || !page.ok || !page.token) return page;
+    pageGateOk = true;
+    await publish({
+      token: page.token,
+      expiresAt: page.expiresAt,
+      person: page.person,
+      source: "shop-site",
+    });
+    return page;
   }
 
   async function askShopSession() {
@@ -287,8 +334,8 @@
       if (onUnlock) {
         runtime.runtime.sendMessage({ type: "site-unlock-page" }).catch(() => {});
       }
-      const page = await requestPageGate();
-      if (handoffLeaving || (page && page.ok)) return;
+      const page = await acceptPageGate();
+      if (handoffLeaving || (page && page.ok && page.token)) return;
       pageGateOk = false;
       const response = await runtime.runtime.sendMessage({
         type: "tools-to-site-unlock",
@@ -527,7 +574,14 @@
   if (runtime?.runtime?.onMessage?.addListener) {
     try {
       runtime.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-        if (!message || message.type !== "apply-tools-person-settings") return false;
+        if (!message) return false;
+        if (message.type === "page-post-from-gate") {
+          pagePostFromGate()
+            .then((page) => sendResponse(page))
+            .catch(() => sendResponse({ ok: false, token: "", expiresAt: "", person: "" }));
+          return true;
+        }
+        if (message.type !== "apply-tools-person-settings") return false;
         sendResponse(applyToolsPersonSettings(message));
         return false;
       });
@@ -593,7 +647,7 @@
   // not the 400ms poll: the shop allows 20 from-gate calls a minute.
   window.setInterval(() => {
     if (handoffLeaving || pageGateOk || isFromGateDocument()) return;
-    requestPageGate();
+    acceptPageGate();
   }, 4000);
 
   if (document.readyState === "loading") {

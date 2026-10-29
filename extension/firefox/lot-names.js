@@ -1373,63 +1373,27 @@
   }
 
   /**
-   * Runs in the shop page (scripting world MAIN). Firefox attaches SameSite=Lax
-   * bf_shop_gate only for this page fetch. An extension fetch, including one
-   * that sets a Cookie header, does not.
+   * Ask the shop tab to POST from-gate from the page itself. The extension does
+   * not fetch that URL: Firefox strips bf_shop_gate on an extension fetch,
+   * including scripting.executeScript.
    */
-  async function readShopGateInPage() {
-    const origin =
-      typeof location !== "undefined" && location && location.origin
-        ? location.origin
-        : "https://shop.blackforestautomotive.com";
+  async function postFromGateOnShopTab(tabId) {
+    if (tabId == null || !runtime?.tabs?.sendMessage) return null;
+    let page;
     try {
-      const response = await fetch(`${origin}/api/widget/session/from-gate`, {
-        method: "POST",
-        credentials: "include",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: "{}",
-        cache: "no-store",
-      });
-      let data = null;
-      try {
-        data = await response.json();
-      } catch {
-        data = null;
-      }
-      if (!response.ok || !data || !data.token) return { ok: false };
-      return {
-        ok: true,
-        token: String(data.token),
-        expiresAt: String(data.expiresAt || data.widgetExpiresAt || ""),
-        person: String(data.person || ""),
-      };
-    } catch {
-      return { ok: false };
-    }
-  }
-
-  async function pullShopGateFromTab(tabId) {
-    if (tabId == null || !runtime?.scripting?.executeScript) return null;
-    let injected;
-    try {
-      injected = await runtime.scripting.executeScript({
-        target: { tabId },
-        world: "MAIN",
-        func: readShopGateInPage,
-      });
+      page = await runtime.tabs.sendMessage(tabId, { type: "page-post-from-gate" });
     } catch {
       return null;
     }
-    const result = injected && injected[0] && injected[0].result;
-    if (!result || !result.ok || !result.token) return null;
+    if (!page || !page.ok || !page.token) return null;
     return {
-      token: String(result.token),
-      expiresAt: result.expiresAt ? String(result.expiresAt) : "",
-      person: result.person ? String(result.person) : "",
+      token: String(page.token),
+      expiresAt: page.expiresAt ? String(page.expiresAt) : "",
+      person: page.person ? String(page.person) : "",
     };
   }
 
-  async function pullGateTokenFromShopTabs() {
+  async function postFromGateOnShopTabs() {
     if (!runtime?.tabs?.query) return null;
     let tabs = [];
     try {
@@ -1439,7 +1403,7 @@
     }
     for (const tab of tabs || []) {
       if (tab?.id == null) continue;
-      const page = await pullShopGateFromTab(tab.id);
+      const page = await postFromGateOnShopTab(tab.id);
       if (page && page.token) return page;
     }
     return null;
@@ -1448,7 +1412,7 @@
   async function adoptPageShopGate(tabId) {
     await latchReady;
     const epoch = latchEpoch;
-    const page = tabId != null ? await pullShopGateFromTab(tabId) : await pullGateTokenFromShopTabs();
+    const page = tabId != null ? await postFromGateOnShopTab(tabId) : await postFromGateOnShopTabs();
     if (epoch !== latchEpoch) {
       return { error: "Website was locked mid-import.", reason: "site_locked" };
     }
@@ -1470,8 +1434,8 @@
   }
 
   /**
-   * Website shop session → Desk Bearer. The shop page POSTs from-gate with
-   * credentials include. An extension fetch is not used.
+   * Sync shop session. The open shop page POSTs from-gate with credentials
+   * include and returns the token. An extension fetch is not used.
    */
   async function importSiteGateSession() {
     return adoptPageShopGate(null);
@@ -2071,7 +2035,6 @@
   api.createWidgetSession = createWidgetSession;
   api.importSiteGateSession = importSiteGateSession;
   api.adoptPageShopGate = adoptPageShopGate;
-  api.readShopGateInPage = readShopGateInPage;
   api.importToolsWidgetSession = importToolsWidgetSession;
   api.storeWidgetToken = storeWidgetToken;
   api.readShopGateCookie = readShopGateCookie;
