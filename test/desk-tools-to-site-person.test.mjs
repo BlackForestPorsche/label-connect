@@ -162,6 +162,24 @@ test("first look at a locked Tools does not clear the shop gate", async () => {
   assert.equal(w.world.reloads.length, 0);
 });
 
+test("home PIN tab is handed off when Tools is signed in", async () => {
+  const w = makeWorld();
+  w.world.tabs = [{ id: 3, url: "https://shop.blackforestautomotive.com/" }];
+  w.toolsUnlock();
+  const result = await w.api.syncToolsSessionToSite({
+    reloadUnlockTabs: true,
+    forceExchange: false,
+    pageSignedIn: false,
+    handoffNavigate: true,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.source, "tools-handoff");
+  assert.equal(w.world.handoffs, 1);
+  assert.equal(w.world.tabUpdates.length, 1);
+  assert.equal(w.world.tabUpdates[0].id, 3);
+  assert.match(w.world.tabUpdates[0].url, /\/api\/widget\/session\/handoff\/[A-Za-z0-9_-]{20,}$/);
+});
+
 test("/unlock tab is sent home after Tools fills an empty gate", async () => {
   const w = makeWorld();
   w.world.tabs = [{ id: 7, url: "https://shop.blackforestautomotive.com/unlock?next=/lot" }];

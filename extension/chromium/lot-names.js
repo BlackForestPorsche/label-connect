@@ -959,6 +959,32 @@
     return { ok: true, url };
   }
 
+  function shopPathname(url) {
+    try {
+      const path = new URL(url).pathname.replace(/\/+$/, "");
+      return path || "/";
+    } catch {
+      return "";
+    }
+  }
+
+  /** Live PIN is UnlockScreen on `/` as well as `/unlock`. */
+  function isShopPinUrl(url) {
+    const path = shopPathname(url);
+    return path === "/" || path === "/unlock";
+  }
+
+  async function findShopPinTab() {
+    if (!runtime?.tabs?.query) return null;
+    let tabs = [];
+    try {
+      tabs = await runtime.tabs.query({ url: ["https://shop.blackforestautomotive.com/*"] });
+    } catch {
+      return null;
+    }
+    return (tabs || []).find((tab) => tab && tab.id != null && isShopPinUrl(tab.url)) || null;
+  }
+
   /** Open the handoff in the signed-out shop tab. One tab: the ticket is single-use. */
   async function navigateShopHandoff(url, preferredTabId) {
     if (!url || !runtime?.tabs?.query || !runtime?.tabs?.update) return { navigated: false };
@@ -970,8 +996,8 @@
     }
     const shop = (tabs || []).filter((tab) => tab && tab.id != null);
     const preferred = shop.find((tab) => tab.id === preferredTabId);
-    const unlock = shop.find((tab) => String(tab.url || "").includes("/unlock"));
-    const target = preferred || unlock;
+    const pin = shop.find((tab) => isShopPinUrl(tab.url));
+    const target = preferred || pin;
     if (!target) return { navigated: false };
     try {
       await runtime.tabs.update(target.id, { url });
@@ -1594,14 +1620,18 @@
       // that tab reports the page cookie, even when the extension jar looks full.
       if (has && !siteLatch) {
         const page = freshPageGateReport();
+        // Only a shop tab that said it is signed out. A bare `/` is also the
+        // signed-in home, so do not hand off every home tab that has not reported.
         if (page && page.ok === false && Date.now() - lastHandoffAt >= HANDOFF_DEBOUNCE_MS) {
+          const pin = await findShopPinTab();
           await syncToolsSessionToSite({
             reloadUnlockTabs: true,
             forceExchange: false,
             pageSignedIn: false,
             pagePerson: page.person,
-            tabId: page.tabId,
+            tabId: page.tabId || (pin && pin.id) || null,
             handoffNavigate: true,
+            shopLoad: true,
           });
         }
       }

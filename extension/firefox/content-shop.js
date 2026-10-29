@@ -3,10 +3,11 @@
  * Shop site ↔ Desk:
  * - Capture unlock JSON widgetToken when present
  * - Capture website Lock → site-lock → Tools DELETE + POST /v1/lock
- * - On shop page load: a top-level POST to from-gate (SameSite=Lax rides a page
- *   navigation; a content-script or background fetch stays 401). When that page
- *   is signed out and Tools is signed in, open the one-time handoff so the PIN
- *   page leaves. A shop load must not delete bf_shop_gate.
+ * - On shop page load: the page itself POSTs from-gate (SameSite=Lax is sent by the
+ *   page, not by an extension fetch or a JSON document). A signed-in response
+ *   turns the Desk widget on. A signed-out response opens the Tools handoff so
+ *   the PIN page, including the home screen, leaves. A shop load must not delete
+ *   bf_shop_gate.
  *
  * Live shop Lock (beta 0.1.36+) posts to `/_serverFn/<hash>` — the client bundle has
  * no `lockShop` string. Matching only lockShop|clearGateSession misses that path, so
@@ -40,9 +41,6 @@
   let pagePullTimer = 0;
   let handoffLeaving = false;
   const FROM_GATE_PATH = "/api/widget/session/from-gate";
-  const RETURN_KEY = "bf-desk-return";
-  const RESULT_KEY = "bf-desk-from-gate-result";
-  const TRIED_KEY = "bf-desk-from-gate-tried";
 
   function jsonStringField(raw, key) {
     const match = new RegExp(`"${key}"\\s*:\\s*"([^"\\\\]*)"`).exec(String(raw || ""));
@@ -238,30 +236,6 @@
     }
   }
 
-  function storageGetItem(key) {
-    try {
-      return sessionStorage.getItem(key) || "";
-    } catch {
-      return "";
-    }
-  }
-
-  function storageSetItem(key, value) {
-    try {
-      sessionStorage.setItem(key, value);
-    } catch {
-      // ignore
-    }
-  }
-
-  function storageRemoveItem(key) {
-    try {
-      sessionStorage.removeItem(key);
-    } catch {
-      // ignore
-    }
-  }
-
   function isFromGateDocument() {
     try {
       return String(location.pathname || "").replace(/\/+$/, "") === FROM_GATE_PATH;
@@ -270,184 +244,103 @@
     }
   }
 
-  function safeReturnUrl(raw) {
-    try {
-      const url = new URL(raw || "/", location.origin);
-      if (url.origin !== location.origin) return `${location.origin}/`;
-      if (url.pathname.replace(/\/+$/, "") === FROM_GATE_PATH) return `${location.origin}/`;
-      return url.href;
-    } catch {
-      return `${location.origin}/`;
-    }
-  }
-
-  function sessionFromGateText(raw) {
-    const text = String(raw || "");
-    let data = null;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      const start = text.indexOf("{");
-      const end = text.lastIndexOf("}");
-      if (start >= 0 && end > start) {
-        try {
-          data = JSON.parse(text.slice(start, end + 1));
-        } catch {
-          data = null;
-        }
-      }
-    }
-    if (!data || typeof data !== "object") return null;
-    const token = data.token || data.accessToken || data.bearer || data.widgetToken;
-    if (!token) return null;
-    return {
-      token: String(token),
-      expiresAt: String(data.expiresAt || data.widgetExpiresAt || ""),
-      person: data.person ? String(data.person) : "",
-      source: "shop-site",
-    };
-  }
-
-  function waitForDocumentBody() {
-    if (document.body) return Promise.resolve();
+  /**
+   * Page-world POST. Firefox sends SameSite=Lax for the shop page.
+   * A content-script fetch and a background fetch do not, and the JSON document
+   * from a top-level POST never becomes a Desk session.
+   */
+  function pullPageGateInPage() {
     return new Promise((resolve) => {
-      document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+      const requestId = `bf-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("message", onMessage);
+        resolve(result);
+      };
+      const onMessage = (event) => {
+        if (event.source !== window) return;
+        const data = event.data;
+        if (!data || data.source !== "bf-desk-from-gate" || data.requestId !== requestId) return;
+        finish({
+          ok: Boolean(data.ok && data.token),
+          token: data.token ? String(data.token) : "",
+          expiresAt: data.expiresAt ? String(data.expiresAt) : "",
+          person: data.person ? String(data.person) : "",
+        });
+      };
+      window.addEventListener("message", onMessage);
+      try {
+        const script = document.createElement("script");
+        script.textContent =
+          "(function(){var id=" +
+          JSON.stringify(requestId) +
+          ";fetch(" +
+          JSON.stringify(FROM_GATE_PATH) +
+          ',{method:"POST",credentials:"include",headers:{"Accept":"application/json","Content-Type":"application/json"},body:"{}"}).then(function(r){return r.json().then(function(data){return {ok:r.ok,data:data};}).catch(function(){return {ok:false,data:null};});}).then(function(payload){var data=payload&&payload.data||{};window.postMessage({source:"bf-desk-from-gate",requestId:id,ok:Boolean(payload&&payload.ok&&data.token),token:data.token||"",expiresAt:data.expiresAt||data.widgetExpiresAt||"",person:data.person||""},location.origin);}).catch(function(){window.postMessage({source:"bf-desk-from-gate",requestId:id,ok:false,token:"",expiresAt:"",person:""},location.origin);});})();';
+        (document.documentElement || document.head).appendChild(script);
+        script.remove();
+      } catch {
+        finish({ ok: false, token: "", expiresAt: "", person: "" });
+        return;
+      }
+      window.setTimeout(() => finish({ ok: false, token: "", expiresAt: "", person: "" }), 4000);
     });
   }
 
-  async function finishFromGateDocument() {
-    await waitForDocumentBody();
-    let text = "";
-    try {
-      text = document.body ? document.body.innerText || document.body.textContent || "" : "";
-    } catch {
-      text = "";
-    }
-    const session = sessionFromGateText(text);
-    if (session) await publish(session);
-    storageSetItem(
-      RESULT_KEY,
-      JSON.stringify({
-        ok: Boolean(session),
-        person: session ? session.person : "",
-        at: Date.now(),
-      }),
-    );
-    const back = safeReturnUrl(storageGetItem(RETURN_KEY));
-    storageRemoveItem(RETURN_KEY);
-    location.replace(back);
-  }
-
-  function takeFromGateResult() {
-    const raw = storageGetItem(RESULT_KEY);
-    if (!raw) return null;
-    storageRemoveItem(RESULT_KEY);
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") return null;
-      if (Date.now() - Number(parsed.at || 0) > 60_000) return null;
-      return parsed;
-    } catch {
-      return null;
-    }
-  }
-
-  function triedFromGate() {
-    return storageGetItem(TRIED_KEY) === "1";
-  }
-
-  function markTriedFromGate() {
-    storageSetItem(TRIED_KEY, "1");
-  }
-
-  function clearTriedFromGate() {
-    storageRemoveItem(TRIED_KEY);
-  }
-
-  function submitFromGateForm() {
-    const go = () => {
-      try {
-        const form = document.createElement("form");
-        form.method = "POST";
-        form.action = FROM_GATE_PATH;
-        const parent = document.body || document.documentElement;
-        if (!parent) return;
-        parent.appendChild(form);
-        form.submit();
-      } catch {
-        // ignore
-      }
-    };
-    if (document.body || document.documentElement) go();
-    else document.addEventListener("DOMContentLoaded", go, { once: true });
-  }
-
-  /** Top-level same-origin POST. Firefox attaches SameSite=Lax. A fetch does not. */
-  function beginFromGateNavigation() {
-    if (handoffLeaving || isFromGateDocument() || triedFromGate()) return false;
-    markTriedFromGate();
-    storageSetItem(RETURN_KEY, location.href);
-    submitFromGateForm();
-    return true;
-  }
-
-  function looksLikeShopUnlock(url, text) {
-    if (typeof text !== "string" || !text) return false;
-    if (looksLikeLock(url, "POST", text)) return false;
-    if (/widgetToken|from-gate|gateToken/i.test(text)) return false;
-    return /"ok"\s*:\s*true/.test(text) && /"person"\s*:/.test(text) && /"mustChange"|"view"/.test(text);
-  }
-
-  async function onShopLoadSync() {
+  async function askShopSession() {
     if (!runtime?.runtime?.sendMessage || handoffLeaving) return;
     if (isFromGateDocument()) {
-      await finishFromGateDocument();
+      location.replace(`${location.origin}/`);
       return;
     }
-    const prior = takeFromGateResult();
     const onUnlock = /\/unlock\b/i.test(location.pathname || "");
     try {
       if (onUnlock) {
-        // Delivery fallback: full /unlock load asks background to DELETE+POST
-        // if Tools still has a session (skipped during unlock-hold).
         runtime.runtime.sendMessage({ type: "site-unlock-page" }).catch(() => {});
       }
-      if (prior && prior.ok) {
+      const page = await pullPageGateInPage();
+      if (handoffLeaving) return;
+      if (page.ok && page.token) {
         pageGateOk = true;
-        clearTriedFromGate();
+        await publish({
+          token: page.token,
+          expiresAt: page.expiresAt,
+          person: page.person,
+          source: "shop-site",
+        });
         await runtime.runtime.sendMessage({
           type: "tools-to-site-unlock",
           forceExchange: false,
           pageSignedIn: true,
-          pagePerson: prior.person || "",
+          pagePerson: page.person || "",
           handoffNavigate: false,
           shopLoad: true,
         });
-        if (onUnlock) location.replace(`${location.origin}/`);
         return;
       }
-      if (prior && prior.ok === false) {
-        // Site cookie was not accepted. Tools signed in must still leave the PIN.
-        const response = await runtime.runtime.sendMessage({
-          type: "tools-to-site-unlock",
-          forceExchange: false,
-          pageSignedIn: false,
-          pagePerson: "",
-          handoffNavigate: false,
-          shopLoad: true,
-        });
-        if (!response || handoffLeaving) return;
-        if (response.handoffUrl && isHandoffUrl(response.handoffUrl)) {
-          handoffLeaving = true;
-          clearTriedFromGate();
-          location.assign(response.handoffUrl);
-        }
-        return;
+      pageGateOk = false;
+      const response = await runtime.runtime.sendMessage({
+        type: "tools-to-site-unlock",
+        forceExchange: false,
+        pageSignedIn: false,
+        pagePerson: "",
+        handoffNavigate: false,
+        shopLoad: true,
+      });
+      if (!response || handoffLeaving) return;
+      if (response.handoffUrl && isHandoffUrl(response.handoffUrl)) {
+        handoffLeaving = true;
+        location.assign(response.handoffUrl);
       }
-      beginFromGateNavigation();
     } catch {
       // ignore
     }
+  }
+
+  async function onShopLoadSync() {
+    await askShopSession();
   }
 
   const originalFetch = window.fetch.bind(window);
@@ -715,17 +608,15 @@
   }, 350);
 
   /**
-   * After a shop PIN success that did not include a widget token, leave the page
-   * once for from-gate. A repeating fetch never sends SameSite=Lax.
+   * Unlock JSON has no widget token. Ask the page again once the PIN form succeeds.
    */
   function schedulePagePull(force) {
     if (handoffLeaving || isFromGateDocument()) return;
     if (pageGateOk && !force) return;
     window.clearTimeout(pagePullTimer);
     pagePullTimer = window.setTimeout(() => {
-      if (handoffLeaving || isFromGateDocument() || pageGateOk) return;
-      if (force) clearTriedFromGate();
-      beginFromGateNavigation();
+      if (handoffLeaving || pageGateOk) return;
+      askShopSession();
     }, force ? 200 : 400);
   }
 
