@@ -5,9 +5,10 @@
  * - Capture website Lock → site-lock → Tools DELETE + POST /v1/lock
  * - On shop page load: the page itself POSTs from-gate (SameSite=Lax is sent by the
  *   page, not by an extension fetch or a JSON document). A signed-in response
- *   turns the Desk widget on. A signed-out response opens the Tools handoff so
- *   the PIN page, including the home screen, leaves. A shop load must not delete
- *   bf_shop_gate.
+ *   turns the Desk widget on and is posted to Tools. A signed-out response opens
+ *   the Tools handoff so the PIN page, including the home screen, leaves. A shop
+ *   load must not delete bf_shop_gate. The page message is matched by origin,
+ *   because Firefox does not treat event.source as the content-script window.
  *
  * Live shop Lock (beta 0.1.36+) posts to `/_serverFn/<hash>` — the client bundle has
  * no `lockShop` string. Matching only lockShop|clearGateSession misses that path, so
@@ -260,9 +261,17 @@
         resolve(result);
       };
       const onMessage = (event) => {
-        if (event.source !== window) return;
-        const data = event.data;
+        const data = event && event.data;
         if (!data || data.source !== "bf-desk-from-gate" || data.requestId !== requestId) return;
+        let origin = "";
+        try {
+          origin = location.origin;
+        } catch {
+          return;
+        }
+        // The page posts this. Firefox content scripts do not see event.source
+        // as their own window, so that check dropped a signed-in from-gate token.
+        if (event.origin !== origin) return;
         finish({
           ok: Boolean(data.ok && data.token),
           token: data.token ? String(data.token) : "",
@@ -558,7 +567,14 @@
   if (runtime?.runtime?.onMessage?.addListener) {
     try {
       runtime.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-        if (!message || message.type !== "apply-tools-person-settings") return false;
+        if (!message) return false;
+        if (message.type === "pull-shop-gate") {
+          pullPageGateInPage()
+            .then((page) => sendResponse(page))
+            .catch(() => sendResponse({ ok: false, token: "", expiresAt: "", person: "" }));
+          return true;
+        }
+        if (message.type !== "apply-tools-person-settings") return false;
         sendResponse(applyToolsPersonSettings(message));
         return false;
       });
