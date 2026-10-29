@@ -1373,72 +1373,79 @@
   }
 
   /**
-   * Ask the shop tab to POST from-gate from the page itself. The extension does
-   * not fetch that URL: Firefox strips bf_shop_gate on an extension fetch,
-   * including scripting.executeScript.
+   * Website shop session → Desk Bearer via POST /api/widget/session/from-gate.
+   * This is the 0.1.42 path: cookies.get sees bf_shop_gate, then this fetch
+   * uses credentials include. No Cookie header, no page script, no executeScript.
    */
-  async function postFromGateOnShopTab(tabId) {
-    if (tabId == null || !runtime?.tabs?.sendMessage) return null;
-    let page;
-    try {
-      page = await runtime.tabs.sendMessage(tabId, { type: "page-post-from-gate" });
-    } catch {
-      return null;
-    }
-    if (!page || !page.ok || !page.token) return null;
-    return {
-      token: String(page.token),
-      expiresAt: page.expiresAt ? String(page.expiresAt) : "",
-      person: page.person ? String(page.person) : "",
-    };
-  }
-
-  async function postFromGateOnShopTabs() {
-    if (!runtime?.tabs?.query) return null;
-    let tabs = [];
-    try {
-      tabs = await runtime.tabs.query({ url: ["https://shop.blackforestautomotive.com/*"] });
-    } catch {
-      return null;
-    }
-    for (const tab of tabs || []) {
-      if (tab?.id == null) continue;
-      const page = await postFromGateOnShopTab(tab.id);
-      if (page && page.token) return page;
-    }
-    return null;
-  }
-
-  async function adoptPageShopGate(tabId) {
+  async function importSiteGateSession() {
     await latchReady;
     const epoch = latchEpoch;
-    const page = tabId != null ? await postFromGateOnShopTab(tabId) : await postFromGateOnShopTabs();
-    if (epoch !== latchEpoch) {
-      return { error: "Website was locked mid-import.", reason: "site_locked" };
+    const gate = await readShopGateCookie();
+    if (gate.present) {
+      armUnlockHold();
     }
-    if (!page || !page.token) {
+    if (!gate.present) {
       return {
         error:
           "Shop site is not signed in in this browser profile. Unlock shop.blackforestautomotive.com first.",
         reason: "no_gate_cookie",
       };
     }
-    armUnlockHold();
-    return storeWidgetToken({
-      token: page.token,
-      expiresAt: page.expiresAt,
-      person: page.person,
-      source: "site-gate",
-      publishToTools: true,
-    });
-  }
 
-  /**
-   * Sync shop session. The open shop page POSTs from-gate with credentials
-   * include and returns the token. An extension fetch is not used.
-   */
-  async function importSiteGateSession() {
-    return adoptPageShopGate(null);
+    const base = await shopBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/api/widget/session/from-gate`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        credentials: "include",
+        body: "{}",
+        cache: "no-store",
+      });
+    } catch {
+      return { error: "Could not reach the shop from-gate API.", reason: "network" };
+    }
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+
+    if (response.status === 404 || response.status === 406) {
+      return {
+        error:
+          "Shop is signed in, but from-gate is not on the site yet. Unlock Tools or enter desk PIN.",
+        reason: "from_gate_missing",
+        gatePresent: true,
+      };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return {
+        error: "Shop cookie was rejected. Unlock the shop site again in this browser profile.",
+        reason: "unauthorized",
+      };
+    }
+    if (!response.ok) {
+      return {
+        error: friendlyWidgetError(data && data.error, response.status),
+        reason: "from_gate_error",
+      };
+    }
+
+    if (epoch !== latchEpoch) {
+      return { error: "Website was locked mid-import.", reason: "site_locked" };
+    }
+    const token = data?.token || data?.accessToken || data?.bearer || data?.widgetToken;
+    const expiresAt = data?.expiresAt || data?.widgetExpiresAt;
+    if (!token) return { error: "from-gate returned no token.", reason: "bad_payload" };
+    return storeWidgetToken({
+      token,
+      expiresAt,
+      person: data.person,
+      source: "site-gate",
+    });
   }
 
   async function importToolsWidgetSession() {
@@ -2034,7 +2041,6 @@
   api.friendlyWidgetError = friendlyWidgetError;
   api.createWidgetSession = createWidgetSession;
   api.importSiteGateSession = importSiteGateSession;
-  api.adoptPageShopGate = adoptPageShopGate;
   api.importToolsWidgetSession = importToolsWidgetSession;
   api.storeWidgetToken = storeWidgetToken;
   api.readShopGateCookie = readShopGateCookie;

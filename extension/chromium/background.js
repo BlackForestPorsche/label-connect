@@ -493,16 +493,6 @@
       api.createWidgetSession(message.payload || {}).then(sendResponse);
       return true;
     }
-    if (message.type === "pull-shop-gate") {
-      const api = globalThis.AllDataRoLabels;
-      const tabId = sender && sender.tab && sender.tab.id != null ? sender.tab.id : null;
-      if (!api?.adoptPageShopGate) {
-        sendResponse({ ok: false, reason: "no_page" });
-        return false;
-      }
-      api.adoptPageShopGate(tabId).then(sendResponse);
-      return true;
-    }
     if (message.type === "site-session-import") {
       const api = globalThis.AllDataRoLabels;
       if (!api?.importSiteGateSession) {
