@@ -32,6 +32,9 @@
   let sawUiConfirm = false;
   /** createArmId values that already got a print attempt — never key on customer/person. */
   const printedArms = new Set();
+  /** Last non-empty listener fields. A wiped form must not erase them. */
+  let armedDwight = {};
+  const DWIGHT_KEYS = ["ro", "customer", "car", "plate", "vin", "tech"];
 
   function toast(message, kind) {
     if (typeof api.showToast === "function") api.showToast(message, kind);
@@ -49,6 +52,7 @@
     armedHadCreate = false;
     armedCreateEl = null;
     armedFields = { lastName: "", model: "", modelSource: "", roNumber: "" };
+    armedDwight = {};
     sawUiConfirm = false;
     confirmedAt = 0;
     // keep createArmId until print finishes so requestPrint can mark it
@@ -73,7 +77,48 @@
   /** Read the form just before the click lands; AllData can re-render on blur / mousedown. */
   function notePreClick() {
     const fields = scrapeNow();
+    rememberDwight(fields);
     preClick = { at: Date.now(), fields };
+  }
+
+  function dwightFromScrape(scraped) {
+    const src = scraped || {};
+    const out = {};
+    for (const key of DWIGHT_KEYS) {
+      const value = String(src[key] || "").trim();
+      if (value) out[key] = value;
+    }
+    if (!out.ro) {
+      const ro = String(src.roNumber || "").trim();
+      if (ro) out.ro = ro;
+    }
+    if (!out.customer) {
+      const customer = String(src.lastName || "").trim();
+      if (customer) out.customer = customer;
+    }
+    if (!out.car) {
+      const car = String(src.model || "").trim();
+      if (car) out.car = car;
+    }
+    return out;
+  }
+
+  function rememberDwight(scraped) {
+    const next = dwightFromScrape(scraped);
+    for (const key of DWIGHT_KEYS) {
+      if (next[key]) armedDwight[key] = next[key];
+    }
+  }
+
+  function listenerFields(scraped) {
+    return { ...armedDwight, ...dwightFromScrape(scraped) };
+  }
+
+  function lotBoardUrl(ro) {
+    const base = String(api.DEFAULT_SHOP_BASE || "https://shop.blackforestautomotive.com").replace(/\/$/, "");
+    const pageRo = String(ro || "").trim();
+    if (!pageRo) return `${base}/lot`;
+    return `${base}/lot?ro=${encodeURIComponent(pageRo)}`;
   }
 
   function remember(fields) {
@@ -86,6 +131,7 @@
         model: String(fields.model || armedFields.model || "").trim(),
       };
     }
+    rememberDwight(fields);
   }
 
   function snapshotAtArm() {
@@ -159,6 +205,8 @@
       lastName: scraped.lastName,
       model: scraped.model,
       roNumber,
+      // Page RO for the listener, including an open RO that Labels must not receive.
+      pageRo: scrapedRo,
       createArmId: armId || "",
     };
   }
@@ -181,6 +229,31 @@
     });
   }
 
+  /**
+   * Read-only listener ping. Never clicks or types in AllData.
+   * A failure here must not affect label printing.
+   */
+  function notifyDwight(event, fields) {
+    const bodyFields = {};
+    const src = fields || {};
+    for (const key of DWIGHT_KEYS) {
+      const value = String(src[key] || "").trim();
+      if (!value) continue;
+      if (value.includes("@")) continue;
+      bodyFields[key] = value;
+    }
+    try {
+      const pending = runtime.runtime.sendMessage({
+        type: "dwight-nudge",
+        event,
+        fields: bodyFields,
+      });
+      if (pending && typeof pending.catch === "function") void pending.catch(() => {});
+    } catch {
+      // Listener nudge must never affect label printing.
+    }
+  }
+
   async function requestPrint(fields) {
     const armId = fields.createArmId || createArmId;
     if (alreadyPrintedThisCreate(armId)) {
@@ -199,10 +272,13 @@
     let response;
     try {
       // Prefer new RO# when known; omit otherwise so open-RO idempotency cannot block.
-      response = await sendPrintPayload({
+      const printPromise = sendPrintPayload({
         ...basePayload,
         roNumber: fields.roNumber || "",
+        lotUrl: lotBoardUrl(fields.pageRo || fields.dwight?.ro || ""),
       });
+      notifyDwight("create_ro", fields.dwight);
+      response = await printPromise;
       // If Labels skipped on an RO# (stale open RO, etc.), retry once with no RO#.
       if (response && response.skipped && fields.roNumber) {
         response = await sendPrintPayload({
@@ -301,7 +377,9 @@
       return;
     }
     const armId = createArmId;
+    rememberDwight(scrapedRaw);
     const fields = fieldsForPrint(scraped, armId);
+    fields.dwight = listenerFields(scraped);
     disarm();
     requestPrint(fields);
   }
@@ -336,10 +414,32 @@
     return path;
   }
 
+  function nudgeFromPage(eventName) {
+    const scraped = scrapeNow();
+    rememberDwight(scraped);
+    notifyDwight(eventName, listenerFields(scraped));
+  }
+
   function onPointer(event) {
     const path = eventPath(event);
     for (const node of path) {
       if (!node || node.nodeType !== 1) continue;
+      if (typeof api.isCloseControl === "function" && api.isCloseControl(node)) {
+        nudgeFromPage("close_ro");
+        disarm();
+        return;
+      }
+      if (typeof api.isCancelControl === "function" && api.isCancelControl(node)) {
+        nudgeFromPage("cancel_ro");
+        disarm();
+        return;
+      }
+      const estimateEvent = typeof api.estimateAction === "function" ? api.estimateAction(node) : "";
+      if (estimateEvent) {
+        nudgeFromPage(estimateEvent);
+        disarm();
+        return;
+      }
       if (typeof api.isForbiddenControl === "function" && api.isForbiddenControl(node)) {
         disarm();
         return;
