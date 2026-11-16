@@ -193,6 +193,27 @@ test("buildRoLabelDoc pads past ImageableArea so top line is not clipped", () =>
   assert.ok(doc.blocks[0].x >= RO_LABEL_SAFE_INSET_PT);
 });
 
+test("lot QR uses the existing /lot board and keeps both printed lines", async () => {
+  const doc = buildRoLabelDoc({ lastName: "Whatcott", model: "Boxster", roNumber: "J001094" });
+  assert.equal(doc.blocks.length, 2);
+  assert.equal(doc.blocks[0].text, "Whatcott - Boxster");
+  assert.equal(doc.blocks[1].text, OUT_MILEAGE_LINE);
+  assert.equal(doc.qr.url, "https://shop.blackforestautomotive.com/lot?ro=J001094");
+  assert.ok(doc.qr.w >= 24);
+  assert.ok(doc.blocks[0].w > doc.qr.w);
+  const { pdf } = await renderRoLabelPdf({ lastName: "Whatcott", model: "Boxster", roNumber: "J001094" });
+  const raw = Buffer.from(pdf).toString("latin1");
+  assert.match(raw, /\/Subtype \/Image/);
+  assert.match(raw, /shop\.blackforestautomotive\.com\/lot\?ro=J001094/);
+  assert.ok(raw.length > 1000);
+});
+
+test("lot QR without an RO opens the lot board", () => {
+  const doc = buildRoLabelDoc({ lastName: "Whatcott", model: "Boxster" });
+  assert.equal(doc.qr.url, "https://shop.blackforestautomotive.com/lot");
+  assert.equal(doc.blocks.length, 2);
+});
+
 test("renderRoLabelPdf builds a one-page 30252 PDF", async () => {
   const { pdf, media } = await renderRoLabelPdf({ lastName: "Owner", model: "Macan" });
   assert.equal(media.key, "w79h252");

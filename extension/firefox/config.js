@@ -9,5 +9,10 @@
   cfg.UPDATE_LABEL_RE = /^\s*update\s*r\s*\/?\s*o\s*$/i;
   cfg.ASSIGN_LABEL_RE = /^\s*assign\s*r\s*\/?\s*o\s*$/i;
   cfg.SCHEDULE_NEW_RE = /^\s*(new\s*r\s*\/?\s*o|schedule\s*new)\s*$/i;
+  cfg.CLOSE_LABEL_RE = /^\s*close\s*r\s*\/?\s*o\s*$/i;
+  cfg.CANCEL_LABEL_RE = /^\s*cancel\s*r\s*\/?\s*o\s*$/i;
+  cfg.ESTIMATE_SAVE_RE = /^\s*(save|update)\s+estimate\s*$/i;
+  cfg.ESTIMATE_EMAIL_RE = /^\s*(e-?mail|send)\s+estimate\s*$/i;
+  cfg.LOT_PATH = "/lot";
   cfg.SUCCESS_WAIT_MS = 18000;
 })(globalThis);

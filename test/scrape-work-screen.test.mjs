@@ -101,3 +101,30 @@ test("scrape: table th/td Customer + Model", () => {
   assert.equal(fields.lastName, "Whatcott");
   assert.equal(fields.model, "911");
 });
+
+test("scrape: listener fields keep plate, vin, and tech, and drop phone and email", () => {
+  const fields = scrapeHtml(`
+    <div class="row"><label for="cu">Customer</label><input id="cu" value="Ada Whatcott"></div>
+    <div class="row"><label for="yr">Year</label><input id="yr" value="2018"></div>
+    <div class="row"><label for="mk">Make</label><input id="mk" value="Porsche"></div>
+    <div class="row"><label for="md">Model</label><input id="md" value="Boxster"></div>
+    <div class="row"><label for="pl">License plate</label><input id="pl" value="ABC1234"></div>
+    <div class="row"><label for="vn">VIN</label><input id="vn" value="WP0AB2A99KS123456"></div>
+    <div class="row"><label for="tc">Technician</label><input id="tc" value="Logan"></div>
+    <div class="row"><label for="ph">Phone</label><input id="ph" value="8015551212"></div>
+    <div class="row"><label for="em">Email</label><input id="em" value="ada@example.com"></div>
+    <div class="row"><label for="ro">RO #</label><input id="ro" value="J1001"></div>
+  `);
+  assert.equal(fields.customer, "Ada Whatcott");
+  assert.equal(fields.car, "2018 Porsche Boxster");
+  assert.equal(fields.plate, "ABC1234");
+  assert.equal(fields.vin, "WP0AB2A99KS123456");
+  assert.equal(fields.tech, "Logan");
+  assert.equal(fields.ro, "J1001");
+  assert.equal(fields.lastName, "Whatcott");
+  assert.equal(fields.model, "Boxster");
+  assert.equal(Object.hasOwn(fields, "phone"), false);
+  assert.equal(Object.hasOwn(fields, "email"), false);
+  assert.equal(api.isCloseControl({ textContent: "Close R/O", nodeType: 1, getAttribute() { return ""; } }), true);
+  assert.equal(api.isCancelControl({ textContent: "Cancel R/O", nodeType: 1, getAttribute() { return ""; } }), true);
+});

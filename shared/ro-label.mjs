@@ -9,7 +9,8 @@
  * Never license plate, account #, VIN, or first initial.
  */
 
-import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
+import { PDFDocument, PDFName, PDFString, StandardFonts, degrees, rgb } from "pdf-lib";
+import QRCode from "qrcode";
 import { FALLBACK_MEDIA, mediaBySku, pageSafeRect, prefersTurn, viewSafeRect, viewSize } from "./media.mjs";
 import { approxTextWidth, fitTextLayout } from "./text-fit.mjs";
 
@@ -22,6 +23,35 @@ const MAX_LEN = {
 
 /** Handwriting blank on line 2 — never filled from AllData. */
 export const OUT_MILEAGE_LINE = "Out Mileage _____________";
+
+/** Existing shop lot board. There is no per-car route; the RO rides in the query. */
+export const LOT_BOARD_URL = "https://shop.blackforestautomotive.com/lot";
+
+export function lotCardUrl(roNumber) {
+  const ro = clean(roNumber, MAX_LEN.roNumber);
+  if (!ro) return LOT_BOARD_URL;
+  return `${LOT_BOARD_URL}?ro=${encodeURIComponent(ro)}`;
+}
+
+/** Accept only the existing /lot board, with an optional ro query. */
+export function sanitizeLotUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    return "";
+  }
+  if (url.origin !== "https://shop.blackforestautomotive.com") return "";
+  if (url.pathname !== "/lot") return "";
+  const keys = [...url.searchParams.keys()];
+  if (keys.length > 1 || (keys.length === 1 && keys[0] !== "ro")) return "";
+  const ro = url.searchParams.get("ro");
+  if (ro == null || ro === "") return LOT_BOARD_URL;
+  if (!/^[A-Za-z0-9-]{1,24}$/.test(ro)) return "";
+  return lotCardUrl(ro);
+}
 
 /**
  * Extra inset (pt) inside ImageableArea for Create RO PDFs.
@@ -246,6 +276,7 @@ export function normalizeRoPayload(raw) {
 
   const model = cleanModel(raw.model);
   const roNumber = clean(raw.roNumber ?? raw.ro ?? raw.documentNumber, MAX_LEN.roNumber);
+  const lotUrl = sanitizeLotUrl(raw.lotUrl) || lotCardUrl(roNumber);
   // Per-Create click id from the Desk extension — never used as a customer/person key.
   const createArmId = clean(raw.createArmId ?? raw.create_arm_id ?? raw.createId, 64);
   const source = clean(raw.source ?? "alldata", 32) || "alldata";
@@ -260,6 +291,7 @@ export function normalizeRoPayload(raw) {
     ok: true,
     fields: {
       roNumber,
+      lotUrl,
       lastName,
       model,
       customerName,
@@ -305,29 +337,46 @@ function textBlock(id, text, x, y, w, h, size, bold) {
  * Labels editor-shaped doc preview on the address roll (30252).
  * Coordinates use the turned editor view + ImageableArea-safe rect.
  */
-export function buildRoLabelDoc(fields, mediaList = FALLBACK_MEDIA) {
+function layoutRoLabel(fields, mediaList = FALLBACK_MEDIA) {
   const media = mediaBySku(mediaList, "30252") ?? FALLBACK_MEDIA[0];
   const turned = prefersTurn(media);
   const view = viewSize(media, turned);
   const safe = viewSafeRect(media, turned);
-  const box = safe.w > 8 && safe.h > 6 ? safe : { x: 0, y: 0, w: view.widthPt, h: view.heightPt };
-  // Extra inset beyond ImageableArea so the top line is not clipped on the 550.
-  const pad = Math.max(RO_LABEL_SAFE_INSET_PT, Math.min(box.w, box.h) * 0.1);
-  const x0 = box.x + pad;
-  const y0 = box.y + pad;
-  const innerW = Math.max(8, box.w - pad * 2);
-  const innerH = Math.max(6, box.h - pad * 2);
-
+  const outer = safe.w > 8 && safe.h > 6 ? safe : { x: 0, y: 0, w: view.widthPt, h: view.heightPt };
+  const pad = Math.max(RO_LABEL_SAFE_INSET_PT, Math.min(outer.w, outer.h) * 0.1);
+  const box = {
+    x: outer.x + pad,
+    y: outer.y + pad,
+    w: Math.max(8, outer.w - pad * 2),
+    h: Math.max(6, outer.h - pad * 2),
+  };
+  const gap = 4;
+  const minText = Math.min(box.w * 0.55, 140);
+  let qr = Math.min(box.h, box.w - minText - gap);
+  if (qr < 24) qr = Math.min(box.h, Math.max(24, box.w * 0.28));
+  const qrBox = {
+    x: box.x + box.w - qr,
+    y: box.y + Math.max(0, (box.h - qr) / 2),
+    w: qr,
+    h: qr,
+  };
+  const textW = Math.max(8, qrBox.x - gap - box.x);
   const lines = roLabelLines(fields);
-  const rowH = innerH / Math.max(lines.length, 1);
-  const blocks = lines.map((text, index) =>
+  const rowH = box.h / Math.max(lines.length, 1);
+  const url = fields.lotUrl || lotCardUrl(fields.roNumber);
+  return { media, turned, box, qrBox, textW, rowH, lines, url };
+}
+
+export function buildRoLabelDoc(fields, mediaList = FALLBACK_MEDIA) {
+  const layout = layoutRoLabel(fields, mediaList);
+  const blocks = layout.lines.map((text, index) =>
     textBlock(
       `line${index}`,
       text,
-      x0,
-      y0 + rowH * index,
-      innerW,
-      Math.max(10, rowH * 0.92),
+      layout.box.x,
+      layout.box.y + layout.rowH * index,
+      layout.textW,
+      Math.max(10, layout.rowH * 0.92),
       index === 0 ? 16 : 12,
       index === 0,
     ),
@@ -336,10 +385,11 @@ export function buildRoLabelDoc(fields, mediaList = FALLBACK_MEDIA) {
   return {
     id: `ro-${fields.roNumber || "draft"}`,
     name: fields.roNumber ? `RO ${fields.roNumber}` : "RO label",
-    mediaKey: media.key,
-    turned,
+    mediaKey: layout.media.key,
+    turned: layout.turned,
     copies: 1,
     blocks,
+    qr: { url: layout.url, ...layout.qrBox },
   };
 }
 
@@ -372,14 +422,54 @@ export function planRoPrint(raw, mediaList = FALLBACK_MEDIA) {
  * (wide × short), then drawn onto the physical page with a 90° rotation so it
  * reads along the long edge inside the PPD ImageableArea.
  */
+async function drawLotQr(doc, page, media, qrBox, url) {
+  try {
+    const px = Math.max(96, Math.round(qrBox.w * 4));
+    const png = await QRCode.toBuffer(url, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: px,
+      color: { dark: "#000000", light: "#ffffff" },
+    });
+    const image = await doc.embedPng(png);
+    // Same 90° turn as the type: image-up follows the label's reading direction.
+    page.drawImage(image, {
+      x: media.widthPt - qrBox.y,
+      y: qrBox.x,
+      width: qrBox.w,
+      height: qrBox.h,
+      rotate: degrees(90),
+    });
+    const llx = media.widthPt - (qrBox.y + qrBox.h);
+    const lly = qrBox.x;
+    const urx = media.widthPt - qrBox.y;
+    const ury = qrBox.x + qrBox.w;
+    const link = doc.context.obj({
+      Type: "Annot",
+      Subtype: "Link",
+      Rect: [llx, lly, urx, ury],
+      Border: [0, 0, 0],
+      A: {
+        Type: "Action",
+        S: "URI",
+        URI: PDFString.of(url),
+      },
+    });
+    const annots = page.node.lookup(PDFName.of("Annots"));
+    if (annots) annots.push(link);
+    else page.node.set(PDFName.of("Annots"), doc.context.obj([link]));
+  } catch {
+    // A QR failure must not stop the two text lines.
+  }
+}
+
 export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
-  const media = mediaBySku(mediaList, "30252") ?? FALLBACK_MEDIA[0];
-  const lines = roLabelLines(fields);
+  const layout = layoutRoLabel(fields, mediaList);
+  const { media, lines, qrBox, textW, rowH, url, box } = layout;
   if (lines.length < 2) {
     throw new Error("Need lastName to render.");
   }
 
-  const viewSafe = viewSafeRect(media, true);
   const pageSafe = pageSafeRect(media);
 
   const doc = await PDFDocument.create();
@@ -390,20 +480,10 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
   // Layout in turned view space (matches buildRoLabelDoc), then map each
   // baseline into page space. Editor CW: view(x,y) = (pageY, pageW - pageX).
   // Inverse: page(x,y) = (pageW - viewY, viewX).
-  const outer = viewSafe.w > 8 && viewSafe.h > 6 ? viewSafe : { x: 0, y: 0, w: media.heightPt, h: media.widthPt };
-  const pad = Math.max(RO_LABEL_SAFE_INSET_PT, Math.min(outer.w, outer.h) * 0.1);
-  const box = {
-    x: outer.x + pad,
-    y: outer.y + pad,
-    w: Math.max(8, outer.w - pad * 2),
-    h: Math.max(6, outer.h - pad * 2),
-  };
-  const rowH = box.h / lines.length;
-
   for (let i = 0; i < lines.length; i += 1) {
     const text = lines[i];
     const face = i === 0 ? fontBold : font;
-    const row = { x: box.x, y: box.y + rowH * i, w: box.w, h: rowH };
+    const row = { x: box.x, y: box.y + rowH * i, w: textW, h: rowH };
     const measure = (t, size) => {
       try {
         return face.widthOfTextAtSize(String(t ?? ""), size);
@@ -436,6 +516,8 @@ export async function renderRoLabelPdf(fields, mediaList = FALLBACK_MEDIA) {
     });
   }
 
-  const pdf = await doc.save();
+  await drawLotQr(doc, page, media, qrBox, url);
+
+  const pdf = await doc.save({ useObjectStreams: false });
   return { pdf: Buffer.from(pdf), media };
 }

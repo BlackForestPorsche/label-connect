@@ -636,21 +636,167 @@
     return "";
   }
 
+  const RO_LABEL_RE = /^\s*(r\/?o|ro\s*#|repair\s*order)\s*:?\s*$/i;
+
+  /** Phone and email must never ride along as the RO number. */
+  function isContactValue(value) {
+    const text = String(value || "").trim();
+    if (!text || text.includes("@") || /\b(phone|e-?mail)\b/i.test(text)) return true;
+    const digits = text.replace(/\D/g, "");
+    return digits.length >= 10 && digits.length <= 15 && /^[+\d\s().-]+$/.test(text);
+  }
+
+  function cleanRoCandidate(value) {
+    const text = String(value || "")
+      .replace(/^RO\s*/i, "")
+      .trim();
+    if (!text || isVinNoise(text) || isContactValue(text)) return "";
+    return text;
+  }
+
+  /**
+   * Explicit RO / repair-order field. Account-shaped ids (J001094) are real RO
+   * numbers here; the plate/account filter is for last name and model only.
+   */
+  function rawLabeledRo(doc) {
+    const nodes = collectMatching(doc, "label, span, div, th, td, dt, dd, strong, b, p");
+    for (const node of nodes) {
+      const label = visibleText(node);
+      if (!label || !isExactFieldLabel(label, RO_LABEL_RE)) continue;
+      const forId = node.getAttribute?.("for");
+      const labeled = forId ? doc.getElementById(forId) : null;
+      const fromFor = cleanRoCandidate(labeled?.value);
+      if (fromFor) return fromFor;
+      const row = node.closest?.(
+        "tr, li, dl, .form-group, .field, [class*='row'], [class*='Row'], [class*='Field']",
+      );
+      const input = row?.querySelector?.("input, textarea");
+      const fromRow = cleanRoCandidate(input?.value);
+      if (fromRow) return fromRow;
+    }
+    const inputs = collectMatching(doc, "input, textarea");
+    for (const input of inputs) {
+      const hint = controlLabel(input);
+      if (!hint || !/\br\/?o\b|repair\s*order/i.test(hint)) continue;
+      if (FIELD_NOISE_HINT_RE.test(hint) || /phone|e-?mail/i.test(hint)) continue;
+      const value = cleanRoCandidate(input.value);
+      if (value) return value;
+    }
+    return "";
+  }
+
   function scrapeRoNumber(doc) {
+    const fromField = rawLabeledRo(doc);
+    if (fromField) return fromField;
     const direct =
-      labeledValue(doc, /^\s*(r\/?o|ro\s*#|repair\s*order)\s*:?\s*$/i) ||
-      findInputByHint(doc, /\br\/?o\b|repair\s*order/i);
-    if (direct) return direct.replace(/^RO\s*/i, "").trim();
+      labeledValue(doc, RO_LABEL_RE) || findInputByHint(doc, /\br\/?o\b|repair\s*order/i);
+    if (direct) {
+      const cleaned = cleanRoCandidate(direct);
+      if (cleaned) return cleaned;
+    }
     const body = visibleText(doc.body);
     const match = /\bRO\s*#?\s*([A-Z0-9-]{4,})\b/i.exec(body);
-    return match ? match[1] : "";
+    return match ? cleanRoCandidate(match[1]) : "";
+  }
+
+  function readExactField(doc, labelRe) {
+    const nodes = collectMatching(doc, "label, span, div, th, td, dt, dd, strong, b, p");
+    for (const node of nodes) {
+      const label = visibleText(node);
+      if (!label || !isExactFieldLabel(label, labelRe)) continue;
+      const forId = node.getAttribute?.("for");
+      if (forId) {
+        const input = doc.getElementById(forId);
+        const fromFor = String(input?.value || "").trim();
+        if (fromFor) return fromFor;
+      }
+      const row = node.closest?.(
+        "tr, li, dl, .form-group, .field, [class*='row'], [class*='Row'], [class*='Field']",
+      );
+      if (!row) continue;
+      const input = row.querySelector?.("input, textarea, select");
+      const fromInput = String(input?.value || "").trim();
+      if (fromInput) return fromInput;
+      const text = visibleText(row);
+      const stripped = text
+        .replace(label, "")
+        .replace(/^[:\s*]+/, "")
+        .trim();
+      if (stripped && stripped.length <= 80) return stripped;
+    }
+    return "";
+  }
+
+  function withoutContact(value) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text || isContactValue(text)) return "";
+    return text;
   }
 
   function scrapeWorkScreen(doc = document) {
     const lastName = scrapeCustomerLastName(doc);
     const { model, source } = modelFromPageWithSource(doc);
     const roNumber = scrapeRoNumber(doc);
-    return { lastName, model, modelSource: source, roNumber };
+    const year = readExactField(doc, /^\s*(year|yr)\s*$/i);
+    const make = readExactField(doc, /^\s*make\s*$/i);
+    const customer = withoutContact(
+      readExactField(doc, /^\s*(customer(\s*name)?)\s*$/i) || lastName,
+    );
+    const car = [year, make, model].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+    const plate = withoutContact(
+      readExactField(doc, /^\s*(license\s*plate|licence\s*plate|lic\.?\s*plate|plate|tag)\s*(?:#|no\.?|number)?\s*$/i),
+    );
+    const vin = withoutContact(readExactField(doc, /^\s*vin\s*(?:#|number)?\s*$/i));
+    const tech = withoutContact(
+      readExactField(doc, /^\s*(tech(?:nician)?|service\s*tech(?:nician)?)\s*$/i),
+    );
+    return {
+      lastName,
+      model,
+      modelSource: source,
+      roNumber,
+      ro: roNumber,
+      customer,
+      car,
+      plate,
+      vin,
+      tech,
+    };
+  }
+
+  function pageLooksLikeEstimate(doc) {
+    const root = doc || (typeof document !== "undefined" ? document : null);
+    if (!root) return false;
+    if (/\bestimate\b/i.test(String(root.title || ""))) return true;
+    const heads = collectMatching(root, "h1, h2, h3, [role='heading']");
+    for (const node of heads) {
+      const text = visibleText(node);
+      if (text && text.length < 80 && /\bestimate\b/i.test(text)) return true;
+    }
+    return false;
+  }
+
+  function isCloseControl(el) {
+    const label = controlLabel(el);
+    return Boolean(label && api.CLOSE_LABEL_RE && api.CLOSE_LABEL_RE.test(label));
+  }
+
+  function isCancelControl(el) {
+    const label = controlLabel(el);
+    return Boolean(label && api.CANCEL_LABEL_RE && api.CANCEL_LABEL_RE.test(label));
+  }
+
+  /** Read-only: which estimate action this control is, or "". */
+  function estimateAction(el) {
+    const label = controlLabel(el);
+    if (!label) return "";
+    if (api.ESTIMATE_SAVE_RE && api.ESTIMATE_SAVE_RE.test(label)) return "estimate_saved";
+    if (api.ESTIMATE_EMAIL_RE && api.ESTIMATE_EMAIL_RE.test(label)) return "estimate_emailed";
+    const doc = el?.ownerDocument || (typeof document !== "undefined" ? document : null);
+    if (!pageLooksLikeEstimate(doc)) return "";
+    if (/^\s*save\s*$/i.test(label)) return "estimate_saved";
+    if (/^\s*(e-?mail|send\s+e-?mail)\s*$/i.test(label)) return "estimate_emailed";
+    return "";
   }
 
   function isCreateControl(el) {
@@ -871,6 +1017,9 @@
   api.isStateOrRegionNoise = isStateOrRegionNoise;
   api.normalizeModelToken = normalizeModelToken;
   api.isCreateControl = isCreateControl;
+  api.isCloseControl = isCloseControl;
+  api.isCancelControl = isCancelControl;
+  api.estimateAction = estimateAction;
   api.isForbiddenControl = isForbiddenControl;
   api.createControlPresent = createControlPresent;
   api.updateControlPresent = updateControlPresent;

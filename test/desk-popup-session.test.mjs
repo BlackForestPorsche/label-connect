@@ -88,6 +88,26 @@ test("popup flips live when the session starts and ends", async () => {
   assert.equal(p.visible("loginBox"), true);
 });
 
+test("Create RO listener key saves locally and stays visible while logged in", async () => {
+  const p = await openPopup({
+    shopWidgetToken: "t",
+    shopWidgetTokenExpiresAt: Date.now() + 3_600_000,
+    deskSessionPerson: "logan",
+    dwightCreateRoToken: "already-on-desk",
+  });
+  const input = p.document.getElementById("dwightCreateRoToken");
+  assert.ok(input);
+  assert.equal(p.document.getElementById("loginBox").contains(input), false);
+  assert.equal(input.value, "already-on-desk");
+  assert.equal(p.document.getElementById("dwightKeyHint").textContent.includes("already-on-desk"), false);
+  input.value = "desk-listener-test";
+  input.dispatchEvent(new p.document.defaultView.Event("input", { bubbles: true }));
+  await p.settle();
+  assert.equal(p.storage.dwightCreateRoToken, "desk-listener-test");
+  assert.equal(p.document.getElementById("status").textContent.includes("desk-listener-test"), false);
+  assert.equal(p.document.getElementById("dwightKeyHint").textContent.includes("desk-listener-test"), false);
+});
+
 test("logged in without a known person still reads Logged in", async () => {
   const p = await openPopup({
     shopWidgetToken: "t",

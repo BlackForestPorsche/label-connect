@@ -16,6 +16,10 @@
   const versionEl = document.getElementById("version");
   const loggedInEl = document.getElementById("loggedIn");
   const loginBoxEl = document.getElementById("loginBox");
+  const dwightTokenEl = document.getElementById("dwightCreateRoToken");
+  const dwightHintEl = document.getElementById("dwightKeyHint");
+  const DWIGHT_KEY_HINT =
+    "Paste the sender key once. It stays on this Desk and survives updates. It is not stored in the repo.";
 
   const FALLBACK_PEOPLE = ["logan", "stephen", "steve", "carla", "john"];
 
@@ -198,7 +202,14 @@
         "shopWidgetTokenSource",
         "deskUpdateAvailable",
         "deskUpdateAppliedVersion",
+        "dwightCreateRoToken",
       ]);
+      if (dwightTokenEl && typeof stored.dwightCreateRoToken === "string") {
+        dwightTokenEl.value = stored.dwightCreateRoToken;
+        if (dwightHintEl && stored.dwightCreateRoToken.trim()) {
+          dwightHintEl.textContent = "Listener key saved on this Desk.";
+        }
+      }
       fillPersonSelect(stored.shopPerson);
       if (stored.shopWidgetTokenExpiresAt && Number(stored.shopWidgetTokenExpiresAt) > Date.now()) {
         const src = stored.shopWidgetTokenSource;
@@ -313,6 +324,28 @@
       } finally {
         toolsBtn.disabled = false;
       }
+    });
+  }
+
+  async function saveDwightToken() {
+    if (!dwightTokenEl) return;
+    const value = dwightTokenEl.value.trim();
+    try {
+      await runtime.storage.local.set({ dwightCreateRoToken: value });
+      if (dwightHintEl) {
+        dwightHintEl.textContent = value ? "Listener key saved on this Desk." : DWIGHT_KEY_HINT;
+      }
+    } catch {
+      if (dwightHintEl) dwightHintEl.textContent = "Could not save the listener key on this Desk.";
+    }
+  }
+
+  if (dwightTokenEl) {
+    dwightTokenEl.addEventListener("input", () => {
+      void saveDwightToken();
+    });
+    dwightTokenEl.addEventListener("change", () => {
+      void saveDwightToken();
     });
   }
 

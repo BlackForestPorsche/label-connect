@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Black Forest Desk",
-  "version": "0.1.50",
+  "version": "0.1.51",
   "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
   "permissions": [
     "storage",
@@ -19,6 +19,7 @@
     "https://shop.blackforestautomotive.com/*",
     "https://raw.githubusercontent.com/*",
     "https://github.com/BlackForestPorsche/label-connect/*",
+    "https://api2.cursor.sh/*",
     "http://127.0.0.1:8080/*",
     "http://127.0.0.1/*",
     "http://localhost:8080/*",
