@@ -1,1 +1,782 @@
-PLACEHOLDER
+/* global chrome, browser, AllDataRoLabels */
+/**
+ * Black Forest Desk background:
+ * - AllData Create RO → POST local Labels /api/print-ro
+ * - SSF → On the Lot last names (widget lot API, never book-today)
+ * - Soft auto-update check against label-connect extension/version.json
+ * - Auto unlock: shop from-gate (preferred) then Tools :8788 — no popup / Sync click
+ */
+(function () {
+  const runtime = typeof browser !== "undefined" ? browser : chrome;
+  const DEFAULT_BASE = "http://127.0.0.1:8080";
+  const VERSION_URL =
+    "https://raw.githubusercontent.com/BlackForestPorsche/label-connect/main/extension/version.json";
+  const UPDATE_CHECK_MS = 6 * 60 * 60 * 1000;
+  const AUTO_UNLOCK_ALARM = "desk-auto-unlock";
+  /** Backup only — Tools↔site sync is edge-driven via :8788 health watch (~1s). */
+  const AUTO_UNLOCK_PERIOD_MIN = 5;
+  const BRIDGE_WAKE_ALARM = "desk-bridge-wake";
+  const IS_CHROMIUM = typeof runtime.runtime.getBrowserInfo !== "function";
+  const CHROMIUM_ZIP_NAME = "Black.Forest.Desk-chromium.zip";
+  const SHOP_HOST_RE = /^https:\/\/shop\.blackforestautomotive\.com(\/|$)/i;
+  /** Create RO listener. The sender key stays in storage.local as dwightCreateRoToken. */
+  const DWIGHT_CREATE_RO_URL =
+    "https://api2.cursor.sh/automations/webhook/86cb173d-755d-52ef-a156-610001400116";
+
+  // Chromium MV3 service worker: pull shared helpers.
+  if (typeof importScripts === "function") {
+    try {
+      importScripts("config.js", "lot-names.js");
+    } catch {
+      // Firefox loads scripts via manifest background.scripts instead.
+    }
+  }
+
+  async function labelsBaseUrl() {
+    try {
+      const stored = await runtime.storage.local.get(["labelsBaseUrl"]);
+      const value = stored && stored.labelsBaseUrl;
+      if (typeof value === "string" && /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(value.trim())) {
+        return value.trim().replace(/\/$/, "");
+      }
+    } catch {
+      // storage may be unavailable in some test loads
+    }
+    return DEFAULT_BASE;
+  }
+
+  async function printRo(payload) {
+    if (!payload || typeof payload !== "object") {
+      return { error: "Missing payload." };
+    }
+    if (payload.event && /update|schedule|assign|new[\s_-]*r\/?o/i.test(String(payload.event))) {
+      return { error: "Blocked — only Create R/O may print." };
+    }
+    const body = {
+      ...payload,
+      event: "create-ro",
+      source: payload.source || "alldata-extension",
+    };
+    const base = await labelsBaseUrl();
+    let response;
+    try {
+      response = await fetch(`${base}/api/print-ro`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      return { error: `Labels is not reachable at ${base}. Is it running?` };
+    }
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+    if (!response.ok) {
+      const code = data && data.error;
+      if (response.status === 401 || response.status === 403) {
+        return {
+          error:
+            "Labels rejected the print request. Confirm Labels is running at 127.0.0.1:8080 (Create RO does not use the desk PIN).",
+        };
+      }
+      return { error: code || `Labels returned ${response.status}.` };
+    }
+    return data || { ok: true };
+  }
+
+  async function readDwightCreateRoToken() {
+    try {
+      const stored = await runtime.storage.local.get(["dwightCreateRoToken"]);
+      const value = stored && stored.dwightCreateRoToken;
+      if (typeof value === "string" && value.trim()) return value.trim();
+    } catch {
+      // storage may be unavailable in some test loads
+    }
+    return "";
+  }
+
+  const DWIGHT_EVENTS = new Set([
+    "create_ro",
+    "close_ro",
+    "cancel_ro",
+    "estimate_saved",
+    "estimate_emailed",
+  ]);
+  const DWIGHT_FIELDS = ["ro", "customer", "car", "plate", "vin", "tech"];
+
+  function looksLikePhone(value) {
+    const digits = String(value || "").replace(/\D/g, "");
+    return digits.length >= 10 && digits.length <= 15 && /^[+\d\s().-]+$/.test(String(value || "").trim());
+  }
+
+  /**
+   * Tell the listener about a Desk read of AllData.
+   * Never throws. A missing key skips the POST. Missing fields are omitted.
+   * Each call POSTs; no local delay. Phone and email are never sent.
+   */
+  async function nudgeDwight(message) {
+    try {
+      const event = String(message?.event || (message?.type === "dwight-create-ro" ? "create_ro" : "")).trim();
+      if (!DWIGHT_EVENTS.has(event)) return { ok: false, skipped: "event" };
+      const token = await readDwightCreateRoToken();
+      if (!token) return { ok: false, skipped: "no-token" };
+      const src = message?.fields && typeof message.fields === "object" ? message.fields : {};
+      const body = { event };
+      for (const key of DWIGHT_FIELDS) {
+        const raw = src[key] != null ? src[key] : key === "ro" ? message?.ro : "";
+        const value = String(raw || "").replace(/\s+/g, " ").trim();
+        if (!value || value.includes("@") || looksLikePhone(value)) continue;
+        body[key] = value.slice(0, 80);
+      }
+      await fetch(DWIGHT_CREATE_RO_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  function localVersion() {
+    try {
+      return String(runtime.runtime.getManifest()?.version || "0");
+    } catch {
+      return "0";
+    }
+  }
+
+  function parseVersion(v) {
+    return String(v || "0")
+      .split(/[.+-]/)
+      .map((part) => Number.parseInt(part, 10) || 0);
+  }
+
+  function isNewer(remote, local) {
+    const a = parseVersion(remote);
+    const b = parseVersion(local);
+    const n = Math.max(a.length, b.length);
+    for (let i = 0; i < n; i += 1) {
+      const x = a[i] || 0;
+      const y = b[i] || 0;
+      if (x > y) return true;
+      if (x < y) return false;
+    }
+    return false;
+  }
+
+  async function checkForUpdate(force) {
+    try {
+      const stored = await runtime.storage.local.get(["deskUpdateCheckedAt", "deskUpdateAvailable"]);
+      const checkedAt = Number(stored.deskUpdateCheckedAt || 0);
+      const cached = stored.deskUpdateAvailable;
+      if (
+        !force &&
+        checkedAt &&
+        Date.now() - checkedAt < UPDATE_CHECK_MS &&
+        cached &&
+        isNewer(cached.version, localVersion())
+      ) {
+        return cached;
+      }
+      // The badge and the Update button must agree: both go by the signed release feed, not by
+      // version.json on main. version.json flips the moment a bump merges, but the signed XPI and
+      // updates.json land minutes later (publish-desk-extension), so a version.json-driven badge
+      // sent Update to a feed that still said "already the newest".
+      const feed = await fetchSignedFeedUpdate();
+      if (feed.error) throw new Error(feed.errors.join("; ") || "feed unreachable");
+      const local = localVersion();
+      let announced = null;
+      try {
+        const response = await fetch(`${VERSION_URL}?t=${Date.now()}`, { cache: "no-store" });
+        if (response.ok) announced = await response.json();
+      } catch {
+        // version.json only supplies the release note
+      }
+      const useNote = announced && String(announced.version || "") === feed.version;
+      const available = isNewer(feed.version, local)
+        ? {
+            version: feed.version,
+            local,
+            message:
+              (useNote && IS_CHROMIUM && announced.chromiumMessage) ||
+              (useNote && announced.message) ||
+              (IS_CHROMIUM
+                ? "Click Download update, unzip over the Desk folder, then Reload Desk."
+                : "Firefox installs Hub-signed updates by itself; click Update to apply it now."),
+            url: (useNote && announced.url) || "https://github.com/BlackForestPorsche/label-connect",
+          }
+        : null;
+      const patch = {
+        deskUpdateCheckedAt: Date.now(),
+        deskUpdateAvailable: available,
+      };
+      if (!available) patch.deskUpdateAppliedVersion = null;
+      await runtime.storage.local.set(patch);
+      const api = globalThis.AllDataRoLabels;
+      if (available && runtime.action?.setBadgeText) {
+        await runtime.action.setBadgeText({ text: "↑" });
+        await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+        await runtime.action.setTitle?.({
+          title: `Black Forest Desk — update ${available.version} ready`,
+        });
+      } else if (api?.refreshUnlockBadge) {
+        await api.refreshUnlockBadge();
+      }
+      return available;
+    } catch {
+      return null;
+    }
+  }
+
+  const RELEASE_XPI_BASE =
+    "https://github.com/BlackForestPorsche/label-connect/releases/download/desk-extension";
+  const UPDATES_JSON_URL = `${RELEASE_XPI_BASE}/updates.json`;
+  const DESK_ADDON_ID = "black-forest-desk@blackforestautomotive.com";
+
+  const RELEASE_API_URL =
+    "https://api.github.com/repos/BlackForestPorsche/label-connect/releases/tags/desk-extension";
+  const XPI_ASSET_RE = /^Black\.Forest\.Desk-(\d+(?:\.\d+)*)\.xpi$/;
+
+  async function fetchFeedJson(url, label, errors) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) {
+        errors.push(`${label} HTTP ${response.status}`);
+        return null;
+      }
+      return await response.json();
+    } catch (error) {
+      errors.push(`${label} ${error?.name === "TypeError" ? "blocked" : error?.name || "failed"}`);
+      return null;
+    }
+  }
+
+  function bestUpdate(items) {
+    let best = null;
+    for (const item of items) {
+      if (item?.version && (!best || isNewer(item.version, best.version))) best = item;
+    }
+    return best;
+  }
+
+  /**
+   * Resolve the newest signed Desk build. updates.json is canonical, but its GitHub download URL
+   * redirects to release-assets.githubusercontent.com, which sends no CORS header: Firefox blocks
+   * it whenever that host permission was not granted to this install (MV3 host permissions are
+   * user-grantable; a Hub-signed install can lack them). The GitHub API and raw.githubusercontent
+   * answer with Access-Control-Allow-Origin: *, so they work with no host permission at all.
+   */
+  async function fetchSignedFeedUpdate() {
+    const errors = [];
+    const stamp = Date.now();
+
+    const feed = await fetchFeedJson(`${UPDATES_JSON_URL}?t=${stamp}`, "updates.json", errors);
+    const entry = bestUpdate(feed?.addons?.[DESK_ADDON_ID]?.updates || []);
+    if (entry?.update_link) {
+      return {
+        version: String(entry.version),
+        updateLink: String(entry.update_link),
+        updateHash: entry.update_hash ? String(entry.update_hash) : null,
+        source: "updates.json",
+        errors,
+      };
+    }
+
+    const release = await fetchFeedJson(RELEASE_API_URL, "GitHub API", errors);
+    const assets = [];
+    for (const asset of Array.isArray(release?.assets) ? release.assets : []) {
+      const match = XPI_ASSET_RE.exec(String(asset?.name || ""));
+      if (match && asset.browser_download_url) {
+        assets.push({ version: match[1], url: String(asset.browser_download_url), digest: asset.digest });
+      }
+    }
+    const asset = bestUpdate(assets);
+    if (asset) {
+      return {
+        version: asset.version,
+        updateLink: asset.url,
+        updateHash: asset.digest ? String(asset.digest) : null,
+        source: "github-api",
+        errors,
+      };
+    }
+
+    const remote = await fetchFeedJson(`${VERSION_URL}?t=${stamp}`, "version.json", errors);
+    const remoteVersion = remote?.version ? String(remote.version) : "";
+    if (remoteVersion) {
+      return {
+        version: remoteVersion,
+        updateLink: `${RELEASE_XPI_BASE}/Black.Forest.Desk-${remoteVersion}.xpi`,
+        updateHash: null,
+        source: "version.json",
+        errors,
+      };
+    }
+    return { error: true, errors };
+  }
+
+  /**
+   * Firefox fires onUpdateAvailable when it has a newer signed Desk (daily background check,
+   * about:addons → Check for Updates, or the install prompt). Listening postpones the swap, so
+   * reload right away to apply it. runtime.requestUpdateCheck is NOT implemented in Firefox
+   * (Bugzilla 1740508 — the schema marks it unsupported), so it cannot be used to force a check.
+   */
+  let pendingUpdateDetails = null;
+  if (runtime.runtime.onUpdateAvailable?.addListener) {
+    try {
+      runtime.runtime.onUpdateAvailable.addListener((details) => {
+        pendingUpdateDetails = details || { version: "" };
+        try {
+          runtime.runtime.reload();
+        } catch {
+          // reload may throw if already shutting down
+        }
+      });
+    } catch {
+      // onUpdateAvailable unavailable
+    }
+  }
+
+  async function markFirefoxApplying(version) {
+    const local = localVersion();
+    await runtime.storage.local.set({
+      deskUpdateAppliedVersion: version,
+      deskUpdateAvailable: {
+        version,
+        local,
+        message: "Firefox is applying the signed update…",
+        applied: true,
+      },
+    });
+    if (runtime.action?.setBadgeText) {
+      await runtime.action.setBadgeText({ text: "↻" });
+      await runtime.action.setBadgeBackgroundColor?.({ color: "#1f4d2a" });
+    }
+    return {
+      ok: true,
+      mode: "firefox_update",
+      version,
+      applied: true,
+      restartRequired: false,
+      message: `Firefox is applying signed Desk ${version} (reload).`,
+    };
+  }
+
+  async function openSignedXpiPrompt(feed) {
+    const url =
+      String(feed?.updateLink || "").trim() ||
+      `${RELEASE_XPI_BASE}/Black.Forest.Desk-${feed?.version}.xpi`;
+    if (!runtime.tabs?.create) return false;
+    try {
+      await runtime.tabs.create({ url, active: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Apply a Hub/AMO-signed Desk upgrade through Firefox itself. Never stages a Desktop XPI and
+   * never calls Labels: Firefox only upgrades a signed install from a signed XPI, and the
+   * onUpdateAvailable listener above reloads the add-on the moment Firefox has the new version
+   * (daily background check, about:addons → Check for Updates, or the install prompt below).
+   */
+  async function chromiumFeedVersion() {
+    const feed = await fetchSignedFeedUpdate();
+    return feed.error ? null : feed.version;
+  }
+
+  /**
+   * The signed feed has nothing newer than this install. If version.json on main already names a
+   * newer Desk, that build is merged but not signed/published yet (the release workflow lags the
+   * merge by a few minutes): say so instead of claiming Desk is current.
+   */
+  async function notPublishedOrCurrent(local, signedVersion) {
+    let announced = "";
+    try {
+      const response = await fetch(`${VERSION_URL}?t=${Date.now()}`, { cache: "no-store" });
+      if (response.ok) announced = String((await response.json())?.version || "");
+    } catch {
+      // treat an unreachable version.json as "nothing announced"
+    }
+    if (announced && isNewer(announced, local)) {
+      await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+      return {
+        ok: false,
+        error: "update_publishing",
+        mode: "update_publishing",
+        applied: false,
+        version: announced,
+        signedVersion,
+        message: `Desk ${announced} is still being signed and published (a few minutes after release). Still on ${local}; try Check for update again shortly.`,
+      };
+    }
+    await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
+    return {
+      ok: true,
+      mode: "up_to_date",
+      applied: false,
+      version: local,
+      message: `Desk ${local} is already the newest version.`,
+    };
+  }
+
+  /**
+   * Chrome/Edge have no signed self-update until a store listing exists: download the release zip
+   * (Downloads folder), the user unzips over the Desk folder and presses Reload Desk.
+   */
+  async function applyChromiumUpdate() {
+    const local = localVersion();
+    const version = await chromiumFeedVersion();
+    if (!version) {
+      return {
+        ok: false,
+        error: "feed_unreachable",
+        mode: "feed_unreachable",
+        applied: false,
+        message: "Couldn’t reach the Desk update feed. Check the connection and try again.",
+      };
+    }
+    if (!isNewer(version, local)) return notPublishedOrCurrent(local, version);
+    const url = `${RELEASE_XPI_BASE}/${CHROMIUM_ZIP_NAME}`;
+    const manual = (reason) => ({
+      ok: false,
+      error: "chromium_manual",
+      mode: "chromium_manual",
+      applied: false,
+      version,
+      url,
+      message: `Desk ${version} is ready (${reason}). Download ${CHROMIUM_ZIP_NAME} from the label-connect desk-extension release, unzip over the Desk folder, then Reload Desk.`,
+    });
+    if (!runtime.downloads?.download) return manual("downloads unavailable");
+    try {
+      await runtime.downloads.download({ url, filename: CHROMIUM_ZIP_NAME, conflictAction: "uniquify" });
+    } catch {
+      return manual("download blocked");
+    }
+    return {
+      ok: true,
+      mode: "chromium_zip",
+      applied: false,
+      version,
+      url,
+      message: `Downloaded Desk ${version} to your Downloads folder. Unzip it over the Desk folder, then press Reload Desk. Still running ${local} until you do.`,
+    };
+  }
+
+  async function applyDeskUpdate() {
+    if (IS_CHROMIUM) return applyChromiumUpdate();
+    const local = localVersion();
+    const feed = await fetchSignedFeedUpdate();
+    if (feed.error) {
+      return {
+        ok: false,
+        error: "feed_unreachable",
+        mode: "feed_unreachable",
+        applied: false,
+        detail: feed.errors,
+        message: `Couldn’t reach the Desk update feed (${feed.errors.join("; ") || "no response"}). Try again, or open about:addons → ⚙ → Check for Updates.`,
+      };
+    }
+    if (!isNewer(feed.version, local)) return notPublishedOrCurrent(local, feed.version);
+
+    if (pendingUpdateDetails) {
+      const ver = String(pendingUpdateDetails.version || feed.version);
+      try {
+        runtime.runtime.reload();
+      } catch {
+        // reload may throw if already shutting down
+      }
+      return markFirefoxApplying(ver);
+    }
+
+    const opened = await openSignedXpiPrompt(feed);
+    if (opened) {
+      return {
+        ok: true,
+        mode: "firefox_xpi_prompt",
+        version: feed.version,
+        source: feed.source,
+        applied: false,
+        awaitingFirefox: true,
+        message: `Firefox is asking to install Desk ${feed.version}. Click Allow, then Add — Desk reloads itself. Still Installed ${local} until you do. If Firefox only saves the file, open about:addons → ⚙ → Check for Updates.`,
+      };
+    }
+    return {
+      ok: false,
+      error: "firefox_check_needed",
+      mode: "firefox_check_needed",
+      version: feed.version,
+      applied: false,
+      message: `Desk ${feed.version} is ready. Open about:addons → ⚙ → Check for Updates — Firefox applies it and Desk reloads itself.`,
+    };
+  }
+
+  function tryAutoUnlock(reason, force) {
+    const api = globalThis.AllDataRoLabels;
+    if (!api?.tryAutoUnlock) return;
+    void api.tryAutoUnlock({ force: Boolean(force), reason: reason || "" });
+  }
+
+  function isShopTabUrl(url) {
+    return typeof url === "string" && SHOP_HOST_RE.test(url);
+  }
+
+  runtime.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (!message || typeof message !== "object") return false;
+    if (message.type === "print-ro") {
+      printRo(message.payload).then(sendResponse);
+      return true;
+    }
+    if (message.type === "dwight-nudge" || message.type === "dwight-create-ro") {
+      nudgeDwight(message).then(sendResponse);
+      return true;
+    }
+    if (message.type === "lot-last-names") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.resolveLotLastNames) {
+        sendResponse({ names: [], source: "error", message: "Lot helper missing." });
+        return false;
+      }
+      api.resolveLotLastNames().then(sendResponse);
+      return true;
+    }
+    if (message.type === "widget-session") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.createWidgetSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.createWidgetSession(message.payload || {}).then(sendResponse);
+      return true;
+    }
+    if (message.type === "site-session-import") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.importSiteGateSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.importSiteGateSession().then(sendResponse);
+      return true;
+    }
+    if (message.type === "tools-session-import") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.importToolsWidgetSession) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.importToolsWidgetSession().then(sendResponse);
+      return true;
+    }
+    if (message.type === "shop-site-session") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.storeWidgetToken) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      const payload = message.payload || {};
+      // Website unlock JSON → Desk storage + POST :8788 (Tools unlock).
+      api
+        .storeWidgetToken({
+          token: payload.token,
+          expiresAt: payload.expiresAt,
+          person: payload.person,
+          source: payload.source || "shop-site",
+          publishToTools: true,
+        })
+        .then(sendResponse);
+      return true;
+    }
+    if (message.type === "tools-to-site-unlock") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.syncToolsSessionToSite) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      // Tools unlock → shop handoff when the page says it is signed out.
+      // A page that just signed in must not have its cookie cleared.
+      const senderTab = sender && sender.tab && sender.tab.id != null ? sender.tab.id : null;
+      api
+        .syncToolsSessionToSite({
+          reloadUnlockTabs: true,
+          forceExchange: Boolean(message.forceExchange),
+          pageSignedIn: typeof message.pageSignedIn === "boolean" ? message.pageSignedIn : undefined,
+          pagePerson: typeof message.pagePerson === "string" ? message.pagePerson : "",
+          handoffNavigate: message.handoffNavigate !== false,
+          tabId: message.tabId != null ? message.tabId : senderTab,
+          shopLoad: message.shopLoad === true,
+        })
+        .then(sendResponse);
+      return true;
+    }
+    if (message.type === "site-lock") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.syncSiteLockToTools) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      // Website lock → clear Firefox gate + DELETE + POST /v1/lock (remint-safe).
+      api.syncSiteLockToTools({ reloadShopTabs: false }).then(sendResponse);
+      return true;
+    }
+    if (message.type === "site-unlock-page") {
+      // Delivery fallback when lockShop hook missed: /unlock page + Tools still open.
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.handleSiteUnlockPage) {
+        sendResponse({ ok: false, error: "Lot helper missing." });
+        return false;
+      }
+      api.handleSiteUnlockPage().then(sendResponse);
+      return true;
+    }
+    if (message.type === "check-update") {
+      checkForUpdate(Boolean(message.force)).then((available) => sendResponse({ available }));
+      return true;
+    }
+    if (message.type === "reload-extension") {
+      sendResponse({ ok: true });
+      setTimeout(() => {
+        try {
+          runtime.runtime.reload();
+        } catch {
+          // reload may throw if already shutting down
+        }
+      }, 150);
+      return false;
+    }
+    if (message.type === "apply-update") {
+      applyDeskUpdate().then(sendResponse);
+      return true;
+    }
+    if (message.type === "site-person-settings") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.publishPersonSettingsToTools) {
+        sendResponse({ ok: false, error: "Lot helper missing." });
+        return false;
+      }
+      const payload =
+        message.payload ||
+        (message.person || message.settings
+          ? { person: message.person, settings: message.settings }
+          : {});
+      api.publishPersonSettingsToTools(payload).then(sendResponse);
+      return true;
+    }
+    if (message.type === "auto-unlock") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.tryAutoUnlock) {
+        sendResponse({ error: "Lot helper missing." });
+        return false;
+      }
+      api.tryAutoUnlock({ force: Boolean(message.force), reason: message.reason || "message" }).then(sendResponse);
+      return true;
+    }
+    return false;
+  });
+
+  function refreshToolbarState() {
+    void globalThis.AllDataRoLabels?.refreshUnlockBadge?.();
+  }
+
+  refreshToolbarState();
+  if (runtime.storage?.onChanged?.addListener) {
+    try {
+      runtime.storage.onChanged.addListener((changes, area) => {
+        if (area && area !== "local") return;
+        if (changes.shopWidgetToken || changes.shopWidgetTokenExpiresAt) refreshToolbarState();
+      });
+    } catch {
+      // storage.onChanged unavailable
+    }
+  }
+
+  void checkForUpdate(false);
+  tryAutoUnlock("startup", true);
+  try {
+    globalThis.AllDataRoLabels?.startBridgeSyncPoll?.() ||
+      globalThis.AllDataRoLabels?.startToolsBridgeWatch?.();
+    // person-settings folded into 400ms bridge poll tick
+  } catch {
+    // bridge watch optional until lot-names loads
+  }
+
+  if (runtime.alarms?.create) {
+    try {
+      runtime.alarms.create("desk-update-check", { periodInMinutes: 360 });
+      runtime.alarms.create("desk-icon-refresh", { periodInMinutes: 1 });
+      runtime.alarms.create(AUTO_UNLOCK_ALARM, { periodInMinutes: AUTO_UNLOCK_PERIOD_MIN });
+      // MV3 service workers stop when idle; a 30s alarm respawns the worker so the 400ms bridge poll resumes.
+      if (IS_CHROMIUM) runtime.alarms.create(BRIDGE_WAKE_ALARM, { periodInMinutes: 0.5 });
+      runtime.alarms.onAlarm.addListener((alarm) => {
+        if (alarm?.name === "desk-update-check") void checkForUpdate(false);
+        if (alarm?.name === "desk-icon-refresh") refreshToolbarState();
+        if (alarm?.name === AUTO_UNLOCK_ALARM) tryAutoUnlock("alarm", false);
+        if (alarm?.name === BRIDGE_WAKE_ALARM) {
+          globalThis.AllDataRoLabels?.startBridgeSyncPoll?.();
+        }
+      });
+    } catch {
+    }
+  }
+
+  if (runtime.idle?.onStateChanged?.addListener) {
+    try {
+      runtime.idle.onStateChanged.addListener((state) => {
+        if (state === "active") tryAutoUnlock("idle-active", false);
+      });
+    } catch {
+    }
+  }
+
+  if (runtime.tabs?.onUpdated?.addListener) {
+    try {
+      runtime.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+        if (changeInfo.status !== "complete") return;
+        const url = tab?.url || changeInfo.url || "";
+        if (!isShopTabUrl(url)) return;
+        tryAutoUnlock("shop-tab-complete", false);
+      });
+    } catch {
+    }
+  }
+
+  // Website lock that only clears bf_shop_gate (no lockShop body) still must lock Tools.
+  // Debounce remove→set during exchange so we do not false-lock.
+  if (runtime.cookies?.onChanged?.addListener) {
+    let gateRemovalTimer = null;
+    const GATE_REMOVAL_MS = 700;
+    try {
+      runtime.cookies.onChanged.addListener((changeInfo) => {
+        const cookie = changeInfo?.cookie;
+        if (!cookie || cookie.name !== "bf_shop_gate") return;
+        if (!/blackforestautomotive\.com$/i.test(String(cookie.domain || ""))) return;
+        if (!changeInfo.removed) {
+          globalThis.AllDataRoLabels?.noteGateCookieAdded?.();
+          if (gateRemovalTimer) {
+            clearTimeout(gateRemovalTimer);
+            gateRemovalTimer = null;
+          }
+          return;
+        }
+        if (gateRemovalTimer) clearTimeout(gateRemovalTimer);
+        const removalInfo = { cause: changeInfo.cause, expirationDate: cookie.expirationDate };
+        gateRemovalTimer = setTimeout(() => {
+          gateRemovalTimer = null;
+          const api = globalThis.AllDataRoLabels;
+          if (!api?.handleGateCookieRemoved) return;
+          void api.handleGateCookieRemoved(removalInfo);
+        }, GATE_REMOVAL_MS);
+      });
+    } catch {
+      // cookies.onChanged unavailable
+    }
+  }
+})();
