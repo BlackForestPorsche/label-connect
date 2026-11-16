@@ -1,6 +1,6 @@
 {
-  "version": "0.1.50",
-  "message": "Desk 0.1.50 restores the 0.1.42 shop sync: read bf_shop_gate, then POST from-gate with credentials include. Create R/O auto-print is unchanged.",
+  "version": "0.1.51",
+  "message": "Desk 0.1.51: Create, Close, and Cancel RO plus estimate save/email ping Dwight's listener. Create RO labels add a lot QR. Label print is unchanged if the ping fails.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }
