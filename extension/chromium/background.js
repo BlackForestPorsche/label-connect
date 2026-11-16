@@ -19,6 +19,9 @@
   const IS_CHROMIUM = typeof runtime.runtime.getBrowserInfo !== "function";
   const CHROMIUM_ZIP_NAME = "Black.Forest.Desk-chromium.zip";
   const SHOP_HOST_RE = /^https:\/\/shop\.blackforestautomotive\.com(\/|$)/i;
+  /** Create RO listener. The sender key stays in storage.local as dwightCreateRoToken. */
+  const DWIGHT_CREATE_RO_URL =
+    "https://api2.cursor.sh/automations/webhook/86cb173d-755d-52ef-a156-610001400116";
 
   // Chromium MV3 service worker: pull shared helpers.
   if (typeof importScripts === "function") {
@@ -82,6 +85,64 @@
       return { error: code || `Labels returned ${response.status}.` };
     }
     return data || { ok: true };
+  }
+
+  async function readDwightCreateRoToken() {
+    try {
+      const stored = await runtime.storage.local.get(["dwightCreateRoToken"]);
+      const value = stored && stored.dwightCreateRoToken;
+      if (typeof value === "string" && value.trim()) return value.trim();
+    } catch {
+      // storage may be unavailable in some test loads
+    }
+    return "";
+  }
+
+  const DWIGHT_EVENTS = new Set([
+    "create_ro",
+    "close_ro",
+    "cancel_ro",
+    "estimate_saved",
+    "estimate_emailed",
+  ]);
+  const DWIGHT_FIELDS = ["ro", "customer", "car", "plate", "vin", "tech"];
+
+  function looksLikePhone(value) {
+    const digits = String(value || "").replace(/\D/g, "");
+    return digits.length >= 10 && digits.length <= 15 && /^[+\d\s().-]+$/.test(String(value || "").trim());
+  }
+
+  /**
+   * Tell the listener about a Desk read of AllData.
+   * Never throws. A missing key skips the POST. Missing fields are omitted.
+   * Each call POSTs; no local delay. Phone and email are never sent.
+   */
+  async function nudgeDwight(message) {
+    try {
+      const event = String(message?.event || (message?.type === "dwight-create-ro" ? "create_ro" : "")).trim();
+      if (!DWIGHT_EVENTS.has(event)) return { ok: false, skipped: "event" };
+      const token = await readDwightCreateRoToken();
+      if (!token) return { ok: false, skipped: "no-token" };
+      const src = message?.fields && typeof message.fields === "object" ? message.fields : {};
+      const body = { event };
+      for (const key of DWIGHT_FIELDS) {
+        const raw = src[key] != null ? src[key] : key === "ro" ? message?.ro : "";
+        const value = String(raw || "").replace(/\s+/g, " ").trim();
+        if (!value || value.includes("@") || looksLikePhone(value)) continue;
+        body[key] = value.slice(0, 80);
+      }
+      await fetch(DWIGHT_CREATE_RO_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
   }
 
   function localVersion() {
@@ -473,6 +534,10 @@
     if (!message || typeof message !== "object") return false;
     if (message.type === "print-ro") {
       printRo(message.payload).then(sendResponse);
+      return true;
+    }
+    if (message.type === "dwight-nudge" || message.type === "dwight-create-ro") {
+      nudgeDwight(message).then(sendResponse);
       return true;
     }
     if (message.type === "lot-last-names") {
