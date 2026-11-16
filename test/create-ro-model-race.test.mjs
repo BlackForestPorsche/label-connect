@@ -20,7 +20,7 @@ const FORM = (model = "") => `
  * Runs the real config.js + scrape.js + content.js against a linkedom page with a manual clock,
  * so the Create click → success → print timing can be driven step by step.
  */
-function startDesk({ html, contentFile = "extension/shared/content.js", dir = "extension/shared" } = {}) {
+function startDesk({ html, contentFile = "extension/shared/content.js", dir = "extension/shared", nudgeFails = false } = {}) {
   const { document: realDoc } = parseHTML(`<!DOCTYPE html><html><body>${html}</body></html>`);
   const listeners = {};
   const doc = new Proxy(realDoc, {
@@ -35,6 +35,7 @@ function startDesk({ html, contentFile = "extension/shared/content.js", dir = "e
   const timers = [];
   let nextId = 1;
   const sent = [];
+  const messages = [];
   const toasts = [];
   const observers = [];
 
@@ -43,6 +44,11 @@ function startDesk({ html, contentFile = "extension/shared/content.js", dir = "e
     chrome: {
       runtime: {
         sendMessage: async (message) => {
+          messages.push(message);
+          if (message?.type === "dwight-nudge" || message?.type === "dwight-create-ro") {
+            if (nudgeFails) throw new Error("listener down");
+            return { ok: true };
+          }
           sent.push(message.payload);
           return { printed: true };
         },
@@ -105,6 +111,7 @@ function startDesk({ html, contentFile = "extension/shared/content.js", dir = "e
     document: realDoc,
     button,
     sent,
+    messages,
     toasts,
     advance,
     mutate,
@@ -322,6 +329,130 @@ test("mergeCreateFields: a model field beats a page-wide guess; empty reads neve
   const kept = api.rememberCreateFields(remembered, { lastName: "", model: "", modelSource: "" });
   assert.equal(kept.model, "Camry");
   assert.equal(kept.lastName, "Whatcott");
+});
+
+function formWithRo(ro) {
+  return `
+    <div class="row"><label for="ln">Last Name</label><input id="ln" value="Whatcott"></div>
+    <div class="row"><label for="md">Model</label><input id="md" value="Camry"></div>
+    <div class="row"><label for="ro">RO #</label><input id="ro" value="${ro}"></div>
+    <button>Create R/O</button>`;
+}
+
+function listenerMessages(desk) {
+  return desk.messages.filter((message) => message?.type === "dwight-nudge");
+}
+
+test("Create RO print kickoff also pings the listener with the new page RO", () => {
+  const desk = startDesk({ html: formWithRo("") });
+  desk.clickCreate();
+  desk.advance(200);
+  const roInput = desk.document.getElementById("ro");
+  roInput.value = "J1001";
+  roInput.setAttribute("value", "J1001");
+  desk.removeCreate();
+  desk.advance(800);
+  assert.equal(desk.sent.length, 1);
+  assert.equal(desk.sent[0].roNumber, "J1001");
+  assert.equal(desk.sent[0].event, "create-ro");
+  const prints = desk.messages.filter((message) => message?.type === "print-ro");
+  const nudges = listenerMessages(desk);
+  assert.equal(prints.length, 1);
+  assert.equal(nudges.length, 1);
+  assert.ok(desk.messages.indexOf(prints[0]) < desk.messages.indexOf(nudges[0]));
+  assert.equal(nudges[0].event, "create_ro");
+  assert.equal(nudges[0].fields.ro, "J1001");
+  assert.equal(Object.hasOwn(nudges[0].fields, "phone"), false);
+  assert.equal(Object.hasOwn(nudges[0].fields, "email"), false);
+});
+
+test("open RO on the page is sent to the listener and kept off the label payload", () => {
+  const desk = startDesk({ html: formWithRo("J1001") });
+  desk.clickCreate();
+  desk.advance(200);
+  desk.removeCreate();
+  desk.advance(800);
+  assert.equal(desk.sent.length, 1);
+  assert.equal(desk.sent[0].roNumber, "");
+  const nudges = listenerMessages(desk);
+  assert.equal(nudges.length, 1);
+  assert.equal(nudges[0].event, "create_ro");
+  assert.equal(nudges[0].fields.ro, "J1001");
+});
+
+test("Create with no RO on the page still pings the listener once", () => {
+  const desk = startDesk({ html: FORM("Camry") });
+  desk.clickCreate();
+  desk.advance(200);
+  desk.removeCreate();
+  desk.advance(800);
+  assert.equal(desk.sent.length, 1);
+  assert.equal(listenerMessages(desk).length, 1);
+  assert.equal(listenerMessages(desk)[0].event, "create_ro");
+  assert.equal(listenerMessages(desk)[0].fields.ro, undefined);
+});
+
+function buttonNamed(desk, text) {
+  return [...desk.document.querySelectorAll("button")].find((el) => el.textContent.trim() === text);
+}
+
+test("Close, Cancel, and estimate actions ping and do not print", () => {
+  const close = startDesk({
+    html: `${formWithRo("J1001")}
+      <div class="row"><label for="ph">Phone</label><input id="ph" value="8015551212"></div>
+      <button>Close R/O</button>`,
+  });
+  close.fire("click", buttonNamed(close, "Close R/O"));
+  assert.equal(close.sent.length, 0);
+  assert.equal(listenerMessages(close).length, 1);
+  assert.equal(listenerMessages(close)[0].event, "close_ro");
+  assert.equal(listenerMessages(close)[0].fields.ro, "J1001");
+  assert.equal(listenerMessages(close)[0].fields.customer, "Whatcott");
+  assert.equal(Object.hasOwn(listenerMessages(close)[0].fields, "phone"), false);
+  assert.equal(Object.hasOwn(listenerMessages(close)[0].fields, "email"), false);
+
+  const cancel = startDesk({
+    html: `${formWithRo("J1001")}<button>Cancel R/O</button>`,
+  });
+  cancel.fire("click", buttonNamed(cancel, "Cancel R/O"));
+  assert.equal(cancel.sent.length, 0);
+  assert.equal(listenerMessages(cancel)[0].event, "cancel_ro");
+
+  const saved = startDesk({
+    html: `<h1>Estimate</h1>${formWithRo("J1001")}<button>Save</button>`,
+  });
+  saved.fire("click", buttonNamed(saved, "Save"));
+  assert.equal(saved.sent.length, 0);
+  assert.equal(listenerMessages(saved)[0].event, "estimate_saved");
+
+  const emailed = startDesk({
+    html: `${formWithRo("J1001")}<button>Email Estimate</button>`,
+  });
+  emailed.fire("click", buttonNamed(emailed, "Email Estimate"));
+  assert.equal(emailed.sent.length, 0);
+  assert.equal(listenerMessages(emailed)[0].event, "estimate_emailed");
+  assert.equal(listenerMessages(emailed)[0].fields.car, "Camry");
+});
+
+test("Desk reads AllData and does not click or type", () => {
+  const content = readFileSync(join(root, "extension/shared/content.js"), "utf8");
+  assert.equal(/\.click\(/.test(content), false);
+  assert.equal(/\.value\s*=/.test(content), false);
+  assert.equal(/execCommand/.test(content), false);
+});
+
+test("listener failure does not block or change the label print", async () => {
+  const desk = startDesk({ html: FORM("Camry"), nudgeFails: true });
+  desk.clickCreate();
+  desk.advance(200);
+  desk.removeCreate();
+  desk.advance(800);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(desk.sent.length, 1);
+  assert.equal(desk.sent[0].lastName, "Whatcott");
+  assert.equal(desk.sent[0].model, "Camry");
+  assert.equal(desk.toasts.some((toast) => toast.kind === "ok" && /Printed Whatcott - Camry/.test(toast.message)), true);
 });
 
 test("planCreatePrint: grace counts from confirmation; deadline always prints", () => {
