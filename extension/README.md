@@ -130,6 +130,12 @@ Out Mileage _____________
 
 Line 2 is a handwriting blank (not mileage from AllData). Every **Create R/O** success prints, even when that customer already has an open RO or you Create again for the same tester person. Dedupe is per Create click / new RO id — never by customer. Pre-existing Update / old RO# is not treated as success and is not sent to Labels (that was causing “already printed this RO”). Update / Schedule New / Assign never print.
 
+After that label print is kicked off, Desk also pings the Create RO listener. The same ping goes out for Close R/O, Cancel R/O, and when an estimate is saved or emailed. Desk only reads the AllData page. It does not click or type there. The JSON body is the event (`create_ro`, `close_ro`, `cancel_ro`, `estimate_saved`, `estimate_emailed`) plus `ro`, `customer`, `car`, `plate`, `vin`, and `tech` when the page shows them. Phone and email are not sent. If the RO number is missing, the ping still goes out. A failed ping does not change label printing. Each click can ping again; Desk does not drop a click with its own delay.
+
+The Create RO label also prints a QR code for the existing shop lot board (`/lot`). There is no per-car route, so the RO number is in the `ro` query when the page has one. The last-name and Out Mileage lines stay; type shrinks if the QR needs the room.
+
+Paste the sender key once in the popup field **Create RO listener key**. It is stored in this browser (`dwightCreateRoToken`) and survives extension updates. The key is not in the repo.
+
 If Create UI succeeds but last name or model still cannot be scraped after the wait window, the extension toasts **Label skipped — could not read last name or model.** and does not call Labels (`/api/print-ro`). It keeps polling after UI confirm (does not abort on the first empty scrape). Plate / account / VIN filters stay fail-closed.
 
 ## SSF — On the Lot dropdown
