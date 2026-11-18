@@ -1,6 +1,6 @@
 {
-  "version": "0.1.51",
-  "message": "Desk 0.1.51: Create, Close, and Cancel RO plus estimate save/email ping Dwight's listener. Create RO labels add a lot QR. Label print is unchanged if the ping fails.",
+  "version": "0.1.52",
+  "message": "Desk 0.1.52: Lock signs the shop website out every time, in Chrome and Firefox. Locking on the website locks Tools and it stays locked.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

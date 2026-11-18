@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 export const GATE = "bf_shop_gate";
+export const SHOP_HOST = "shop.blackforestautomotive.com";
+/** How Chromium and Firefox report the partition of a cookie set under the shop site. */
+export const PARTITION_SITE = "https://blackforestautomotive.com";
 
 export function makeWorld(options = {}) {
   let now = 1_800_000_000_000;
@@ -16,6 +19,9 @@ export function makeWorld(options = {}) {
     exchangeGate: null,
     jar: new Map(),
     jarExp: new Map(),
+    partitioned: new Map(),
+    cookieSets: [],
+    exactPartitionKeys: false,
     exchanges: 0,
     handoffs: 0,
     cookieError: false,
@@ -157,15 +163,40 @@ export function makeWorld(options = {}) {
         return cookie;
       },
       getAll: async (details = {}) => {
-        const one = await runtime.cookies.get(details);
-        return one ? [one] : [];
+        if (world.cookieError) throw new Error("cookie store unavailable");
+        const name = details.name || GATE;
+        const allJars = details.partitionKey && !details.partitionKey.topLevelSite;
+        const out = [];
+        if (!world.partitionOnly && world.jar.has(name)) {
+          const cookie = { name, value: world.jar.get(name), domain: SHOP_HOST };
+          if (world.jarExp.has(name)) cookie.expirationDate = world.jarExp.get(name);
+          out.push(cookie);
+        }
+        if (allJars && name === GATE) {
+          for (const copy of world.partitioned.values()) out.push({ name, domain: SHOP_HOST, ...copy });
+        }
+        return out;
       },
-      set: async ({ name, value, expirationDate }) => {
+      set: async ({ name, value, expirationDate, partitionKey }) => {
+        world.cookieSets.push(partitionKey && partitionKey.topLevelSite ? "partitioned" : "first-party");
+        if (partitionKey && partitionKey.topLevelSite) {
+          const copy = { value, partitionKey: { topLevelSite: PARTITION_SITE, hasCrossSiteAncestor: false } };
+          if (expirationDate) copy.expirationDate = expirationDate;
+          world.partitioned.set(PARTITION_SITE, copy);
+          return;
+        }
         world.jar.set(name, value);
         if (expirationDate) world.jarExp.set(name, expirationDate);
         else world.jarExp.delete(name);
       },
-      remove: async ({ name }) => {
+      remove: async ({ name, partitionKey }) => {
+        if (partitionKey && partitionKey.topLevelSite) {
+          // Chromium only removes a partitioned cookie when the whole key matches.
+          const exact =
+            partitionKey.topLevelSite === PARTITION_SITE && partitionKey.hasCrossSiteAncestor === false;
+          if (exact || !world.exactPartitionKeys) world.partitioned.delete(PARTITION_SITE);
+          return;
+        }
         world.jar.delete(name);
         world.jarExp.delete(name);
       },

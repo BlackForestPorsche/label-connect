@@ -1,6 +1,7 @@
 name: desk-extension-tests
-# Unit + manifest parity for Firefox/Chromium Desk, plus a real-Chrome load-unpacked smoke
-# (lock/unlock sync, latch, Create RO print, SSF dropdown). No store publishing here.
+# Unit + manifest parity for Firefox/Chromium Desk, a real-Chrome load-unpacked smoke
+# (lock/unlock sync, latch, Create RO print, SSF dropdown) and a real-Firefox run of the
+# shop sign-in and lock sync. No store publishing here.
 on:
   pull_request:
     paths:
@@ -33,3 +34,19 @@ jobs:
       - run: npm ci
       - name: Chrome load-unpacked e2e
         run: xvfb-run -a npm run test:chromium
+  firefox-e2e:
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Firefox temporary add-on e2e
+        env:
+          DESK_E2E_REQUIRED: "1"
+        run: |
+          firefox --version
+          npm run test:firefox

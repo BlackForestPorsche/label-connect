@@ -758,6 +758,9 @@
         const cookie = changeInfo?.cookie;
         if (!cookie || cookie.name !== "bf_shop_gate") return;
         if (!/blackforestautomotive\.com$/i.test(String(cookie.domain || ""))) return;
+        // The shop site only uses the first-party gate. A partitioned copy going away is
+        // Desk cleaning up after an older version, never the site's Lock.
+        if (changeInfo.removed && cookie.partitionKey && cookie.partitionKey.topLevelSite) return;
         if (!changeInfo.removed) {
           globalThis.AllDataRoLabels?.noteGateCookieAdded?.();
           if (gateRemovalTimer) {

@@ -316,6 +316,34 @@ test("service worker boots with shared helpers and reports logged out", async ()
   );
 });
 
+test("a gate copy left in the partitioned jar by Desk 0.1.47–0.1.51 is removed and signs nobody in", async () => {
+  await swEval(async () => {
+    await chrome.cookies.set({
+      url: "https://shop.blackforestautomotive.com/",
+      name: "bf_shop_gate",
+      value: "v2.left-by-older-desk",
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "lax",
+      expirationDate: Math.floor(Date.now() / 1000) + 3600,
+      partitionKey: { topLevelSite: "https://shop.blackforestautomotive.com" },
+    });
+    await chrome.storage.local.remove("deskGateJarSettled");
+  });
+  const allGates = () => swEval(() => chrome.cookies.getAll({ name: "bf_shop_gate", partitionKey: {} }));
+  const seeded = await allGates();
+  assert.equal(seeded.length, 1);
+  assert.ok(seeded[0].partitionKey?.topLevelSite, "seeded copy is partitioned");
+
+  await swEval(() => globalThis.AllDataRoLabels.settleGateJar());
+  assert.equal((await allGates()).length, 0, "partitioned copy removed");
+  await sleep(1500);
+  assert.equal(tools.session, null, "Tools stays locked");
+  assert.equal((await allGates()).length, 0);
+  assert.ok((await swEval(() => chrome.action.getTitle({}))).includes("logged out"));
+});
+
 test("Tools unlock → website bf_shop_gate lands in the Chromium jar and toolbar turns logged in", async () => {
   toolsUnlock("logan");
   await until(async () => (await getCookie())?.value === shop.gate, { timeout: 10_000, what: "gate cookie" });
