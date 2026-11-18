@@ -385,7 +385,7 @@
       deskUpdateAvailable: {
         version,
         local,
-        message: "Firefox is applying the signed update…",
+        message: "Firefox is installing the update…",
         applied: true,
       },
     });
@@ -399,7 +399,7 @@
       version,
       applied: true,
       restartRequired: false,
-      message: `Firefox is applying signed Desk ${version} (reload).`,
+      message: `Firefox is installing Desk ${version}. This window closes while Desk restarts.`,
     };
   }
 
@@ -449,7 +449,7 @@
         applied: false,
         version: announced,
         signedVersion,
-        message: `Desk ${announced} is still being signed and published (a few minutes after release). Still on ${local}; try Check for update again shortly.`,
+        message: `Desk ${announced} is being published. This browser stays on ${local} until it is ready. Check again in a few minutes.`,
       };
     }
     await runtime.storage.local.set({ deskUpdateAvailable: null, deskUpdateAppliedVersion: null });
@@ -458,7 +458,7 @@
       mode: "up_to_date",
       applied: false,
       version: local,
-      message: `Desk ${local} is already the newest version.`,
+      message: `Desk ${local} is up to date.`,
     };
   }
 
@@ -475,7 +475,7 @@
         error: "feed_unreachable",
         mode: "feed_unreachable",
         applied: false,
-        message: "Couldn’t reach the Desk update feed. Check the connection and try again.",
+        message: "Couldn’t check for updates. Check the internet connection and try again.",
       };
     }
     if (!isNewer(version, local)) return notPublishedOrCurrent(local, version);
@@ -487,7 +487,7 @@
       applied: false,
       version,
       url,
-      message: `Desk ${version} is ready (${reason}). Download ${CHROMIUM_ZIP_NAME} from the label-connect desk-extension release, unzip over the Desk folder, then Reload Desk.`,
+      message: `Desk ${version} is ready, but this browser could not download it. Download ${CHROMIUM_ZIP_NAME} from the Desk release page, unzip it over the Desk folder, then press Reload Desk.`,
     });
     if (!runtime.downloads?.download) return manual("downloads unavailable");
     try {
@@ -501,7 +501,7 @@
       applied: false,
       version,
       url,
-      message: `Downloaded Desk ${version} to your Downloads folder. Unzip it over the Desk folder, then press Reload Desk. Still running ${local} until you do.`,
+      message: `Desk ${version} is in your Downloads folder. Unzip it over the Desk folder, then press Reload Desk. This browser stays on ${local} until you do.`,
     };
   }
 
@@ -516,7 +516,7 @@
         mode: "feed_unreachable",
         applied: false,
         detail: feed.errors,
-        message: `Couldn’t reach the Desk update feed (${feed.errors.join("; ") || "no response"}). Try again, or open about:addons → ⚙ → Check for Updates.`,
+        message: `Couldn’t check for updates (${feed.errors.join("; ") || "no response"}). Try again, or open Add-ons and themes (about:addons), click the gear, then Check for Updates.`,
       };
     }
     if (!isNewer(feed.version, local)) return notPublishedOrCurrent(local, feed.version);
@@ -540,7 +540,7 @@
         source: feed.source,
         applied: false,
         awaitingFirefox: true,
-        message: `Firefox is asking to install Desk ${feed.version}. Click Allow, then Add — Desk reloads itself. Still Installed ${local} until you do. If Firefox only saves the file, open about:addons → ⚙ → Check for Updates.`,
+        message: `Firefox is asking to install Desk ${feed.version}. Click Allow, then Add. Desk restarts by itself. This browser stays on ${local} until you do.`,
       };
     }
     return {
@@ -549,7 +549,7 @@
       mode: "firefox_check_needed",
       version: feed.version,
       applied: false,
-      message: `Desk ${feed.version} is ready. Open about:addons → ⚙ → Check for Updates — Firefox applies it and Desk reloads itself.`,
+      message: `Desk ${feed.version} is ready. Firefox installs it by itself, usually within a day. To install it now, open Add-ons and themes (about:addons), click the gear, then Check for Updates.`,
     };
   }
 
@@ -576,7 +576,7 @@
     if (message.type === "lot-last-names") {
       const api = globalThis.AllDataRoLabels;
       if (!api?.resolveLotLastNames) {
-        sendResponse({ names: [], source: "error", message: "Lot helper missing." });
+        sendResponse({ names: [], source: "error", message: "Desk is restarting. Press Refresh in a moment." });
         return false;
       }
       api.resolveLotLastNames().then(sendResponse);

@@ -6,23 +6,30 @@
     <style>
       :root {
         color-scheme: light;
-        font: 13px/1.35 system-ui, sans-serif;
+        font: 13px/1.4 system-ui, sans-serif;
         color: #1c1914;
+        --green: #1f4d2a;
+        --green-dark: #173a20;
+        --red: #7a1f1f;
+        --line: #d9d1bf;
+        --border: #b9b2a4;
+        --muted: #5f5848;
       }
       body {
         margin: 0;
         width: 300px;
-        padding: 14px;
+        padding: 12px 14px;
         background: #f3efe6;
       }
       h1 {
-        margin: 0 0 6px;
+        margin: 0 0 10px;
         font-size: 15px;
         font-weight: 700;
+        letter-spacing: 0.01em;
       }
       p {
         margin: 0 0 12px;
-        opacity: 0.75;
+        color: var(--muted);
       }
       label {
         display: block;
@@ -33,31 +40,55 @@
       select {
         width: 100%;
         box-sizing: border-box;
-        margin: 0 0 10px;
-        padding: 7px 8px;
-        border: 1px solid #b9b2a4;
-        border-radius: 4px;
+        margin: 0 0 8px;
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
         background: #fff;
         color: inherit;
         font: inherit;
       }
+      input::placeholder {
+        color: #8a8373;
+      }
+      input:focus-visible,
+      select:focus-visible,
+      button:focus-visible {
+        outline: 2px solid var(--green);
+        outline-offset: 1px;
+      }
       button {
         width: 100%;
-        padding: 8px 10px;
-        border: 0;
-        border-radius: 4px;
-        background: #1f4d2a;
+        box-sizing: border-box;
+        min-height: 32px;
+        padding: 6px 10px;
+        border: 1px solid var(--green);
+        border-radius: 5px;
+        background: var(--green);
         color: #f4f1ea;
+        font: inherit;
         font-weight: 700;
         cursor: pointer;
       }
+      button:hover:not(:disabled) {
+        background: var(--green-dark);
+      }
       button.secondary {
         margin-top: 8px;
-        background: #4a4538;
+        border-color: var(--border);
+        background: #fbf9f4;
+        color: #1c1914;
+      }
+      button.secondary:hover:not(:disabled) {
+        background: #ebe5d7;
       }
       button.accent {
         margin-top: 8px;
+        border-color: #8a5a12;
         background: #8a5a12;
+      }
+      button.accent:hover:not(:disabled) {
+        background: #6f480e;
       }
       button:disabled {
         opacity: 0.55;
@@ -66,23 +97,51 @@
       [hidden] {
         display: none !important;
       }
-      #loggedIn {
-        margin: 0 0 4px;
-        padding: 10px 12px;
+      #loggedIn,
+      #signInState {
+        display: flex;
+        gap: 9px;
+        margin: 0 0 10px;
+        padding: 8px 11px;
         border-radius: 6px;
+      }
+      #loggedIn::before,
+      #signInState::before {
+        content: "";
+        flex: none;
+        width: 9px;
+        height: 9px;
+        margin-top: 5px;
+        border-radius: 50%;
+      }
+      #loggedIn {
         background: #e3efe5;
-        color: #1f4d2a;
+        color: var(--green);
         font-size: 14px;
         font-weight: 700;
       }
       #loggedIn::before {
-        content: "";
-        display: inline-block;
-        width: 9px;
-        height: 9px;
-        margin-right: 8px;
-        border-radius: 50%;
         background: #2e7d32;
+      }
+      #signInState {
+        background: #f5e4e0;
+        color: #5c1717;
+      }
+      #signInState::before {
+        background: #c62828;
+      }
+      #signInState.checking {
+        background: #ebe5d7;
+        color: var(--muted);
+      }
+      #signInState.checking::before {
+        background: #a39b88;
+      }
+      #loginBox {
+        margin-bottom: 0;
+      }
+      #loginBox button + label {
+        margin-top: 10px;
       }
       #status,
       #update {
@@ -90,27 +149,37 @@
         font-weight: 600;
       }
       #status:empty,
-      #update:empty {
+      #update:empty,
+      #version:empty,
+      #dwightKeyHint:empty {
         display: none;
       }
-      #loginBox {
-        margin-bottom: 14px;
+      .section {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
       }
-      #signInState {
-        opacity: 1;
+      .section > button:first-child {
+        margin-top: 0;
       }
-      .meta.err {
-        opacity: 1;
-        font-weight: 600;
+      .section input {
+        margin-bottom: 6px;
       }
-      .ok { color: #1f4d2a; }
-      .err { color: #7a1f1f; }
+      .ok { color: var(--green); }
+      .err { color: var(--red); }
       .warn { color: #6a4a12; }
       .meta {
-        margin-top: 8px;
-        font-size: 11px;
-        opacity: 0.65;
+        margin: 0;
+        font-size: 11.5px;
+        color: var(--muted);
         font-weight: 500;
+      }
+      .meta.err {
+        color: var(--red);
+        font-weight: 600;
+      }
+      #version {
+        margin-top: 10px;
       }
     </style>
   </head>
@@ -118,30 +187,34 @@
     <h1>Black Forest Desk</h1>
     <div id="loggedIn" role="status" hidden></div>
     <div id="loginBox">
-      <p id="signInState" role="status">Checking Tools and the shop site…</p>
+      <p id="signInState" class="checking" role="status">Checking Tools and the shop site…</p>
       <button id="useShopSession" type="button">Sync shop session</button>
       <button id="useTools" class="secondary" type="button">Sync Tools → website</button>
       <label for="person">Person</label>
       <select id="person" autocomplete="username" aria-label="Shop person"></select>
       <label for="pin">Desk PIN</label>
-      <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4–12 digits" />
+      <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4 to 12 digits" />
       <button id="unlock" class="secondary" type="button">Unlock with desk PIN</button>
       <div id="status" role="status"></div>
     </div>
-    <label for="dwightCreateRoToken">Create RO listener key</label>
-    <input
-      id="dwightCreateRoToken"
-      type="password"
-      autocomplete="off"
-      spellcheck="false"
-      placeholder="Paste once"
-    />
-    <p id="dwightKeyHint" class="meta" role="status"></p>
-    <button id="checkUpdate" class="secondary" type="button">Check for extension update</button>
-    <button id="applyUpdate" class="accent" type="button" hidden>Update</button>
-    <button id="reloadDesk" class="secondary" type="button" hidden>Reload Desk</button>
-    <div id="update" role="status"></div>
-    <div id="version" class="meta"></div>
+    <div class="section">
+      <label for="dwightCreateRoToken">Create RO listener key</label>
+      <input
+        id="dwightCreateRoToken"
+        type="password"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="Paste once"
+      />
+      <p id="dwightKeyHint" class="meta" role="status"></p>
+    </div>
+    <div class="section">
+      <button id="checkUpdate" class="secondary" type="button">Check for update</button>
+      <button id="applyUpdate" class="accent" type="button" hidden>Update</button>
+      <button id="reloadDesk" class="secondary" type="button" hidden>Reload Desk</button>
+      <div id="update" role="status"></div>
+      <div id="version" class="meta"></div>
+    </div>
     <script src="lot-names.js"></script>
     <script src="popup.js"></script>
   </body>

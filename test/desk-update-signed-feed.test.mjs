@@ -91,7 +91,7 @@ test("check-update does not offer a version that is merged but not signed yet (0
   assert.equal(result.mode, "update_publishing");
   assert.equal(result.ok, false);
   assert.equal(result.version, "0.1.34");
-  assert.match(result.message, /still being signed/);
+  assert.match(result.message, /is being published/);
   assert.equal(calls.tabs.length, 0);
 });
 

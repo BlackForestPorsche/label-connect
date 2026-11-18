@@ -23,9 +23,9 @@
   const FALLBACK_PEOPLE = ["logan", "stephen", "steve", "carla", "john"];
   const DESK_RESTARTING = "Desk is restarting. Close this window and open it again.";
   const LISTENER_EVENTS = {
-    create_ro: "Create RO",
-    close_ro: "Close RO",
-    cancel_ro: "Cancel RO",
+    create_ro: "RO created",
+    close_ro: "RO closed",
+    cancel_ro: "RO canceled",
     estimate_saved: "Estimate saved",
     estimate_emailed: "Estimate emailed",
   };
@@ -58,7 +58,9 @@
   let stateSerial = 0;
 
   function setState(text) {
-    if (stateEl) stateEl.textContent = text;
+    if (!stateEl) return;
+    stateEl.textContent = text;
+    stateEl.classList.remove("checking");
   }
 
   /**
@@ -164,26 +166,27 @@
     const version = available?.version;
     if (!version) {
       showApply(false);
-      setUpdate("Desk extension is up to date.", "ok");
+      setUpdate("Desk is up to date.", "ok");
       return;
     }
     if (appliedVersion && String(appliedVersion) === String(version)) {
       showApply(false);
       setUpdate(
         isChromium
-          ? `Update ${version} downloaded — unzip over the Desk folder, then Reload Desk.`
-          : `Update ${version} installed — Restart Firefox.`,
+          ? `Desk ${version} is in your Downloads folder. Unzip it over the Desk folder, then press Reload Desk.`
+          : `Desk ${version} is installed. Restart Firefox to finish.`,
         "ok",
       );
       if (isChromium && reloadBtn) reloadBtn.hidden = false;
       return;
     }
     showApply(true);
-    const hint =
-      typeof available?.message === "string" && available.message.trim()
-        ? available.message.trim()
-        : "click Update";
-    setUpdate(`Update ${version} ready — ${hint}`, "warn");
+    const notes =
+      typeof available?.message === "string"
+        ? available.message.trim().replace(/^Desk\s+[\d.]+\s*[:—-]\s*/i, "")
+        : "";
+    const press = isChromium ? "Press Download update." : "Press Update.";
+    setUpdate(`Desk ${version} is ready. ${press}${notes ? ` What’s new: ${notes}` : ""}`, "warn");
   }
 
   function looksLikeApiCode(text) {
@@ -483,31 +486,31 @@
         const response = await runtime.runtime.sendMessage({ type: "apply-update" });
         if (response?.mode === "firefox_update" && response?.ok) {
           showApply(false);
-          setUpdate(response.message || "Firefox is applying the signed update (reload)…", "ok");
+          setUpdate(response.message || "Firefox is installing the update…", "ok");
         } else if (response?.mode === "up_to_date" && response?.ok) {
           showApply(false);
-          setUpdate(response.message || "Desk is already the newest version.", "ok");
+          setUpdate(response.message || "Desk is up to date.", "ok");
         } else if (response?.mode === "firefox_xpi_prompt" && response?.ok) {
           showApply(true);
-          setUpdate(response.message || "Firefox is asking to install the update — click Allow, then Add.", "warn");
+          setUpdate(response.message || "Firefox is asking to install the update. Click Allow, then Add.", "warn");
         } else if (response?.mode === "chromium_zip" && response?.ok) {
           showApply(true);
           if (reloadBtn) reloadBtn.hidden = false;
           await runtime.storage.local.set({ deskUpdateAppliedVersion: response.version });
-          setUpdate(response.message || "Downloaded. Unzip over the Desk folder, then Reload Desk.", "ok");
+          setUpdate(response.message || "The update is in your Downloads folder. Unzip it over the Desk folder, then press Reload Desk.", "ok");
         } else if (response?.mode === "chromium_manual") {
           showApply(true);
           if (reloadBtn) reloadBtn.hidden = false;
-          setUpdate(response.message || "Download the Desk zip from the release, unzip, then Reload Desk.", "warn");
+          setUpdate(response.message || "Download the Desk zip from the release page, unzip it over the Desk folder, then press Reload Desk.", "warn");
         } else if (response?.ok && response?.applied) {
           showApply(false);
           setUpdate(response.message || "Updated.", "ok");
         } else {
-          setUpdate(response?.message || (isChromium ? "Update failed. Try again." : "Update failed. Try about:addons → ⚙ → Check for Updates."), "err");
+          setUpdate(response?.message || (isChromium ? "Couldn’t download the update. Try again." : "Couldn’t install the update. Firefox installs it by itself, usually within a day."), "err");
           showApply(true);
         }
       } catch {
-        setUpdate(isChromium ? "Update failed. Try again." : "Update failed. Try about:addons → ⚙ → Check for Updates.", "err");
+        setUpdate(isChromium ? "Couldn’t download the update. Try again." : "Couldn’t install the update. Firefox installs it by itself, usually within a day.", "err");
         showApply(true);
       } finally {
         applyBtn.disabled = false;

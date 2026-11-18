@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-/** Writes extension/chromium/icons/desk-{16,32,48,128}.png (static fallback = logged-out red mark). */
+/** Writes extension/{chromium,firefox}/icons/desk-{16,32,48,128}.png (static fallback = logged-out red mark). */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const outDir = join(root, "extension", "chromium", "icons");
+const outDirs = ["chromium", "firefox"].map((browser) => join(root, "extension", browser, "icons"));
 const RED = [0xc6, 0x28, 0x28];
 const SS = 4;
 
@@ -82,8 +82,10 @@ function render(size) {
   ]);
 }
 
-mkdirSync(outDir, { recursive: true });
-for (const size of [16, 32, 48, 128]) {
-  writeFileSync(join(outDir, `desk-${size}.png`), render(size));
+for (const outDir of outDirs) {
+  mkdirSync(outDir, { recursive: true });
+  for (const size of [16, 32, 48, 128]) {
+    writeFileSync(join(outDir, `desk-${size}.png`), render(size));
+  }
+  console.log(`wrote icons to ${outDir}`);
 }
-console.log(`wrote icons to ${outDir}`);

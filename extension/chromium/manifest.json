@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Black Forest Desk",
-  "version": "0.1.54",
-  "description": "AllData Create R/O \u2192 Labels print, plus SSF checkout On-the-Lot last-name helper.",
+  "version": "0.1.55",
+  "description": "Prints a label when you create a repair order in AllData, keeps the shop site and Tools signed in together, and fills the SSF order reference from On the Lot.",
   "permissions": [
     "storage",
     "alarms",
