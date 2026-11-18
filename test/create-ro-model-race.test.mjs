@@ -45,7 +45,11 @@ function startDesk({ html, contentFile = "extension/shared/content.js", dir = "e
       runtime: {
         sendMessage: async (message) => {
           messages.push(message);
-          if (message?.type === "dwight-nudge" || message?.type === "dwight-create-ro") {
+          if (
+            message?.type === "dwight-nudge" ||
+            message?.type === "dwight-create-ro" ||
+            message?.type === "follow-ro"
+          ) {
             if (nudgeFails) throw new Error("listener down");
             return { ok: true };
           }
