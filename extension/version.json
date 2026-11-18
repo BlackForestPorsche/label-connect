@@ -1,6 +1,6 @@
 {
-  "version": "0.1.57",
-  "message": "Desk 0.1.57: Follow mode ping from AllData, plus popup Test Follow ping (sample POST to Tools :8788/v1/follow).",
+  "version": "0.1.58",
+  "message": "Desk 0.1.58: AllData scrape sends optional submodel (trim) on Tools Follow :8788/v1/follow for On the Lot /job Details.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

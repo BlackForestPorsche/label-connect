@@ -87,7 +87,7 @@ test("follow-ro posts scraped RO to Tools /v1/follow", async () => {
   const result = await send({
     type: "follow-ro",
     event: "create_ro",
-    fields: { ro: "1042", customer: "Whatcott", car: "Boxster" },
+    fields: { ro: "1042", customer: "Whatcott", car: "Boxster", submodel: "S" },
   });
   assert.equal(result.ok, true);
   assert.equal(result.followed, true);
@@ -98,6 +98,7 @@ test("follow-ro posts scraped RO to Tools /v1/follow", async () => {
   assert.equal(body.event, "create");
   assert.equal(body.owner, "Whatcott");
   assert.equal(body.model, "Boxster");
+  assert.equal(body.submodel, "S");
   assert.equal(body.source, "alldata");
 });
 

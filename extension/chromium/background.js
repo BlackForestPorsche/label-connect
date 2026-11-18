@@ -252,6 +252,7 @@
         owner: String(fields.customer || fields.owner || "").trim().slice(0, 80),
         year: String(fields.year || "").trim().slice(0, 8),
         model: String(fields.car || fields.model || "").trim().slice(0, 48),
+        submodel: String(fields.submodel || "").trim().slice(0, 48),
         job: String(fields.job || "").trim().slice(0, 80),
         plate: String(fields.plate || "").trim().slice(0, 24),
         source: "alldata",
@@ -260,6 +261,7 @@
       if (!body.owner) delete body.owner;
       if (!body.year) delete body.year;
       if (!body.model) delete body.model;
+      if (!body.submodel) delete body.submodel;
       if (!body.job) delete body.job;
       if (!body.plate) delete body.plate;
       const base = await toolsBridgeBaseForFollow();
