@@ -2224,4 +2224,5 @@
   api.setToolbarIcon = setToolbarIcon;
   api.resolveLotLastNames = resolveLotLastNames;
   api.loadLotLastNames = loadLotLastNames;
+  api.toolsBridgeBaseUrl = toolsBridgeBaseUrl;
 })(globalThis);

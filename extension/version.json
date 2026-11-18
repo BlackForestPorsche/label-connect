@@ -1,6 +1,6 @@
 {
-  "version": "0.1.55",
-  "message": "Desk 0.1.55: A cleaner Desk window with a clear logged-in or logged-out banner. Label and update messages are in plain words. Desk has its own icon in Firefox Add-ons.",
+  "version": "0.1.56",
+  "message": "Desk 0.1.56: When Tools Follow AllData is on, opening or changing an R/O in AllData opens that job in Black Forest Tools. Label printing still works if Follow fails.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }
