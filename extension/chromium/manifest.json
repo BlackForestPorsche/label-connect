@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Black Forest Desk",
-  "version": "0.1.55",
+  "version": "0.1.57",
   "description": "Prints a label when you create a repair order in AllData, keeps the shop site and Tools signed in together, and fills the SSF order reference from On the Lot.",
   "permissions": [
     "storage",

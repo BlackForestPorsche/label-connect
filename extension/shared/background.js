@@ -2,6 +2,7 @@
 /**
  * Black Forest Desk background:
  * - AllData Create RO → POST local Labels /api/print-ro
+ * - AllData RO change → fire-and-forget POST Tools :8788/v1/follow (never blocks labels)
  * - SSF → On the Lot last names (widget lot API, never book-today)
  * - Soft auto-update check against label-connect extension/version.json
  * - Auto unlock: shop from-gate (preferred) then Tools :8788 — no popup / Sync click
@@ -161,6 +162,143 @@
       });
     } catch {
       // the note is only for the popup
+    }
+  }
+
+  /** Sample payload for the popup “Test Follow ping” — same shape as a real AllData scrape. */
+  const FOLLOW_TEST_PING = {
+    event: "open",
+    fields: {
+      ro: "1042",
+      customer: "Follow test",
+      car: "Boxster",
+      year: "2019",
+      job: "Desk popup test",
+    },
+    ro: "1042",
+  };
+
+  const FOLLOW_EVENTS = new Set([
+    "open",
+    "create",
+    "change",
+    "close",
+    "cancel",
+    "estimate",
+    "create_ro",
+    "close_ro",
+    "cancel_ro",
+    "estimate_saved",
+    "estimate_emailed",
+  ]);
+  const FOLLOW_TIMEOUT_MS = 450;
+
+  function mapFollowEvent(raw) {
+    const event = String(raw || "open")
+      .trim()
+      .toLowerCase();
+    if (event === "create_ro" || event === "create-ro") return "create";
+    if (event === "close_ro") return "close";
+    if (event === "cancel_ro") return "cancel";
+    if (event === "estimate_saved" || event === "estimate_emailed") return "estimate";
+    if (FOLLOW_EVENTS.has(event)) {
+      if (event === "create_ro") return "create";
+      return event;
+    }
+    return "open";
+  }
+
+  async function toolsBridgeBaseForFollow() {
+    try {
+      const api = globalThis.AllDataRoLabels;
+      if (api && typeof api.toolsBridgeBaseUrl === "function") {
+        return await api.toolsBridgeBaseUrl();
+      }
+    } catch {
+      // fall through
+    }
+    try {
+      const stored = await runtime.storage.local.get(["toolsBridgeBaseUrl"]);
+      const value = stored && stored.toolsBridgeBaseUrl;
+      if (
+        typeof value === "string" &&
+        /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/?$/i.test(value.trim())
+      ) {
+        return value.trim().replace(/\/$/, "");
+      }
+    } catch {
+      // storage may be unavailable
+    }
+    const cfg = globalThis.AllDataRoLabels;
+    return (cfg && cfg.DEFAULT_TOOLS_BRIDGE_BASE) || "http://127.0.0.1:8788";
+  }
+
+  /**
+   * Tell Tools Follow mode about the current AllData RO.
+   * Never throws. Short timeout. Must never delay label printing.
+   */
+  async function nudgeFollow(message) {
+    try {
+      const fields = message?.fields && typeof message.fields === "object" ? message.fields : {};
+      const ro = String(fields.ro || message?.ro || message?.roNumber || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 48);
+      if (!ro) return { ok: false, skipped: "missing_ro" };
+      const event = mapFollowEvent(message?.event || "open");
+      const body = {
+        ro,
+        event,
+        owner: String(fields.customer || fields.owner || "").trim().slice(0, 80),
+        year: String(fields.year || "").trim().slice(0, 8),
+        model: String(fields.car || fields.model || "").trim().slice(0, 48),
+        job: String(fields.job || "").trim().slice(0, 80),
+        plate: String(fields.plate || "").trim().slice(0, 24),
+        source: "alldata",
+        at: new Date().toISOString(),
+      };
+      if (!body.owner) delete body.owner;
+      if (!body.year) delete body.year;
+      if (!body.model) delete body.model;
+      if (!body.job) delete body.job;
+      if (!body.plate) delete body.plate;
+      const base = await toolsBridgeBaseForFollow();
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer =
+        controller &&
+        setTimeout(() => {
+          try {
+            controller.abort();
+          } catch {
+            // ignore
+          }
+        }, FOLLOW_TIMEOUT_MS);
+      let response;
+      try {
+        response = await fetch(`${base}/v1/follow`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller ? controller.signal : undefined,
+        });
+      } catch {
+        return { ok: false, skipped: "bridge_unreachable" };
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+      return {
+        ok: Boolean(response && response.ok),
+        followed: Boolean(data && data.followed),
+        reason: (data && data.reason) || "",
+      };
+    } catch {
+      return { ok: false };
     }
   }
 
@@ -571,6 +709,17 @@
     }
     if (message.type === "dwight-nudge" || message.type === "dwight-create-ro") {
       nudgeDwight(message).then(sendResponse);
+      return true;
+    }
+    if (message.type === "follow-ro") {
+      // Fire-and-forget for the page; still answer so tests can await.
+      nudgeFollow(message).then(sendResponse);
+      return true;
+    }
+    if (message.type === "follow-test-ping") {
+      nudgeFollow({ type: "follow-ro", ...FOLLOW_TEST_PING }).then((result) => {
+        sendResponse({ ...result, sampleRo: FOLLOW_TEST_PING.ro });
+      });
       return true;
     }
     if (message.type === "lot-last-names") {

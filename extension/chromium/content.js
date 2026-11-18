@@ -3,6 +3,7 @@
  * AllData Manage Online — arm only on Create R/O, then print last name + model.
  * Every Create click prints once after success — including when an open RO already exists
  * and when the same customer is used again for a new Create.
+ * Also pings Tools Follow mode (fire-and-forget) when the visible RO loads or changes.
  */
 (function () {
   const runtime = typeof browser !== "undefined" ? browser : chrome;
@@ -35,6 +36,11 @@
   /** Last non-empty listener fields. A wiped form must not erase them. */
   let armedDwight = {};
   const DWIGHT_KEYS = ["ro", "customer", "car", "plate", "vin", "tech"];
+  /** Last RO posted to Tools Follow — avoid thrashing on scrape noise. */
+  let lastFollowRo = "";
+  let lastFollowAt = 0;
+  const FOLLOW_DEBOUNCE_MS = 1500;
+  let followWatchTimer = null;
 
   function toast(message, kind) {
     if (typeof api.showToast === "function") api.showToast(message, kind);
@@ -254,6 +260,56 @@
     }
   }
 
+  /**
+   * Tools Follow mode — never blocks labels. RO string as scraped (digits / J-style).
+   */
+  function notifyFollow(event, fields, opts = {}) {
+    const src = fields || {};
+    const ro = String(src.ro || src.roNumber || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!ro) return;
+    const now = Date.now();
+    const force = Boolean(opts.force);
+    if (!force && ro === lastFollowRo && now - lastFollowAt < FOLLOW_DEBOUNCE_MS) return;
+    lastFollowRo = ro;
+    lastFollowAt = now;
+    const bodyFields = {};
+    for (const key of DWIGHT_KEYS) {
+      const value = String(src[key] || "").trim();
+      if (!value || value.includes("@")) continue;
+      bodyFields[key] = value;
+    }
+    bodyFields.ro = ro;
+    if (src.year) bodyFields.year = String(src.year).trim();
+    if (src.job) bodyFields.job = String(src.job).trim();
+    if (src.owner && !bodyFields.customer) bodyFields.customer = String(src.owner).trim();
+    if (src.model && !bodyFields.car) bodyFields.car = String(src.model).trim();
+    try {
+      const pending = runtime.runtime.sendMessage({
+        type: "follow-ro",
+        event: event || "open",
+        fields: bodyFields,
+        ro,
+      });
+      if (pending && typeof pending.catch === "function") void pending.catch(() => {});
+    } catch {
+      // Follow must never affect label printing.
+    }
+  }
+
+  function watchFollowRo() {
+    try {
+      const scraped = scrapeNow();
+      const ro = String(scraped.roNumber || scraped.ro || "").trim();
+      if (!ro) return;
+      const event = lastFollowRo && lastFollowRo !== ro ? "change" : "open";
+      notifyFollow(event, { ...listenerFields(scraped), ro, year: scraped.year, job: scraped.job });
+    } catch {
+      // scrape noise
+    }
+  }
+
   async function requestPrint(fields) {
     const armId = fields.createArmId || createArmId;
     if (alreadyPrintedThisCreate(armId)) {
@@ -278,6 +334,7 @@
         lotUrl: lotBoardUrl(fields.pageRo || fields.dwight?.ro || ""),
       });
       notifyDwight("create_ro", fields.dwight);
+      notifyFollow("create", fields.dwight || { ro: fields.pageRo || fields.roNumber }, { force: true });
       response = await printPromise;
       // If Labels skipped on an RO# (stale open RO, etc.), retry once with no RO#.
       if (response && response.skipped && fields.roNumber) {
@@ -419,7 +476,9 @@
   function nudgeFromPage(eventName) {
     const scraped = scrapeNow();
     rememberDwight(scraped);
-    notifyDwight(eventName, listenerFields(scraped));
+    const fields = listenerFields(scraped);
+    notifyDwight(eventName, fields);
+    notifyFollow(eventName, fields, { force: true });
   }
 
   function onPointer(event) {
@@ -475,6 +534,12 @@
   // MutationObserver: if Create disappears after arm, try scrape.
   const mo = new MutationObserver(() => {
     if (armed) scheduleThrottledCheck();
+    if (!followWatchTimer) {
+      followWatchTimer = setTimeout(() => {
+        followWatchTimer = null;
+        watchFollowRo();
+      }, 400);
+    }
   });
   mo.observe(document.documentElement, {
     childList: true,
@@ -483,4 +548,6 @@
     attributes: true,
     attributeFilter: ["disabled", "aria-disabled", "aria-busy", "class"],
   });
+  // Initial open once the page has had a beat to paint the RO.
+  setTimeout(() => watchFollowRo(), 800);
 })();
