@@ -38,7 +38,7 @@ export const MOCK_HOSTS = [
 /** Same id the live shop bundle uses for Lock (content-shop.js LIVE_LOCK_SERVERFN). */
 export const LOCK_SERVERFN = "462df016712e9460dba3b3206037fe5482e55863b0e6af87f8c2b89dff89fc9a";
 /** Test-only PIN for the mock shop. Not a real PIN. */
-export const MOCK_PIN = "mock-pin";
+export const MOCK_PIN = "000000";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -86,6 +86,8 @@ function gateFromCookie(header) {
 const ALLDATA_HTML = `<!doctype html><html><head><title>Manage Online</title></head><body>
 <h1>Manage Online</h1>
 <div class="form-row"><span>Customer</span><span>J. Whatcott</span></div>
+<div class="form-row"><span>Year</span><span>2018</span></div>
+<div class="form-row"><span>Make</span><span>Porsche</span></div>
 <div class="form-row"><span>Model</span><span>Boxster</span></div>
 <button class="go" type="button">Create R/O</button>
 <button class="close-ro" type="button">Close R/O</button>
@@ -147,7 +149,7 @@ document.getElementById("lock").addEventListener("click", async () => {
 }
 
 export async function createWorld() {
-  const tools = { session: null, hits: [], nextId: 1 };
+  const tools = { session: null, hits: [], nextId: 1, down: false };
   const shop = {
     exchanges: 0,
     handoffs: 0,
@@ -160,7 +162,7 @@ export async function createWorld() {
     },
     tickets: new Map(),
   };
-  const labels = { prints: [], status: 200, response: { ok: true, printed: true } };
+  const labels = { prints: [], status: 200, response: { ok: true, printed: true }, down: false };
   const listener = { pings: [] };
   /** version: what updates.json / version.json announce; null = feed unreachable (HTTP 503). */
   const feed = { version: "0.0.1", message: "", status: 200 };
@@ -199,6 +201,8 @@ export async function createWorld() {
 
   const toolsServer = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://x");
+    // Tools not running on this PC.
+    if (tools.down) return req.socket.destroy();
     tools.hits.push(`${req.method} ${url.pathname}`);
     if (tools.hits.length > 5000) tools.hits.splice(0, 2500);
     if (req.method === "GET" && url.pathname === "/health") {
@@ -240,6 +244,7 @@ export async function createWorld() {
     const url = new URL(req.url, "http://x");
     if (req.method === "POST" && url.pathname === "/api/print-ro") {
       const body = JSON.parse((await readBody(req)) || "{}");
+      if (labels.down) return req.socket.destroy();
       labels.prints.push(body);
       return json(res, labels.status, labels.response);
     }

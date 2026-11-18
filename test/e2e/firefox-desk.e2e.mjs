@@ -118,6 +118,67 @@ test("a gate copy left in the partitioned jar by Desk 0.1.47–0.1.51 is removed
   assert.ok((await toolbarTitle()).includes("logged out"));
 });
 
+test("Create R/O prints one label and tells the listener; Close, Cancel and estimates only tell the listener", async () => {
+  await ext(`await browser.storage.local.set({ dwightCreateRoToken: "mock-listener-key" });`);
+  const tab = await ff.newTab("https://manageonline.alldata.com/ro");
+  await sleep(1200);
+  await ff.exec(`document.querySelector(".go").click();`);
+  await until(() => world.labels.prints.length === 1, { timeout: 15000, what: "label print" });
+  await until(() => world.listener.pings.length === 1, { timeout: 5000, what: "create_ro ping" });
+
+  const print = world.labels.prints[0];
+  assert.equal(print.lastName, "Whatcott");
+  assert.equal(print.model, "Boxster");
+  // "Repair order created" on the page is not an RO number.
+  assert.equal(print.roNumber, "");
+  assert.equal(print.lotUrl, `${SHOP_ORIGIN}/lot`);
+
+  const created = world.listener.pings[0];
+  assert.equal(created.authorized, true);
+  assert.deepEqual(created.body, {
+    event: "create_ro",
+    customer: "J. Whatcott",
+    car: "2018 Porsche Boxster",
+  });
+
+  for (const selector of [".close-ro", ".cancel-ro", ".save-est", ".email-est"]) {
+    await ff.exec(`document.querySelector(arguments[0]).click();`, [selector]);
+    await sleep(400);
+  }
+  await until(() => world.listener.pings.length === 5, { timeout: 8000, what: "four more pings" });
+  assert.deepEqual(
+    world.listener.pings.map((ping) => ping.body.event),
+    ["create_ro", "close_ro", "cancel_ro", "estimate_saved", "estimate_emailed"],
+  );
+  for (const ping of world.listener.pings.slice(1)) {
+    assert.equal(ping.body.customer, "J. Whatcott");
+    assert.equal(ping.body.car, "2018 Porsche Boxster");
+    assert.equal(ping.body.ro, undefined);
+  }
+  assert.equal(world.labels.prints.length, 1, "only Create R/O prints");
+  await ff.switchTo(tab);
+  await ff.closeTab();
+  await ff.switchTo(ctl);
+});
+
+test("Check for update says when the feed cannot be reached", async () => {
+  const check = async () => {
+    await ext(`document.getElementById("checkUpdate").click();`);
+    await until(async () => !(await ext(`return document.getElementById("checkUpdate").disabled;`)), {
+      timeout: 15000,
+      what: "update check to finish",
+    });
+    return ext(`return document.getElementById("update").textContent;`);
+  };
+  world.feed.status = 503;
+  const unreachable = await check();
+  assert.match(unreachable, /Couldn’t check for updates/);
+  assert.doesNotMatch(unreachable, /up to date/i);
+
+  world.feed.status = 200;
+  assert.match(await check(), /up to date/i);
+});
+
 test("A. signing in on the website signs Desk and Tools in", async () => {
   shopTab = await ff.newTab(`${SHOP_ORIGIN}/unlock`);
   await sleep(800);
