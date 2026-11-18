@@ -19,6 +19,8 @@
   const loginBoxEl = document.getElementById("loginBox");
   const dwightTokenEl = document.getElementById("dwightCreateRoToken");
   const dwightHintEl = document.getElementById("dwightKeyHint");
+  const followTestBtn = document.getElementById("followTestPing");
+  const followTestStatus = document.getElementById("followTestStatus");
 
   const FALLBACK_PEOPLE = ["logan", "stephen", "steve", "carla", "john"];
   const DESK_RESTARTING = "Desk is restarting. Close this window and open it again.";
@@ -141,6 +143,57 @@
   function setUpdate(text, kind) {
     updateEl.textContent = text;
     updateEl.className = kind === "ok" ? "ok" : kind === "warn" ? "warn" : kind === "err" ? "err" : "";
+  }
+
+  function setFollowTestStatus(text, kind) {
+    if (!followTestStatus) return;
+    followTestStatus.textContent = text;
+    followTestStatus.className =
+      kind === "ok" ? "meta ok" : kind === "warn" ? "meta warn" : kind === "err" ? "meta err" : "meta";
+  }
+
+  function describeFollowPingResult(response) {
+    const ro = response?.sampleRo || "1042";
+    if (response?.skipped === "bridge_unreachable") {
+      return {
+        kind: "err",
+        text: "Could not reach Tools at 127.0.0.1:8788. Start Black Forest Tools on this PC, then try again.",
+      };
+    }
+    if (response?.skipped === "missing_ro") {
+      return { kind: "err", text: "Follow ping failed: sample R/O missing (Desk bug). Try again after Reload Desk." };
+    }
+    if (!response || !response.ok) {
+      return {
+        kind: "err",
+        text: "Tools did not accept the ping. Is Tools running and unlocked?",
+      };
+    }
+    if (response.followed) {
+      return {
+        kind: "ok",
+        text: `Follow ping OK — Tools should open job R/O ${ro}.`,
+      };
+    }
+    const reason = String(response.reason || "").toLowerCase();
+    if (reason === "follow_off" || reason === "follow_disabled") {
+      return {
+        kind: "warn",
+        text: "Tools answered, but Follow is off. In Tools, open Settings and turn on Follow AllData R/O, then test again.",
+      };
+    }
+    if (reason === "no_window") {
+      return {
+        kind: "warn",
+        text: "Tools accepted the ping but could not open the shop window. Sign in on the shop site in Tools, then test again.",
+      };
+    }
+    return {
+      kind: "warn",
+      text: reason
+        ? `Tools answered (R/O ${ro}) but did not navigate (${reason}).`
+        : `Tools answered for R/O ${ro} but did not open the job. Check Follow mode in Tools Settings.`,
+    };
   }
 
   function showApply(show) {
@@ -443,6 +496,25 @@
     });
     dwightTokenEl.addEventListener("change", () => {
       void saveDwightToken();
+    });
+  }
+
+  if (followTestBtn) {
+    followTestBtn.addEventListener("click", async () => {
+      followTestBtn.disabled = true;
+      setFollowTestStatus("Sending test ping to Tools…");
+      try {
+        const response = await runtime.runtime.sendMessage({ type: "follow-test-ping" });
+        const { text, kind } = describeFollowPingResult(response);
+        setFollowTestStatus(text, kind);
+      } catch {
+        setFollowTestStatus(
+          "Could not reach the Desk background. Close this popup, open it again, or press Reload Desk.",
+          "err",
+        );
+      } finally {
+        followTestBtn.disabled = false;
+      }
     });
   }
 

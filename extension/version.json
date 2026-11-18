@@ -1,6 +1,6 @@
 {
-  "version": "0.1.56",
-  "message": "Desk 0.1.56: When Tools Follow AllData is on, opening or changing an R/O in AllData opens that job in Black Forest Tools. Label printing still works if Follow fails.",
+  "version": "0.1.57",
+  "message": "Desk 0.1.57: Follow mode ping from AllData, plus popup Test Follow ping (sample POST to Tools :8788/v1/follow).",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

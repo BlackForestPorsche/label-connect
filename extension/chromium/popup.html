@@ -151,7 +151,8 @@
       #status:empty,
       #update:empty,
       #version:empty,
-      #dwightKeyHint:empty {
+      #dwightKeyHint:empty,
+      #followTestStatus:empty {
         display: none;
       }
       .section {
@@ -207,6 +208,11 @@
         placeholder="Paste once"
       />
       <p id="dwightKeyHint" class="meta" role="status"></p>
+    </div>
+    <div class="section">
+      <p class="meta">Posts a sample R/O to Tools at <code>http://127.0.0.1:8788/v1/follow</code> so you can verify Follow without opening AllData. Turn on <strong>Follow AllData R/O</strong> in Tools first.</p>
+      <button id="followTestPing" class="secondary" type="button">Test Follow ping</button>
+      <p id="followTestStatus" class="meta" role="status"></p>
     </div>
     <div class="section">
       <button id="checkUpdate" class="secondary" type="button">Check for update</button>

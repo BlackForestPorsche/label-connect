@@ -108,6 +108,22 @@ test("follow-ro skips empty RO without calling Tools", async () => {
   assert.equal(fetches.length, 0);
 });
 
+test("follow-test-ping posts sample RO 1042 to /v1/follow", async () => {
+  const { fetches, send } = loadBackground();
+  const result = await send({ type: "follow-test-ping" });
+  assert.equal(result.ok, true);
+  assert.equal(result.followed, true);
+  assert.equal(result.sampleRo, "1042");
+  const followFetches = fetches.filter((entry) => /\/v1\/follow$/.test(entry.url));
+  assert.equal(followFetches.length, 1);
+  const body = JSON.parse(followFetches[0].init.body);
+  assert.equal(body.ro, "1042");
+  assert.equal(body.event, "open");
+  assert.equal(body.owner, "Follow test");
+  assert.equal(body.model, "Boxster");
+  assert.equal(body.source, "alldata");
+});
+
 test("follow-ro still returns when Tools bridge is down", async () => {
   const fetches = [];
   const messageListeners = [];

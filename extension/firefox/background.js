@@ -165,6 +165,19 @@
     }
   }
 
+  /** Sample payload for the popup “Test Follow ping” — same shape as a real AllData scrape. */
+  const FOLLOW_TEST_PING = {
+    event: "open",
+    fields: {
+      ro: "1042",
+      customer: "Follow test",
+      car: "Boxster",
+      year: "2019",
+      job: "Desk popup test",
+    },
+    ro: "1042",
+  };
+
   const FOLLOW_EVENTS = new Set([
     "open",
     "create",
@@ -701,6 +714,12 @@
     if (message.type === "follow-ro") {
       // Fire-and-forget for the page; still answer so tests can await.
       nudgeFollow(message).then(sendResponse);
+      return true;
+    }
+    if (message.type === "follow-test-ping") {
+      nudgeFollow({ type: "follow-ro", ...FOLLOW_TEST_PING }).then((result) => {
+        sendResponse({ ...result, sampleRo: FOLLOW_TEST_PING.ro });
+      });
       return true;
     }
     if (message.type === "lot-last-names") {
