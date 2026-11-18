@@ -475,3 +475,45 @@ test("planCreatePrint: grace counts from confirmation; deadline always prints", 
   assert.equal(api.planCreatePrint({ ...base, now: 28_000, fields: { lastName: "", model: "Q5" } }).action, "no-last-name");
   assert.equal(api.planCreatePrint({ ...base, confirmed: false, now: 12_000, fields: { lastName: "W", model: "Q5" } }).action, "wait");
 });
+
+test("Create pings the listener with the same customer and car the other events send", () => {
+  const html = `
+    <div class="row"><label for="cu">Customer</label><input id="cu" value="Ada Whatcott"></div>
+    <div class="row"><label for="yr">Year</label><input id="yr" value="2018"></div>
+    <div class="row"><label for="mk">Make</label><input id="mk" value="Porsche"></div>
+    <div class="row"><label for="md">Model</label><input id="md" value="Boxster"></div>
+    <div class="row"><label for="ro">RO #</label><input id="ro" value="J1001"></div>
+    <button>Create R/O</button><button>Close R/O</button>`;
+  const create = startDesk({ html });
+  create.clickCreate();
+  create.advance(200);
+  create.removeCreate();
+  create.advance(800);
+  const close = startDesk({ html });
+  close.fire("click", buttonNamed(close, "Close R/O"));
+
+  const created = listenerMessages(create)[0];
+  const closed = listenerMessages(close)[0];
+  assert.equal(created.event, "create_ro");
+  assert.equal(created.fields.customer, "Ada Whatcott");
+  assert.equal(created.fields.car, "2018 Porsche Boxster");
+  assert.deepEqual({ ...created.fields }, { ...closed.fields });
+  // The label is unchanged: last name and model only.
+  assert.equal(create.sent[0].lastName, "Whatcott");
+  assert.equal(create.sent[0].model, "Boxster");
+});
+
+test("Create success copy on the page never becomes the RO number or the QR link", () => {
+  const desk = startDesk({ html: FORM("Camry") });
+  desk.clickCreate();
+  desk.advance(200);
+  desk.removeCreate();
+  const note = desk.document.createElement("div");
+  note.textContent = "Repair order created";
+  desk.document.body.appendChild(note);
+  desk.advance(800);
+  assert.equal(desk.sent.length, 1);
+  assert.equal(desk.sent[0].roNumber, "");
+  assert.equal(desk.sent[0].lotUrl, "https://shop.blackforestautomotive.com/lot");
+  assert.equal(listenerMessages(desk)[0].fields.ro, undefined);
+});

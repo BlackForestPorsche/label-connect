@@ -114,3 +114,39 @@ test("apply-update still says up to date when nothing newer is announced or sign
   assert.equal(result.ok, true);
   assert.equal(calls.tabs.length, 0);
 });
+
+test("check-update reports each state: available, current, publishing, unreachable", async () => {
+  const state = async (localVersion, fetchImpl) => {
+    const { send, store } = loadBackground({ localVersion, fetchImpl });
+    return { ...(await send({ type: "check-update", force: true })), store };
+  };
+
+  const available = await state("0.1.33", feedFetch("0.1.34", "0.1.34"));
+  assert.equal(available.state, "available");
+  assert.equal(available.available.version, "0.1.34");
+
+  const current = await state("0.1.34", feedFetch("0.1.34", "0.1.34"));
+  assert.equal(current.state, "current");
+  assert.equal(current.available, null);
+
+  const publishing = await state("0.1.33", feedFetch("0.1.33", "0.1.34"));
+  assert.equal(publishing.state, "publishing");
+  assert.equal(publishing.version, "0.1.34");
+  assert.equal(publishing.available, null);
+});
+
+test("check-update never claims up to date when no feed answers", async () => {
+  for (const fetchImpl of [
+    async () => missing,
+    async () => ({ ok: false, status: 503, json: async () => ({}) }),
+    async () => {
+      throw new TypeError("NetworkError");
+    },
+  ]) {
+    const { send, store } = loadBackground({ localVersion: "0.1.33", fetchImpl });
+    const checked = await send({ type: "check-update", force: true });
+    assert.equal(checked.state, "unreachable");
+    assert.equal(checked.available, null);
+    assert.equal("deskUpdateAvailable" in store, false, "what was known before is left alone");
+  }
+});

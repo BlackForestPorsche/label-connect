@@ -9,14 +9,15 @@ import { parseHTML } from "linkedom";
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const shared = path.join(root, "extension/shared");
 
-async function openPopup(storage) {
+async function openPopup(storage, onMessage) {
   const html = fs.readFileSync(path.join(shared, "popup.html"), "utf8");
   const { window, document } = parseHTML(html);
   const listeners = [];
   const runtime = {
     runtime: {
       getManifest: () => ({ version: "0.1.29" }),
-      sendMessage: async () => ({ ok: false, error: "unauthorized" }),
+      sendMessage: async (message) =>
+        (onMessage && onMessage(message)) || { ok: false, error: "unauthorized" },
     },
     storage: {
       local: {
@@ -115,4 +116,28 @@ test("logged in without a known person still reads Logged in", async () => {
     deskSessionPerson: "",
   });
   assert.equal(p.document.getElementById("loggedIn").textContent, "Logged in");
+});
+
+test("Check for update says so when the feed cannot be reached, and when a build is still publishing", async () => {
+  let reply = { state: "unreachable", available: null };
+  const p = await openPopup({}, (message) => (message.type === "check-update" ? reply : null));
+  const check = async () => {
+    p.document.getElementById("checkUpdate").dispatchEvent(new p.document.defaultView.Event("click"));
+    await p.settle();
+    return p.document.getElementById("update");
+  };
+  let line = await check();
+  assert.match(line.textContent, /Couldn’t check for updates/);
+  assert.doesNotMatch(line.textContent, /up to date/i);
+  assert.equal(line.className, "err");
+
+  reply = { state: "publishing", available: null, version: "0.1.60" };
+  line = await check();
+  assert.match(line.textContent, /Desk 0\.1\.60 is being published/);
+  assert.doesNotMatch(line.textContent, /up to date/i);
+
+  reply = { state: "current", available: null };
+  line = await check();
+  assert.match(line.textContent, /up to date/i);
+  assert.equal(p.visible("applyUpdate"), false);
 });

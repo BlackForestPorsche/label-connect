@@ -172,7 +172,11 @@
     return false;
   }
 
-  async function checkForUpdate(force) {
+  /**
+   * state: "available" (signed build newer than this install), "current", "publishing"
+   * (merged and announced, not signed yet) or "unreachable" (no feed answered).
+   */
+  async function checkUpdateState(force) {
     try {
       const stored = await runtime.storage.local.get(["deskUpdateCheckedAt", "deskUpdateAvailable"]);
       const checkedAt = Number(stored.deskUpdateCheckedAt || 0);
@@ -184,14 +188,15 @@
         cached &&
         isNewer(cached.version, localVersion())
       ) {
-        return cached;
+        return { state: "available", available: cached };
       }
       // The badge and the Update button must agree: both go by the signed release feed, not by
       // version.json on main. version.json flips the moment a bump merges, but the signed XPI and
       // updates.json land minutes later (publish-desk-extension), so a version.json-driven badge
       // sent Update to a feed that still said "already the newest".
       const feed = await fetchSignedFeedUpdate();
-      if (feed.error) throw new Error(feed.errors.join("; ") || "feed unreachable");
+      // Nothing answered: say so. Whatever was known before stays as it was.
+      if (feed.error) return { state: "unreachable", available: null };
       const local = localVersion();
       let announced = null;
       try {
@@ -230,10 +235,19 @@
       } else if (api?.refreshUnlockBadge) {
         await api.refreshUnlockBadge();
       }
-      return available;
+      if (available) return { state: "available", available };
+      const announcedVersion = announced && announced.version ? String(announced.version) : "";
+      if (announcedVersion && isNewer(announcedVersion, local)) {
+        return { state: "publishing", available: null, version: announcedVersion };
+      }
+      return { state: "current", available: null };
     } catch {
-      return null;
+      return { state: "unreachable", available: null };
     }
+  }
+
+  async function checkForUpdate(force) {
+    return (await checkUpdateState(force)).available;
   }
 
   const RELEASE_XPI_BASE =
@@ -638,7 +652,7 @@
       return true;
     }
     if (message.type === "check-update") {
-      checkForUpdate(Boolean(message.force)).then((available) => sendResponse({ available }));
+      checkUpdateState(Boolean(message.force)).then(sendResponse);
       return true;
     }
     if (message.type === "reload-extension") {

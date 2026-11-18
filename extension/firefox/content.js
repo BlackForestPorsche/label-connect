@@ -379,7 +379,9 @@
     const armId = createArmId;
     rememberDwight(scrapedRaw);
     const fields = fieldsForPrint(scraped, armId);
-    fields.dwight = listenerFields(scraped);
+    // Same read as Close, Cancel and the estimate events: the page's own customer and
+    // year/make/model. The label's last name and model only fill what the page left blank.
+    fields.dwight = { ...dwightFromScrape(scraped), ...listenerFields(scrapedRaw) };
     disarm();
     requestPrint(fields);
   }

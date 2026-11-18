@@ -646,12 +646,19 @@
     return digits.length >= 10 && digits.length <= 15 && /^[+\d\s().-]+$/.test(text);
   }
 
+  /**
+   * An RO number is one word with a digit in it: 48213, J001094, 2231-A. Page copy that starts
+   * like the label ("Repair order created", "RO Summary") is not a number.
+   */
   function cleanRoCandidate(value) {
     const text = String(value || "")
-      .replace(/^RO\s*/i, "")
+      .replace(/^RO(?![a-z])\s*/i, "")
+      .replace(/^[#:\s-]+/, "")
       .trim();
     if (!text || isVinNoise(text) || isContactValue(text)) return "";
-    return text;
+    const first = text.split(/\s+/)[0].replace(/[.,;:]+$/, "");
+    if (!/\d/.test(first) || !/^[A-Za-z0-9][A-Za-z0-9-]{0,23}$/.test(first)) return "";
+    return first;
   }
 
   /**

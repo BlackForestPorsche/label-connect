@@ -128,3 +128,30 @@ test("scrape: listener fields keep plate, vin, and tech, and drop phone and emai
   assert.equal(api.isCloseControl({ textContent: "Close R/O", nodeType: 1, getAttribute() { return ""; } }), true);
   assert.equal(api.isCancelControl({ textContent: "Cancel R/O", nodeType: 1, getAttribute() { return ""; } }), true);
 });
+
+test("scrape: page copy that starts like the RO label is not an RO number", () => {
+  const base = `
+    <div class="form-row"><span>Customer</span><span>J. Whatcott</span></div>
+    <div class="form-row"><span>Model</span><span>Boxster</span></div>`;
+  for (const copy of [
+    "Repair order created",
+    "Repair Order Details",
+    "RO Summary",
+    "R/O was saved",
+    "Repair order created 11/18/2026",
+  ]) {
+    const fields = scrapeHtml(`${base}<div>${copy}</div>`);
+    assert.equal(fields.ro, "", copy);
+    assert.equal(fields.roNumber, "", copy);
+  }
+});
+
+test("scrape: RO numbers keep working in every shape the page shows them", () => {
+  const withRo = (html) => scrapeHtml(html).ro;
+  assert.equal(withRo(`<div class="row"><label for="ro">RO #</label><input id="ro" value="J001094"></div>`), "J001094");
+  assert.equal(withRo(`<div class="row"><label for="ro">Repair Order</label><input id="ro" value="48213"></div>`), "48213");
+  assert.equal(withRo(`<div>RO #: 48213</div>`), "48213");
+  assert.equal(withRo(`<div>Repair order 48213 created</div>`), "48213");
+  assert.equal(withRo(`<p>Saved as RO# J1001.</p>`), "J1001");
+  assert.equal(withRo(`<div class="row"><label for="ro">R/O</label><input id="ro" value="Robert"></div>`), "");
+});

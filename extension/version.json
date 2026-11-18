@@ -1,6 +1,6 @@
 {
-  "version": "0.1.52",
-  "message": "Desk 0.1.52: Lock signs the shop website out every time, in Chrome and Firefox. Locking on the website locks Tools and it stays locked.",
+  "version": "0.1.53",
+  "message": "Desk 0.1.53: Check for update says when it could not reach the update feed. Create RO sends the listener the same customer and car details as Close and Cancel, and words on the page are never read as an RO number.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

@@ -356,12 +356,19 @@
     try {
       const response = await runtime.runtime.sendMessage({ type: "check-update", force: true });
       const available = response?.available;
-      const stored = await runtime.storage.local.get(["deskUpdateAppliedVersion"]);
+      const stored = await runtime.storage.local.get(["deskUpdateAppliedVersion", "deskUpdateAvailable"]);
       if (available?.version) {
         paintUpdateState({
           available,
           appliedVersion: stored.deskUpdateAppliedVersion,
         });
+      } else if (!response || response.state === "unreachable") {
+        // Not knowing is not the same as being up to date.
+        showApply(Boolean(stored.deskUpdateAvailable?.version));
+        setUpdate("Couldn’t check for updates. Check the internet connection and try again.", "err");
+      } else if (response.state === "publishing") {
+        showApply(false);
+        setUpdate(`Desk ${response.version} is being published. Check again in a few minutes.`, "warn");
       } else {
         paintUpdateState({});
       }
