@@ -20,6 +20,7 @@
   const GATE_SEEN_KEY = "deskGateSeen";
   const GATE_EXPIRY_KEY = "deskGateExpiry";
   const GATE_SEEN_SESSION_KEY = "deskGateSeenSession";
+  const GATE_JAR_KEY = "deskGateJarSettled";
   /** An unlock this fresh is never undone by an inferred (not user-clicked) site lock. */
   const RECENT_UNLOCK_MS = 8_000;
   /** Desk polls every 400ms: a gate gone this long past its own expiry was not removed by a Lock. */
@@ -221,7 +222,10 @@
     }
   }
 
-  const latchReady = loadLatch().catch(() => {});
+  const latchReady = loadLatch()
+    .catch(() => {})
+    .then(() => settleGateJar())
+    .catch(() => {});
 
   function engageSiteLatch(toolsSessionId = lastToolsSessionId) {
     latchEpoch += 1;
@@ -682,10 +686,95 @@
     };
   }
 
+  function gatePartitionSite(cookie) {
+    const site = cookie && cookie.partitionKey && cookie.partitionKey.topLevelSite;
+    return site ? String(site) : "";
+  }
+
   /**
-   * Host-only bf_shop_gate (path /, no Domain). Firefox Total Cookie Protection
-   * stores that first-party cookie under the shop top-level site. cookies.get
-   * without partitionKey reads a different jar and misses the unlocked page.
+   * Every bf_shop_gate on the shop host: the first-party cookie the site sets, and any copy
+   * in the partitioned jar. Desk 0.1.47 to 0.1.51 wrote its own copy there.
+   */
+  async function listShopGateCookies() {
+    if (!runtime?.cookies?.getAll) return [];
+    const base = await shopBaseUrl();
+    const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
+    let host = "";
+    try {
+      host = new URL(`${base}/`).hostname;
+    } catch {
+      return [];
+    }
+    const found = new Map();
+    for (const details of [{ url: `${base}/`, name }, { name, partitionKey: {} }]) {
+      try {
+        for (const cookie of (await runtime.cookies.getAll(details)) || []) {
+          if (!cookie || cookie.name !== name || !cookie.value) continue;
+          if (String(cookie.domain || "").replace(/^\./, "") !== host) continue;
+          found.set(gatePartitionSite(cookie), cookie);
+        }
+      } catch {
+        // this browser does not take that query
+      }
+    }
+    return [...found.values()];
+  }
+
+  /**
+   * Remove gate copies from the partitioned jar. The key goes back exactly as the browser
+   * reported it: Chromium ignores a remove that leaves out hasCrossSiteAncestor.
+   */
+  async function removePartitionedGateCookies() {
+    if (!runtime?.cookies?.remove) return 0;
+    const base = await shopBaseUrl();
+    const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
+    let removed = 0;
+    for (const cookie of await listShopGateCookies()) {
+      if (!gatePartitionSite(cookie)) continue;
+      try {
+        await runtime.cookies.remove({ url: `${base}/`, name, partitionKey: cookie.partitionKey });
+        removed += 1;
+      } catch {
+        // leave it; the next clear tries again
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * One time per install: leave a single gate, in the jar the shop site uses. While Desk is
+   * signed in, a gate that only exists as the old partitioned copy moves over so the site
+   * stays signed in. A signed-out or latched Desk only removes it: a leftover copy never
+   * signs anyone in.
+   */
+  async function settleGateJar() {
+    if (!runtime?.cookies?.getAll || !runtime?.cookies?.set || !runtime?.cookies?.remove) return;
+    const stored = await storageGet([GATE_JAR_KEY]);
+    if (stored[GATE_JAR_KEY] === 1) return;
+    const all = await listShopGateCookies();
+    const partitioned = all.filter((cookie) => gatePartitionSite(cookie));
+    if (partitioned.length) {
+      const hasFirstParty = all.some((cookie) => !gatePartitionSite(cookie));
+      const signedIn = !siteLatch && (await hasFreshWidgetToken(0));
+      if (hasFirstParty || !signedIn) {
+        await removePartitionedGateCookies();
+      } else {
+        const newest = partitioned.sort(
+          (a, b) => (Number(b.expirationDate) || 0) - (Number(a.expirationDate) || 0),
+        )[0];
+        const expiresAt = Number.isFinite(newest.expirationDate)
+          ? new Date(newest.expirationDate * 1000).toISOString()
+          : "";
+        await applyGateCookie(newest.value, expiresAt);
+      }
+    }
+    await storageSet({ [GATE_JAR_KEY]: 1 });
+  }
+
+  /**
+   * Host-only bf_shop_gate (path /, no Domain). The shop site keeps it in the first-party
+   * jar. The partitioned jar is still read and cleared, so a copy left there by an older
+   * Desk is never missed.
    */
   function shopGateQueries(base, name) {
     const url = `${base}/`;
@@ -823,6 +912,7 @@
         // try the other jar
       }
     }
+    if (await removePartitionedGateCookies()) removed = true;
     return removed ? { ok: true } : { ok: false, reason: "remove_failed" };
   }
 
@@ -852,23 +942,19 @@
     lastDeskGateValue = String(value);
     // Shop writes SameSite=Lax on shop.blackforestautomotive.com. None is only
     // for a different host. Try Lax first so the page's gate check receives it.
-    let topLevelSite = "";
-    try {
-      topLevelSite = new URL(`${base}/`).origin;
-    } catch {
-      topLevelSite = "";
-    }
+    // Always the first-party jar, the same cookie the site sets and clears. A partitioned
+    // copy is a second gate: the site's Lock cannot clear it and from-gate never sees it.
     const attempts = [
-      topLevelSite ? { ...details, sameSite: "lax", partitionKey: { topLevelSite } } : null,
       { ...details, sameSite: "lax" },
       { ...details, sameSite: "no_restriction" },
       { ...details },
-    ].filter(Boolean);
+    ];
     for (const attempt of attempts) {
       try {
         await runtime.cookies.set(attempt);
         markGateSeen(true);
         noteGateExpiry(details.expirationDate ? details.expirationDate * 1000 : 0);
+        await removePartitionedGateCookies();
         return { ok: true };
       } catch {
         // next attribute set
@@ -2054,6 +2140,8 @@
   api.siteLockQuietActive = siteLockQuietActive;
   api.latchReady = latchReady;
   api.siteLatchState = () => (siteLatch ? { ...siteLatch } : null);
+  api.listShopGateCookies = listShopGateCookies;
+  api.settleGateJar = settleGateJar;
   api.engageSiteLatch = engageSiteLatch;
   api.releaseSiteLatch = releaseSiteLatch;
   api.reloadShopUnlockTabs = reloadShopUnlockTabs;

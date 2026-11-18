@@ -209,9 +209,10 @@ test("committed extension files do not contain a sender key", () => {
 });
 
 test("both Desk manifests allow the Create RO listener host", () => {
+  const released = JSON.parse(fs.readFileSync(path.join(root, "extension/version.json"), "utf8"));
   for (const rel of ["extension/firefox/manifest.json", "extension/chromium/manifest.json"]) {
     const manifest = JSON.parse(fs.readFileSync(path.join(root, rel), "utf8"));
     assert.ok(manifest.host_permissions.includes("https://api2.cursor.sh/*"), rel);
-    assert.equal(manifest.version, "0.1.51");
+    assert.equal(manifest.version, released.version);
   }
 });
