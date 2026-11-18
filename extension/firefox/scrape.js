@@ -561,6 +561,80 @@
     return code || last;
   }
 
+  function isSubmodelTokenNoise(token) {
+    const text = String(token || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/\.$/, "");
+    if (!text || isScrapeNoise(text)) return true;
+    if (STATE_CODES.has(text.toUpperCase())) return true;
+    // 1-letter tokens can be trim (Turbo S); 2-letter only drops known state codes.
+    if (/^[A-Za-z]{2}$/.test(text) && STATE_CODES.has(text.toUpperCase())) return true;
+    return false;
+  }
+
+  function normalizeSubmodelToken(raw) {
+    let text = String(raw || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text || isScrapeNoise(text)) return "";
+    if (looksLikeAddress(text) || isKnownPlate(text) || isVinNoise(text)) return "";
+    const tokens = text
+      .replace(COMPOUND_MAKE_RE, (m) => m.replace(/[\s-]+/g, "_"))
+      .split(/[\s,/|]+/)
+      .filter(Boolean)
+      .filter((t) => !/^(?:19|20)\d{2}$/.test(t))
+      .filter(
+        (t) =>
+          !isSubmodelTokenNoise(t) &&
+          !isScrapeNoise(t) &&
+          !KNOWN_MAKES.has(t.toLowerCase()) &&
+          !/^vin:?$/i.test(t),
+      );
+    if (!tokens.length) return "";
+    const joined = tokens.join(" ").trim();
+    return joined.slice(0, 48);
+  }
+
+  /** Tokens after the scraped base model in a Y/M/M or model field (e.g. 911 → Targa). */
+  function submodelFromVehicleText(raw, model) {
+    const baseModel = String(model || "").trim();
+    if (!baseModel) return "";
+    let text = String(raw || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return "";
+    text = text.replace(/^vin\s*:\s*/i, "").trim();
+    const idx = text.toLowerCase().indexOf(baseModel.toLowerCase());
+    if (idx < 0) return "";
+    let after = text
+      .slice(idx + baseModel.length)
+      .replace(/^[\s,/|:;-]+/, "")
+      .trim();
+    const sub = normalizeSubmodelToken(after);
+    if (sub && sub.toLowerCase() === baseModel.toLowerCase()) return "";
+    return sub;
+  }
+
+  function submodelFromPage(doc, model) {
+    const direct =
+      readExactField(doc, /^\s*(?:sub[\s-]*model|trim(?:\s*level)?|body\s*style)\s*$/i) ||
+      findInputByHint(doc, /sub[\s-]*model|trim(?:\s*level)?|body\s*style/i);
+    const fromField = normalizeSubmodelToken(direct);
+    if (fromField) return fromField;
+
+    const ymm =
+      labeledValue(doc, /^\s*(?:year[\s/]*make[\s/]*model|make[\s/]*model|ymm)\s*$/i) ||
+      labeledValue(doc, /^\s*vehicle(?:\s*description)?\s*$/i);
+    const fromYmm = submodelFromVehicleText(ymm, model);
+    if (fromYmm) return fromYmm;
+
+    const modelField =
+      labeledValue(doc, /^\s*(?:vehicle\s*|car\s*)?model(?:\s*name)?\s*$/i) ||
+      findInputByHint(doc, /(^|[^a-z])model([^a-z]|$)/i);
+    return submodelFromVehicleText(modelField, model);
+  }
+
   /** "2019 Toyota Camry", "2021 Mercedes-Benz GLC300" anywhere on the page, year then make then model. */
   function vehicleFromBodyText(body) {
     const makes = [...KNOWN_MAKES].map((m) => m.replace(/_/g, "[\\s-]+").replace(/-/g, "[\\s-]?")).join("|");
@@ -746,10 +820,11 @@
     const roNumber = scrapeRoNumber(doc);
     const year = readExactField(doc, /^\s*(year|yr)\s*$/i);
     const make = readExactField(doc, /^\s*make\s*$/i);
+    const submodel = model ? submodelFromPage(doc, model) : "";
     const customer = withoutContact(
       readExactField(doc, /^\s*(customer(\s*name)?)\s*$/i) || lastName,
     );
-    const car = [year, make, model].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
+    const car = [year, make, model, submodel].map((part) => String(part || "").trim()).filter(Boolean).join(" ");
     const plate = withoutContact(
       readExactField(doc, /^\s*(license\s*plate|licence\s*plate|lic\.?\s*plate|plate|tag)\s*(?:#|no\.?|number)?\s*$/i),
     );
@@ -761,6 +836,9 @@
       lastName,
       model,
       modelSource: source,
+      submodel,
+      year,
+      make,
       roNumber,
       ro: roNumber,
       customer,
@@ -979,7 +1057,13 @@
       model = curModel || memModel;
       modelSource = "body";
     }
-    return { lastName, model, modelSource, roNumber: trimStr(cur.roNumber) };
+    return {
+      lastName,
+      model,
+      modelSource,
+      submodel: trimStr(cur.submodel) || trimStr(mem.submodel),
+      roNumber: trimStr(cur.roNumber),
+    };
   }
 
   /** Fold a fresh scrape into the remembered fields; empty reads never erase a good value. */
@@ -987,10 +1071,20 @@
     const mem = remembered || {};
     const cur = current || {};
     const merged = mergeCreateFields(
-      { lastName: cur.lastName, model: cur.model, modelSource: cur.modelSource },
+      {
+        lastName: cur.lastName,
+        model: cur.model,
+        modelSource: cur.modelSource,
+        submodel: cur.submodel,
+      },
       mem,
     );
-    return { lastName: merged.lastName, model: merged.model, modelSource: merged.modelSource };
+    return {
+      lastName: merged.lastName,
+      model: merged.model,
+      modelSource: merged.modelSource,
+      submodel: merged.submodel,
+    };
   }
 
   /**
@@ -1023,6 +1117,9 @@
   api.isPlateOrAccountNoise = isPlateOrAccountNoise;
   api.isStateOrRegionNoise = isStateOrRegionNoise;
   api.normalizeModelToken = normalizeModelToken;
+  api.normalizeSubmodelToken = normalizeSubmodelToken;
+  api.submodelFromVehicleText = submodelFromVehicleText;
+  api.submodelFromPage = submodelFromPage;
   api.isCreateControl = isCreateControl;
   api.isCloseControl = isCloseControl;
   api.isCancelControl = isCancelControl;

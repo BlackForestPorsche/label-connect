@@ -106,6 +106,10 @@
       const car = String(src.model || "").trim();
       if (car) out.car = car;
     }
+    const submodel = String(src.submodel || "").trim();
+    if (submodel) out.submodel = submodel.slice(0, 48);
+    const year = String(src.year || "").trim();
+    if (year) out.year = year.slice(0, 8);
     return out;
   }
 
@@ -285,6 +289,7 @@
     if (src.job) bodyFields.job = String(src.job).trim();
     if (src.owner && !bodyFields.customer) bodyFields.customer = String(src.owner).trim();
     if (src.model && !bodyFields.car) bodyFields.car = String(src.model).trim();
+    if (src.submodel) bodyFields.submodel = String(src.submodel).trim().slice(0, 48);
     try {
       const pending = runtime.runtime.sendMessage({
         type: "follow-ro",
@@ -304,7 +309,13 @@
       const ro = String(scraped.roNumber || scraped.ro || "").trim();
       if (!ro) return;
       const event = lastFollowRo && lastFollowRo !== ro ? "change" : "open";
-      notifyFollow(event, { ...listenerFields(scraped), ro, year: scraped.year, job: scraped.job });
+      notifyFollow(event, {
+        ...listenerFields(scraped),
+        ro,
+        year: scraped.year,
+        job: scraped.job,
+        submodel: scraped.submodel,
+      });
     } catch {
       // scrape noise
     }
