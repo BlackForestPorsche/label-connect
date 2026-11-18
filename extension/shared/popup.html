@@ -87,7 +87,20 @@
       #status,
       #update {
         margin-top: 10px;
-        min-height: 1.2em;
+        font-weight: 600;
+      }
+      #status:empty,
+      #update:empty {
+        display: none;
+      }
+      #loginBox {
+        margin-bottom: 14px;
+      }
+      #signInState {
+        opacity: 1;
+      }
+      .meta.err {
+        opacity: 1;
         font-weight: 600;
       }
       .ok { color: #1f4d2a; }
@@ -105,10 +118,7 @@
     <h1>Black Forest Desk</h1>
     <div id="loggedIn" role="status" hidden></div>
     <div id="loginBox">
-      <p>
-        Desk unlocks the shop website cookie from Tools (and lot names). Sync Tools if the site stays on /unlock after you unlock Tools.
-        Person + desk PIN remain as backup. Create RO print uses local Labels only — no PIN.
-      </p>
+      <p id="signInState" role="status">Checking Tools and the shop site…</p>
       <button id="useShopSession" type="button">Sync shop session</button>
       <button id="useTools" class="secondary" type="button">Sync Tools → website</button>
       <label for="person">Person</label>
@@ -116,6 +126,7 @@
       <label for="pin">Desk PIN</label>
       <input id="pin" type="password" autocomplete="current-password" inputmode="numeric" placeholder="4–12 digits" />
       <button id="unlock" class="secondary" type="button">Unlock with desk PIN</button>
+      <div id="status" role="status"></div>
     </div>
     <label for="dwightCreateRoToken">Create RO listener key</label>
     <input
@@ -125,13 +136,10 @@
       spellcheck="false"
       placeholder="Paste once"
     />
-    <p id="dwightKeyHint" class="meta">
-      Paste the sender key once. It stays on this Desk and survives updates. It is not stored in the repo.
-    </p>
+    <p id="dwightKeyHint" class="meta" role="status"></p>
     <button id="checkUpdate" class="secondary" type="button">Check for extension update</button>
     <button id="applyUpdate" class="accent" type="button" hidden>Update</button>
     <button id="reloadDesk" class="secondary" type="button" hidden>Reload Desk</button>
-    <div id="status" role="status"></div>
     <div id="update" role="status"></div>
     <div id="version" class="meta"></div>
     <script src="lot-names.js"></script>

@@ -10,7 +10,7 @@ const backgroundSrc = fs.readFileSync(path.join(root, "extension/shared/backgrou
 const webhookMatch = backgroundSrc.match(/const DWIGHT_CREATE_RO_URL =\s*"([^"]+)"/);
 const WEBHOOK = webhookMatch && webhookMatch[1];
 
-function loadBackground({ token = "", webhookThrows = false } = {}) {
+function loadBackground({ token = "", webhookThrows = false, webhookStatus = 200 } = {}) {
   const fetches = [];
   const messageListeners = [];
   const store = {};
@@ -63,7 +63,11 @@ function loadBackground({ token = "", webhookThrows = false } = {}) {
       fetches.push({ url: String(url), init });
       if (String(url) === WEBHOOK) {
         if (webhookThrows) throw new Error("listener down");
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        return {
+          ok: webhookStatus >= 200 && webhookStatus < 300,
+          status: webhookStatus,
+          json: async () => ({ ok: true }),
+        };
       }
       return { ok: false, status: 404, json: async () => ({}) };
     },
@@ -78,7 +82,7 @@ function loadBackground({ token = "", webhookThrows = false } = {}) {
       }
       resolve(undefined);
     });
-  return { fetches, send };
+  return { fetches, send, store };
 }
 
 function webhookPosts(fetches) {
@@ -215,4 +219,37 @@ test("both Desk manifests allow the Create RO listener host", () => {
     assert.ok(manifest.host_permissions.includes("https://api2.cursor.sh/*"), rel);
     assert.equal(manifest.version, released.version);
   }
+});
+
+test("the popup can tell whether the last RO event reached the listener, without the key", async () => {
+  const sentOk = loadBackground({ token: "desk-listener-test" });
+  assert.equal((await sentOk.send({ type: "dwight-nudge", event: "close_ro", fields: { ro: "J1001" } })).ok, true);
+  assert.equal(sentOk.store.deskListenerLast.event, "close_ro");
+  assert.equal(sentOk.store.deskListenerLast.ok, true);
+  assert.equal(sentOk.store.deskListenerLast.status, 200);
+  assert.ok(sentOk.store.deskListenerLast.at > 0);
+
+  const refused = loadBackground({ token: "desk-listener-test", webhookStatus: 401 });
+  assert.equal((await refused.send({ type: "dwight-nudge", event: "create_ro", fields: {} })).ok, false);
+  assert.deepEqual(
+    [refused.store.deskListenerLast.ok, refused.store.deskListenerLast.status],
+    [false, 401],
+  );
+
+  const down = loadBackground({ token: "desk-listener-test", webhookThrows: true });
+  assert.equal((await down.send({ type: "dwight-nudge", event: "create_ro", fields: {} })).ok, false);
+  assert.deepEqual([down.store.deskListenerLast.ok, down.store.deskListenerLast.status], [false, 0]);
+
+  const noKey = loadBackground({});
+  await noKey.send({ type: "dwight-nudge", event: "create_ro", fields: {} });
+  assert.equal("deskListenerLast" in noKey.store, false, "nothing is recorded when nothing is sent");
+
+  for (const world of [sentOk, refused, down]) {
+    assert.equal(JSON.stringify(world.store.deskListenerLast).includes("desk-listener-test"), false);
+  }
+});
+
+test("desk-status answers with nothing to show when the shared helpers are not loaded", async () => {
+  const { send } = loadBackground({});
+  assert.deepEqual({ ...(await send({ type: "desk-status" })) }, { ok: false });
 });

@@ -21,6 +21,10 @@
   const GATE_EXPIRY_KEY = "deskGateExpiry";
   const GATE_SEEN_SESSION_KEY = "deskGateSeenSession";
   const GATE_JAR_KEY = "deskGateJarSettled";
+  const SITE_LOCKED_TEXT = "The shop site is locked. It stays locked until someone unlocks Tools or the site.";
+  const SHOP_UNREACHABLE_TEXT = "Couldn’t reach the shop site. Check the internet connection and try again.";
+  const SIGN_IN_INCOMPLETE_TEXT = "The shop site did not finish the sign-in. Try again.";
+  const LOT_LOGGED_OUT_TEXT = "Desk is logged out. Unlock Tools or the shop site and the names load by themselves.";
   /** An unlock this fresh is never undone by an inferred (not user-clicked) site lock. */
   const RECENT_UNLOCK_MS = 8_000;
   /** Desk polls every 400ms: a gate gone this long past its own expiry was not removed by a Lock. */
@@ -317,31 +321,32 @@
     return PERSON_ID_RE.test(person) ? person : "";
   }
 
+  /** What a person can do about a failed desk PIN sign-in. */
   function friendlyWidgetError(code, status) {
     const key = String(code || "").trim().toLowerCase();
     if (key === "unauthorized" || status === 401) {
-      return "Desk PIN rejected (or person not found). Pick a person from the list and use the desk/shop widget PIN — not another password.";
+      return "That PIN didn’t work. Check the person and PIN, then try again.";
     }
     if (key === "locked" || status === 429) {
-      return "Too many PIN tries — wait a bit, then unlock again with your desk PIN.";
+      return "Too many tries. Wait a few minutes, then try again.";
     }
     if (key === "pin_change_required") {
-      return "This person must set a PIN on the shop site first, then unlock here.";
+      return "Set a new PIN on the shop site first, then sign in here.";
     }
     if (key === "https_required") {
-      return "Shop widget login needs HTTPS. Check shop.blackforestautomotive.com.";
+      return "The shop site needs a secure connection. Check shop.blackforestautomotive.com.";
     }
     if (key === "bad_request") {
-      return "Enter a valid shop person (lowercase letters) and a 4–12 digit desk PIN.";
+      return "Pick your name and enter your 4 to 12 digit desk PIN.";
     }
     if (key === "rate_limited") {
-      return "Shop rate-limited this request. Wait a minute, then try again.";
+      return "Too many tries. Wait a minute, then try again.";
     }
     if (key && !/^[a-z_]+$/.test(key)) {
       return String(code);
     }
-    if (status) return `Shop unlock failed (${status}). Enter your desk PIN in the popup.`;
-    return "Could not unlock. Enter your desk PIN in the Black Forest Desk popup.";
+    if (status) return `The shop site could not sign you in (error ${status}). Try again in a moment.`;
+    return "Couldn’t sign in. Try again in a moment.";
   }
 
   async function storageGet(keys) {
@@ -896,6 +901,27 @@
     };
   }
 
+  /** Tools state for the popup. Read-only: it never touches the unlock hold or the latch. */
+  async function readToolsStatus() {
+    const base = await toolsBridgeBaseUrl();
+    try {
+      const response = await fetch(`${base}/health`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      const data = response.ok ? await response.json() : null;
+      const hasSession = Boolean(data && data.hasSession);
+      return {
+        reachable: true,
+        hasSession,
+        person: hasSession && data.person ? String(data.person) : "",
+      };
+    } catch {
+      return { reachable: false, hasSession: false, person: "" };
+    }
+  }
+
   async function clearShopGateCookie() {
     const base = await shopBaseUrl();
     const name = api.SHOP_GATE_COOKIE || GATE_COOKIE;
@@ -968,9 +994,9 @@
    * This is the missing half of App↔website sync (Desk already imported :8788 for itself).
    */
   async function exchangeWidgetSessionToGate(token) {
-    if (!token) return { error: "No Tools session token.", reason: "no_token" };
+    if (!token) return { error: "Tools is locked. Unlock Tools first.", reason: "no_token" };
     await latchReady;
-    if (siteLatch) return { error: "Website is locked.", reason: "site_locked" };
+    if (siteLatch) return { error: SITE_LOCKED_TEXT, reason: "site_locked" };
     const epoch = latchEpoch;
     const base = await shopBaseUrl();
     let response;
@@ -987,7 +1013,7 @@
         cache: "no-store",
       });
     } catch {
-      return { error: "Could not reach the shop exchange API.", reason: "network" };
+      return { error: SHOP_UNREACHABLE_TEXT, reason: "network" };
     }
     let data = null;
     try {
@@ -996,14 +1022,17 @@
       data = null;
     }
     if (response.status === 401 || response.status === 403) {
-      return { error: "Tools session was rejected. Unlock Tools again.", reason: "unauthorized" };
+      return {
+        error: "The shop site did not accept Tools. Lock and unlock Tools, then try again.",
+        reason: "unauthorized",
+      };
     }
     if (response.status === 429) {
       return { error: friendlyWidgetError("rate_limited", 429), reason: "rate_limited" };
     }
     if (response.status === 404 || response.status === 406) {
       return {
-        error: "Shop exchange is not on the site yet (needs beta with /api/widget/session/exchange).",
+        error: "The shop site can’t take a sign-in from Tools yet. Sign in on the shop site instead.",
         reason: "exchange_missing",
       };
     }
@@ -1015,7 +1044,7 @@
     }
     if (epoch !== latchEpoch || siteLatch) {
       await clearShopGateCookie();
-      return { error: "Website was locked mid-exchange.", reason: "site_locked" };
+      return { error: SITE_LOCKED_TEXT, reason: "site_locked" };
     }
     const gateToken = data.gateToken || data.gate || data.cookieValue || "";
     if (gateToken) {
@@ -1026,7 +1055,7 @@
     if (!gate.present) {
       return {
         error:
-          "Exchange succeeded but bf_shop_gate is missing in this browser. Paste grok-exchange-gate-token so exchange returns gateToken.",
+          "Tools is unlocked, but this browser could not sign the shop site in. Sign in on the shop site instead.",
         reason: "cookie_missing",
         person: data.person ? String(data.person) : "",
       };
@@ -1201,7 +1230,7 @@
           locked: true,
           shouldReload: false,
           reason: "site_lock",
-          error: "Website locked — Tools session cleared.",
+          error: "The shop site was locked, so Tools was locked too.",
         };
       } else {
         if (unlockHoldActive()) {
@@ -1217,7 +1246,7 @@
           locked: true,
           shouldReload: false,
           reason: "site_lock",
-          error: "Website locked — stays locked until you unlock.",
+          error: SITE_LOCKED_TEXT,
         };
       }
     }
@@ -1246,7 +1275,7 @@
             locked: true,
             shouldReload: false,
             reason: "site_lock",
-            error: "Website was locked — Tools locked to match.",
+            error: "The shop site was locked, so Tools was locked too.",
           };
         }
       }
@@ -1345,7 +1374,7 @@
         locked: true,
         shouldReload: hadGate,
         reason: "tools_locked",
-        error: "Tools is locked — shop website cookie cleared in this browser.",
+        error: "Tools is locked, so the shop site is signed out on this browser. Unlock Tools first.",
       };
     }
 
@@ -1473,7 +1502,7 @@
     if (!gate.present) {
       return {
         error:
-          "Shop site is not signed in in this browser profile. Unlock shop.blackforestautomotive.com first.",
+          "The shop site is not signed in on this browser. Sign in at shop.blackforestautomotive.com first.",
         reason: "no_gate_cookie",
       };
     }
@@ -1489,7 +1518,7 @@
         cache: "no-store",
       });
     } catch {
-      return { error: "Could not reach the shop from-gate API.", reason: "network" };
+      return { error: SHOP_UNREACHABLE_TEXT, reason: "network" };
     }
 
     let data = null;
@@ -1502,14 +1531,14 @@
     if (response.status === 404 || response.status === 406) {
       return {
         error:
-          "Shop is signed in, but from-gate is not on the site yet. Unlock Tools or enter desk PIN.",
+          "The shop site is signed in but can’t share its sign-in yet. Unlock Tools or use your desk PIN.",
         reason: "from_gate_missing",
         gatePresent: true,
       };
     }
     if (response.status === 401 || response.status === 403) {
       return {
-        error: "Shop cookie was rejected. Unlock the shop site again in this browser profile.",
+        error: "The shop site sign-in has run out. Sign in on the shop site again.",
         reason: "unauthorized",
       };
     }
@@ -1521,11 +1550,11 @@
     }
 
     if (epoch !== latchEpoch) {
-      return { error: "Website was locked mid-import.", reason: "site_locked" };
+      return { error: SITE_LOCKED_TEXT, reason: "site_locked" };
     }
     const token = data?.token || data?.accessToken || data?.bearer || data?.widgetToken;
     const expiresAt = data?.expiresAt || data?.widgetExpiresAt;
-    if (!token) return { error: "from-gate returned no token.", reason: "bad_payload" };
+    if (!token) return { error: SIGN_IN_INCOMPLETE_TEXT, reason: "bad_payload" };
     return storeWidgetToken({
       token,
       expiresAt,
@@ -1545,7 +1574,7 @@
       });
     } catch {
       return {
-        error: "Black Forest Tools is not reachable. Open Tools unlocked, or use shop session / PIN.",
+        error: "Black Forest Tools is not running on this PC. Start Tools, or sign in another way.",
         reason: "bridge_unreachable",
       };
     }
@@ -1557,7 +1586,7 @@
     }
     if (response.status === 404) {
       return {
-        error: "Tools has no shared session. Unlock Tools or the shop site first.",
+        error: "Tools is locked. Unlock Tools first.",
         reason: "no_session",
       };
     }
@@ -1565,7 +1594,7 @@
       return { error: friendlyWidgetError(data && data.error, response.status), reason: "bridge_error" };
     }
     const token = data?.token || data?.accessToken || data?.bearer;
-    if (!token) return { error: "Tools session missing token.", reason: "bad_payload" };
+    if (!token) return { error: "Tools did not finish its sign-in. Lock and unlock Tools, then try again.", reason: "bad_payload" };
     return storeWidgetToken({
       token,
       expiresAt: data.expiresAt,
@@ -1579,11 +1608,11 @@
     const pinText = String(pin || "");
     if (!PERSON_ID_RE.test(normalized)) {
       return {
-        error: "Enter a valid shop person (lowercase, same as unlock — e.g. logan).",
+        error: "Pick your name from the list.",
       };
     }
     if (!PIN_RE.test(pinText)) {
-      return { error: "Desk PIN must be 4–12 digits (same PIN as the shop / Plasma widget)." };
+      return { error: "A desk PIN is 4 to 12 digits, the same PIN you use on the shop site." };
     }
 
     const base = await shopBaseUrl();
@@ -1596,8 +1625,7 @@
       });
     } catch {
       return {
-        error:
-          "Could not reach the shop widget API. Check the network, then enter your desk PIN again.",
+        error: SHOP_UNREACHABLE_TEXT,
       };
     }
     let data = null;
@@ -1610,7 +1638,7 @@
       return { error: friendlyWidgetError(data && data.error, response.status) };
     }
     const token = data?.token || data?.accessToken || data?.bearer;
-    if (!token) return { error: "Shop unlock worked but returned no token. Try again." };
+    if (!token) return { error: SIGN_IN_INCOMPLETE_TEXT };
     return storeWidgetToken({
       token,
       expiresAt: data.expiresAt,
@@ -2041,8 +2069,7 @@
         needsAuth: true,
         names: cachedNames,
         source: cachedNames.length ? "cache" : "auth",
-        message:
-          "Unlock the shop site in this browser profile (or Tools / desk PIN in the popup), then Refresh.",
+        message: LOT_LOGGED_OUT_TEXT,
       };
     }
 
@@ -2058,7 +2085,7 @@
       });
     } catch {
       return {
-        error: "Lot view unreachable. Is the shop online?",
+        error: "Couldn’t reach the shop site. Check the internet connection, then press Refresh.",
         names: cachedNames,
         source: cachedNames.length ? "cache" : "error",
       };
@@ -2081,7 +2108,7 @@
         message:
           code === "pin_change_required"
             ? friendlyWidgetError(code, response.status)
-            : "Desk PIN session expired — open the Black Forest Desk popup and enter your desk PIN again.",
+            : LOT_LOGGED_OUT_TEXT,
       };
     }
 
@@ -2092,8 +2119,9 @@
       data = null;
     }
     if (!response.ok) {
+      // The lot list failed to load. That is not a sign-in problem, so no PIN advice.
       return {
-        error: friendlyWidgetError(data && data.error, response.status),
+        error: `Couldn’t load On the Lot (shop error ${response.status}). Press Refresh to try again.`,
         names: cachedNames,
         source: cachedNames.length ? "cache" : "error",
       };
@@ -2132,6 +2160,7 @@
   api.readShopGateCookie = readShopGateCookie;
   api.clearShopGateCookie = clearShopGateCookie;
   api.probeToolsBridgeHealth = probeToolsBridgeHealth;
+  api.readToolsStatus = readToolsStatus;
   api.exchangeWidgetSessionToGate = exchangeWidgetSessionToGate;
   api.syncToolsSessionToSite = syncToolsSessionToSite;
   api.syncSiteLockToTools = syncSiteLockToTools;
