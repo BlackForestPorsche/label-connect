@@ -163,7 +163,8 @@ export async function createWorld() {
     tickets: new Map(),
   };
   const labels = { prints: [], status: 200, response: { ok: true, printed: true }, down: false };
-  const listener = { pings: [] };
+  /** status: what the listener answers (401 = key not accepted). */
+  const listener = { pings: [], status: 200 };
   /** version: what updates.json / version.json announce; null = feed unreachable (HTTP 503). */
   const feed = { version: "0.0.1", message: "", status: 200 };
   const servers = [];
@@ -343,7 +344,7 @@ export async function createWorld() {
         }
         // Record only whether a key came along, never the key.
         listener.pings.push({ path: url.pathname, body, authorized: Boolean(req.headers.authorization) });
-        return json(res, 200, { ok: true });
+        return json(res, listener.status, { ok: listener.status === 200 });
       });
     }
     const cors = { "access-control-allow-origin": "*" };

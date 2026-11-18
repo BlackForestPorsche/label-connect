@@ -19,7 +19,7 @@ import assert from "node:assert/strict";
 import test, { after, before } from "node:test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createWorld, until, sleep, SHOP_ORIGIN, PROXY_PORT } from "./world.mjs";
+import { createWorld, until, sleep, SHOP_ORIGIN, PROXY_PORT, MOCK_PIN } from "./world.mjs";
 import { findFirefox, findGeckodriver, startFirefox } from "./firefox-driver.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -191,8 +191,9 @@ test("A. signing in on the website signs Desk and Tools in", async () => {
     world.shop.fromGate.some((call) => call.cookie && call.person === "logan"),
     "from-gate never received the website's gate cookie from Desk",
   );
-  const state = await stored(["shopWidgetTokenSource", "deskSessionPerson"]);
-  assert.equal(state.shopWidgetTokenSource, "site-gate");
+  // Tools holds the very session the website minted for Desk, not one from a PIN or from Tools.
+  assert.match(world.tools.session.token, /^lot-from-gate-/);
+  const state = await stored(["deskSessionPerson"]);
   assert.equal(state.deskSessionPerson, "logan");
   await until(async () => (await toolbarTitle()).includes("logged in"), { what: "logged in title" });
 
@@ -251,4 +252,99 @@ test("D. a Tools lock signs the website out", async () => {
   assert.equal((await shopPage()).signedIn, "false");
   assert.ok((await toolbarTitle()).includes("logged out"));
   assert.equal(world.tools.session, null, "Tools must stay locked");
+});
+
+const reopenPopup = async () => {
+  await ff.switchTo(ctl);
+  await ff.exec(`location.reload();`).catch(() => {});
+  await sleep(300);
+  await ff.exec(`while (document.readyState !== "complete") await new Promise((r) => setTimeout(r, 25));`);
+};
+const popupText = (id) => ext(`return document.getElementById(arguments[0]).textContent;`, [id]);
+const popupSettles = (id, pattern, what) =>
+  until(async () => pattern.test(await popupText(id)), { timeout: 10000, what });
+
+test("E. the logged-out popup says why, for Tools locked and Tools not running", async () => {
+  await reopenPopup();
+  await popupSettles("signInState", /Unlock Tools or the shop site and Desk logs in by itself/, "Tools locked line");
+  assert.equal(await ext(`return document.getElementById("loginBox").hidden;`), false);
+
+  world.tools.down = true;
+  await reopenPopup();
+  await popupSettles("signInState", /Black Forest Tools is not running on this PC/, "Tools not running line");
+  await ext(`document.getElementById("useTools").click();`);
+  await popupSettles("status", /Black Forest Tools is not running on this PC/, "Sync Tools error");
+  world.tools.down = false;
+
+  await ext(`document.getElementById("useTools").click();`);
+  await popupSettles("status", /Tools is locked\. Unlock Tools first\./, "Sync Tools while locked");
+  await ext(`document.getElementById("useShopSession").click();`);
+  await popupSettles("status", /The shop site is not signed in on this browser/, "Sync shop session while signed out");
+});
+
+test("F. SSF Order reference: logged out, then names load by themselves after a desk PIN sign-in", async () => {
+  const ssf = await ff.newTab("https://www.ssfautoparts.com/checkout");
+  const hint = async () => {
+    await ff.switchTo(ssf);
+    return ff.exec(`const root = document.getElementById("bf-ssf-lot-names"); return root ? root.lastElementChild.textContent : "";`);
+  };
+  const names = async () => {
+    await ff.switchTo(ssf);
+    return ff.exec(`return [...document.querySelectorAll("#bf-ssf-lot-names option")].map((o) => o.value).filter(Boolean);`);
+  };
+  const refresh = async () => {
+    await ff.switchTo(ssf);
+    await ff.exec(`document.querySelector("#bf-ssf-lot-names button").click();`);
+  };
+  await until(async () => /Desk is logged out/.test(await hint()), { timeout: 10000, what: "logged-out hint" });
+  assert.deepEqual(await names(), []);
+
+  // A wrong PIN says so; the right one, sent with Enter, logs in.
+  await ff.switchTo(ctl);
+  // The popup offers the last person who was signed in; this shop PC is Logan's today.
+  await ext(`const person = document.getElementById("person"); person.value = "logan"; person.dispatchEvent(new Event("change", { bubbles: true }));`);
+  await ff.type("#pin", "999999\uE007");
+  await popupSettles("status", /That PIN didn’t work/, "wrong PIN message");
+  assert.equal(await ext(`return document.getElementById("pin").value;`), "");
+  await until(async () => !(await ext(`return document.getElementById("unlock").disabled;`)), { what: "sign-in button free" });
+  await ff.type("#pin", `${MOCK_PIN}\uE007`);
+  await popupSettles("loggedIn", /^Logged in as Logan$/, "logged in by desk PIN");
+  assert.equal(await ext(`return document.getElementById("loginBox").hidden;`), true);
+  await until(() => world.tools.session && world.tools.session.person === "logan", { what: "Tools session from desk PIN" });
+
+  // No Refresh click.
+  await until(async () => (await names()).length === 3, { timeout: 10000, what: "names after login" });
+  assert.deepEqual(await names(), ["Baker", "Chen", "Whatcott"]);
+  assert.match(await hint(), /^3 last names from On the Lot$/);
+  await ff.exec(
+    `const s = document.querySelector("#bf-ssf-lot-names select"); s.value = "Chen"; s.dispatchEvent(new Event("change", { bubbles: true }));`,
+  );
+  assert.equal(await ff.exec(`return document.getElementById("po").value;`), "Chen");
+
+  world.shop.lot.items = [];
+  await refresh();
+  await until(async () => /^No cars on the lot right now\.$/.test(await hint()), { what: "empty lot hint" });
+
+  world.shop.lot.status = 500;
+  await refresh();
+  await until(async () => /Couldn’t load On the Lot \(shop error 500\)/.test(await hint()), { what: "lot error hint" });
+  assert.doesNotMatch(await hint(), /PIN/);
+  world.shop.lot.status = 200;
+  world.shop.lot.items = [{ label: "Whatcott" }];
+  await refresh();
+  await until(async () => /^1 last name from On the Lot$/.test(await hint()), { what: "lot back" });
+});
+
+test("G. the popup shows when the last RO event reached the listener, and when the key was refused", async () => {
+  await reopenPopup();
+  await popupSettles("dwightKeyHint", /^Key saved\. Last sent: [A-Za-z ]+, /, "last sent line");
+  world.listener.status = 401;
+  const tab = await ff.newTab("https://manageonline.alldata.com/ro");
+  await sleep(1000);
+  await ff.exec(`document.querySelector(".close-ro").click();`);
+  await popupSettles("dwightKeyHint", /^The listener did not accept this key\. Paste the key again\.$/, "key refused line");
+  world.listener.status = 200;
+  await ff.switchTo(tab);
+  await ff.closeTab();
+  await ff.switchTo(ctl);
 });

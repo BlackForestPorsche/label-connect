@@ -179,6 +179,11 @@ export async function startFirefox({ extension, proxyPort, prefs = {}, port = 44
       }
       throw new Error("Desk page did not open");
     },
+    /** Type into an element like a person would. "\uE007" is Enter. */
+    async type(selector, text) {
+      const el = await s("POST", "/element", { using: "css selector", value: selector });
+      await s("POST", `/element/${Object.values(el)[0]}/value`, { text });
+    },
     async screenshot(file, selector) {
       let b64;
       if (selector) {

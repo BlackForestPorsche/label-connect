@@ -13,6 +13,7 @@
 
   const ROOT_ID = "bf-ssf-lot-names";
   let mountedFor = null;
+  let mounted = null;
 
   function isOrderReferenceField(el) {
     if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false;
@@ -138,28 +139,35 @@
       field.value = value;
       field.dispatchEvent(new Event("input", { bubbles: true }));
       field.dispatchEvent(new Event("change", { bubbles: true }));
-      if (api.showToast) api.showToast(`PO/RO ← ${value}`, "ok");
+      if (api.showToast) api.showToast(`Order reference set to ${value}`, "ok");
     });
 
     refresh.addEventListener("click", () => {
-      void populate(select, hint, true);
+      void populate(select, hint, refresh, true);
     });
 
     mountedFor = field;
-    void populate(select, hint, false);
+    mounted = { select, hint, refresh };
+    void populate(select, hint, refresh, false);
     return root;
   }
 
-  async function populate(select, hint, forceRefresh) {
+  let loadSerial = 0;
+  /** The list is waiting on a login. Only then does a new Desk session reload it. */
+  let waitingForLogin = false;
+  let lastAutoLoadAt = 0;
+
+  async function populate(select, hint, refresh, forceRefresh) {
+    const serial = ++loadSerial;
+    waitingForLogin = false;
+    const keep = select.value;
     select.disabled = true;
+    refresh.disabled = true;
+    hint.style.color = "#666";
     hint.textContent = "Loading On the Lot…";
-    select.replaceChildren();
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "Select last name…";
-    select.append(placeholder);
 
     let result = { names: [] };
+    let failed = false;
     try {
       const runtime = typeof browser !== "undefined" ? browser : chrome;
       if (forceRefresh) {
@@ -172,45 +180,79 @@
       }
     } catch {
       result = { names: [] };
+      failed = true;
     }
+    // A newer load (Refresh, or Desk just logged in) owns the list now.
+    if (serial !== loadSerial) return;
 
-    const names = Array.isArray(result.names) ? result.names : [];
-
-    if (result.needsAuth) {
-      hint.textContent =
-        result.message ||
-        "Enter your desk PIN in the Black Forest Desk popup (toolbar icon), then click Refresh. Same person + PIN as shop unlock.";
-      select.disabled = false;
-      return;
-    }
-
-    if (result.error && !names.length) {
-      hint.textContent = result.error;
-      select.disabled = false;
-      return;
-    }
-
-    if (!names.length) {
-      hint.textContent =
-        "No lot names yet (On the Lot only). Open the Black Forest Desk popup → enter desk PIN, then Refresh. Book names are never used.";
-      select.disabled = false;
-      return;
-    }
-
+    const names = result.needsAuth ? [] : Array.isArray(result.names) ? result.names : [];
+    select.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = names.length ? "Select last name…" : "No names to pick";
+    select.append(placeholder);
     for (const name of names) {
       const opt = document.createElement("option");
       opt.value = name;
       opt.textContent = name;
       select.append(opt);
     }
+    if (keep && names.includes(keep)) select.value = keep;
+    select.disabled = !names.length;
+    refresh.disabled = false;
+
+    const problem = (text) => {
+      hint.style.color = "#7a1f1f";
+      hint.textContent = text;
+    };
+    if (failed) {
+      problem("Desk is restarting. Press Refresh in a moment.");
+      return;
+    }
+    if (result.needsAuth) {
+      waitingForLogin = true;
+      problem(
+        result.message ||
+          "Desk is logged out. Unlock Tools or the shop site and the names load by themselves.",
+      );
+      return;
+    }
+    if (result.error && !names.length) {
+      problem(result.error);
+      return;
+    }
+    if (result.error) {
+      problem(`Showing the last list (${names.length}). Couldn’t refresh it just now.`);
+      return;
+    }
+    if (!names.length) {
+      hint.textContent = "No cars on the lot right now.";
+      return;
+    }
     hint.textContent = `${names.length} last name${names.length === 1 ? "" : "s"} from On the Lot`;
-    select.disabled = false;
+  }
+
+  // Logging in (Tools, the shop site, or the popup) loads the names without a Refresh click.
+  try {
+    const runtime = typeof browser !== "undefined" ? browser : chrome;
+    runtime.storage?.onChanged?.addListener?.((changes, area) => {
+      if (area && area !== "local") return;
+      if (!changes.shopWidgetToken || !changes.shopWidgetToken.newValue) return;
+      if (!mounted || !waitingForLogin || !document.getElementById(ROOT_ID)) return;
+      // Once per login, never a loop: a session the shop then rejects is not retried here.
+      if (Date.now() - lastAutoLoadAt < 5000) return;
+      lastAutoLoadAt = Date.now();
+      void populate(mounted.select, mounted.hint, mounted.refresh, false);
+    });
+  } catch {
+    // storage events unavailable; Refresh still works
   }
 
   function tick() {
     if (!/\/checkout/i.test(location.pathname + location.search)) {
       document.getElementById(ROOT_ID)?.remove();
       mountedFor = null;
+      mounted = null;
       return;
     }
     const field = findOrderReferenceField();

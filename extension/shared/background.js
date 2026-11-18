@@ -131,17 +131,36 @@
         if (!value || value.includes("@") || looksLikePhone(value)) continue;
         body[key] = value.slice(0, 80);
       }
-      await fetch(DWIGHT_CREATE_RO_URL, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(body),
-      });
-      return { ok: true };
+      let status = 0;
+      try {
+        const response = await fetch(DWIGHT_CREATE_RO_URL, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+        });
+        status = Number(response?.status) || 0;
+      } catch {
+        status = 0;
+      }
+      const ok = status >= 200 && status < 300;
+      await noteListenerResult({ event, ok, status });
+      return { ok };
     } catch {
       return { ok: false };
+    }
+  }
+
+  /** What the popup shows under the listener key: which event went last and whether it landed. */
+  async function noteListenerResult({ event, ok, status }) {
+    try {
+      await runtime.storage.local.set({
+        deskListenerLast: { at: Date.now(), event, ok: Boolean(ok), status: Number(status) || 0 },
+      });
+    } catch {
+      // the note is only for the popup
     }
   }
 
@@ -649,6 +668,18 @@
         return false;
       }
       api.handleSiteUnlockPage().then(sendResponse);
+      return true;
+    }
+    if (message.type === "desk-status") {
+      const api = globalThis.AllDataRoLabels;
+      if (!api?.readToolsStatus) {
+        sendResponse({ ok: false });
+        return false;
+      }
+      api.readToolsStatus().then(
+        (tools) => sendResponse({ ok: true, tools }),
+        () => sendResponse({ ok: false }),
+      );
       return true;
     }
     if (message.type === "check-update") {

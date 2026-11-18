@@ -141,3 +141,132 @@ test("Check for update says so when the feed cannot be reached, and when a build
   assert.match(line.textContent, /up to date/i);
   assert.equal(p.visible("applyUpdate"), false);
 });
+
+const click = async (p, id) => {
+  p.document.getElementById(id).dispatchEvent(new p.document.defaultView.Event("click"));
+  await p.settle();
+};
+const text = (p, id) => p.document.getElementById(id).textContent;
+
+test("logged out: the popup says why and what to do, for each Tools state", async () => {
+  const stateFor = async (tools) => {
+    const p = await openPopup({}, (message) => (message.type === "desk-status" ? { ok: true, tools } : null));
+    return text(p, "signInState");
+  };
+  assert.match(await stateFor({ reachable: false, hasSession: false, person: "" }), /Tools is not running on this PC/);
+  assert.match(await stateFor({ reachable: true, hasSession: false, person: "" }), /Unlock Tools or the shop site/);
+  assert.match(await stateFor({ reachable: true, hasSession: true, person: "carla" }), /Tools is unlocked as Carla/);
+  for (const line of [
+    await stateFor({ reachable: false, hasSession: false, person: "" }),
+    await stateFor({ reachable: true, hasSession: false, person: "" }),
+  ]) {
+    assert.match(line, /^Logged out\./);
+    assert.doesNotMatch(line, /cookie|\/unlock|background|from-gate/i);
+  }
+});
+
+test("desk PIN: Enter signs in, a wrong PIN says so and clears the field, one request at a time", async () => {
+  const sent = [];
+  let reply = { error: "That PIN didn’t work. Check the person and PIN, then try again." };
+  const p = await openPopup({}, (message) => {
+    if (message.type !== "widget-session") return null;
+    sent.push(message.payload);
+    return reply;
+  });
+  const pin = p.document.getElementById("pin");
+  // linkedom only reads a select's value from the selected attribute.
+  p.document.querySelector('#person option[value="logan"]').setAttribute("selected", "");
+  const enter = async () => {
+    const event = new p.document.defaultView.Event("keydown", { bubbles: true });
+    event.key = "Enter";
+    pin.dispatchEvent(event);
+    await p.settle();
+  };
+
+  await enter();
+  assert.equal(text(p, "status"), "Enter your desk PIN.");
+  pin.value = "12";
+  await enter();
+  assert.equal(text(p, "status"), "A desk PIN is 4 to 12 digits.");
+  assert.equal(sent.length, 0, "nothing is sent until the PIN is well formed");
+
+  pin.value = "000000";
+  await enter();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].person, "logan");
+  assert.match(text(p, "status"), /That PIN didn’t work/);
+  assert.equal(p.document.getElementById("status").className, "err");
+  assert.equal(pin.value, "", "the PIN never stays in the field");
+  assert.equal(text(p, "unlock"), "Unlock with desk PIN");
+  assert.equal(p.document.getElementById("unlock").disabled, false);
+
+  reply = { ok: true, person: "logan" };
+  Object.assign(p.storage, {
+    shopWidgetToken: "t",
+    shopWidgetTokenExpiresAt: Date.now() + 3_600_000,
+    deskSessionPerson: "logan",
+  });
+  pin.value = "000000";
+  await click(p, "unlock");
+  assert.equal(text(p, "loggedIn"), "Logged in as Logan");
+  assert.equal(p.visible("loginBox"), false);
+  assert.equal(pin.value, "");
+});
+
+test("Sync buttons say what went wrong in plain words", async () => {
+  let reply = null;
+  const p = await openPopup({}, (message) => {
+    if (message.type === "tools-to-site-unlock") return reply;
+    return null;
+  });
+  reply = { ok: true, skipped: "tools_already_locked", reason: "tools_already_locked", siteGate: false };
+  await click(p, "useTools");
+  assert.equal(text(p, "status"), "Tools is locked. Unlock Tools first.");
+  reply = { error: "Black Forest Tools is not running on this PC. Start Tools, or sign in another way." };
+  await click(p, "useTools");
+  assert.match(text(p, "status"), /Tools is not running on this PC/);
+  reply = { error: "exchange_failed" };
+  await click(p, "useTools");
+  assert.match(text(p, "status"), /^Couldn’t sign in\./);
+  assert.equal(text(p, "useTools"), "Sync Tools → website");
+});
+
+test("listener key line: no key, saved, last sent, not accepted, not delivered", async () => {
+  const hint = async (storage) => {
+    const p = await openPopup({ ...storage });
+    const el = p.document.getElementById("dwightKeyHint");
+    return { text: el.textContent, error: /\berr\b/.test(el.className) };
+  };
+  const key = { dwightCreateRoToken: "desk-listener-test" };
+  const at = Date.now();
+
+  assert.match((await hint({})).text, /^No key yet, so RO events are not sent\./);
+  assert.match((await hint(key)).text, /^Key saved on this browser\./);
+
+  const sent = await hint({ ...key, deskListenerLast: { at, event: "close_ro", ok: true, status: 200 } });
+  assert.match(sent.text, /^Key saved\. Last sent: Close RO, /);
+  assert.equal(sent.error, false);
+
+  const refused = await hint({ ...key, deskListenerLast: { at, event: "create_ro", ok: false, status: 401 } });
+  assert.equal(refused.text, "The listener did not accept this key. Paste the key again.");
+  assert.equal(refused.error, true);
+
+  const lost = await hint({ ...key, deskListenerLast: { at, event: "create_ro", ok: false, status: 0 } });
+  assert.match(lost.text, /^Create RO at .* did not reach the listener\. Labels still print\./);
+  assert.equal(lost.error, true);
+
+  for (const state of [sent, refused, lost]) assert.equal(state.text.includes("desk-listener-test"), false);
+});
+
+test("a new listener key forgets the result recorded for the old one", async () => {
+  const p = await openPopup({
+    dwightCreateRoToken: "old-key",
+    deskListenerLast: { at: Date.now(), event: "create_ro", ok: false, status: 401 },
+  });
+  const input = p.document.getElementById("dwightCreateRoToken");
+  input.value = "new-key";
+  input.dispatchEvent(new p.document.defaultView.Event("input", { bubbles: true }));
+  await p.settle();
+  assert.equal(p.storage.deskListenerLast, null);
+  assert.match(text(p, "dwightKeyHint"), /^Key saved on this browser\./);
+});
