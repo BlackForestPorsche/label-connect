@@ -168,8 +168,8 @@
       disarm();
       toast(
         scrapeMiss
-          ? "Label skipped — could not read last name."
-          : "Label skipped — Create R/O success not confirmed.",
+          ? "No label printed. Desk could not read the customer’s last name on this page."
+          : "No label printed. AllData did not confirm the new R/O.",
         "skip",
       );
     }, SUCCESS_WAIT_MS);
@@ -257,7 +257,7 @@
   async function requestPrint(fields) {
     const armId = fields.createArmId || createArmId;
     if (alreadyPrintedThisCreate(armId)) {
-      toast("Label skipped — already sent for this Create.", "skip");
+      toast("This R/O already has its label.", "skip");
       return;
     }
 
@@ -287,30 +287,30 @@
         });
       }
     } catch {
-      toast("Label skipped — extension background unavailable.", "error");
+      toast("No label printed. Desk is restarting. Reload this page, then print from Labels.", "error");
       return;
     }
 
     if (!response || response.error) {
-      toast(response?.error || "Label skipped — Labels error.", "error");
+      toast(response?.error || "No label printed. Labels on this PC did not answer. Check that Labels is running.", "error");
       return;
     }
     if (response.skipped) {
       // Still skipped with no RO# should be rare; do not mark arm so a later Create can try.
-      toast("Label skipped — Labels reported a duplicate.", "skip");
+      toast("This R/O already has its label.", "skip");
       return;
     }
     if (response.printed || response.dryRun) {
       markPrintedThisCreate(armId);
       toast(
         response.dryRun
-          ? `Dry run: ${fields.lastName} - ${fields.model}`.trimEnd()
+          ? `Test mode, nothing printed: ${fields.lastName} - ${fields.model}`.trimEnd()
           : `Printed ${fields.lastName} - ${fields.model}`.trimEnd(),
         "ok",
       );
       return;
     }
-    toast("Label skipped — unexpected Labels response.", "skip");
+    toast("No label printed. Labels gave an answer Desk did not understand.", "skip");
   }
 
   function tryCompleteAfterCreate(force = false) {

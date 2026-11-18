@@ -90,7 +90,7 @@
 
     const label = document.createElement("label");
     label.textContent = "On the Lot — last name";
-    Object.assign(label.style, { color: "#333", fontWeight: "600" });
+    Object.assign(label.style, { color: "#1c1914", fontWeight: "600" });
 
     const row = document.createElement("div");
     Object.assign(row.style, { display: "flex", gap: "6px", alignItems: "center" });
@@ -101,9 +101,11 @@
       flex: "1",
       minHeight: "32px",
       padding: "4px 8px",
-      border: "1px solid #888",
-      borderRadius: "4px",
+      border: "1px solid #b9b2a4",
+      borderRadius: "5px",
       background: "#fff",
+      color: "#1c1914",
+      font: "inherit",
     });
 
     const refresh = document.createElement("button");
@@ -113,9 +115,12 @@
       minHeight: "32px",
       padding: "4px 10px",
       cursor: "pointer",
-      border: "1px solid #666",
-      borderRadius: "4px",
-      background: "#f3f3f3",
+      border: "1px solid #1f4d2a",
+      borderRadius: "5px",
+      background: "#1f4d2a",
+      color: "#f4f1ea",
+      font: "inherit",
+      fontWeight: "700",
     });
 
     const hint = document.createElement("div");

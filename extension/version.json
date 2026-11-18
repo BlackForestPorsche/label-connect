@@ -1,6 +1,6 @@
 {
-  "version": "0.1.54",
-  "message": "Desk 0.1.54: The Desk window says why it is logged out and what to do next. Desk PIN sign-in works with Enter and shows mistakes next to the button. The listener key line shows the last RO event sent, or that the key was refused. SSF Order reference fills in by itself after login and says when the lot is empty.",
+  "version": "0.1.55",
+  "message": "Desk 0.1.55: A cleaner Desk window with a clear logged-in or logged-out banner. Label and update messages are in plain words. Desk has its own icon in Firefox Add-ons.",
   "url": "https://github.com/BlackForestPorsche/label-connect/releases/tag/desk-extension",
   "chromiumMessage": "Click Download update, unzip Black.Forest.Desk-chromium.zip over your Desk folder, then press Reload Desk."
 }

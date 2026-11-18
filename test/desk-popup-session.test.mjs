@@ -244,7 +244,7 @@ test("listener key line: no key, saved, last sent, not accepted, not delivered",
   assert.match((await hint(key)).text, /^Key saved on this browser\./);
 
   const sent = await hint({ ...key, deskListenerLast: { at, event: "close_ro", ok: true, status: 200 } });
-  assert.match(sent.text, /^Key saved\. Last sent: Close RO, /);
+  assert.match(sent.text, /^Key saved\. Last sent: RO closed, /);
   assert.equal(sent.error, false);
 
   const refused = await hint({ ...key, deskListenerLast: { at, event: "create_ro", ok: false, status: 401 } });
@@ -252,7 +252,7 @@ test("listener key line: no key, saved, last sent, not accepted, not delivered",
   assert.equal(refused.error, true);
 
   const lost = await hint({ ...key, deskListenerLast: { at, event: "create_ro", ok: false, status: 0 } });
-  assert.match(lost.text, /^Create RO at .* did not reach the listener\. Labels still print\./);
+  assert.match(lost.text, /^RO created at .* did not reach the listener\. Labels still print\./);
   assert.equal(lost.error, true);
 
   for (const state of [sent, refused, lost]) assert.equal(state.text.includes("desk-listener-test"), false);
